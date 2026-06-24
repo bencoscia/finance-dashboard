@@ -1,62 +1,114 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<!-- See INDEX.md for the file map, invariants, traps, and change protocol. Keep it updated. -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Finance Dashboard</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23ffffff'/%3E%3Cpolygon points='30,58 34,58 33,36 31,36' fill='%233d2b1f'/%3E%3Cpolygon points='31,36 33,36 35,50 29,50' fill='%23503828'/%3E%3Cpolygon points='10,38 22,28 28,42 16,46' fill='%233a6b3a'/%3E%3Cpolygon points='10,38 22,28 16,26' fill='%234a8a4a'/%3E%3Cpolygon points='22,28 28,42 30,30' fill='%23336633'/%3E%3Cpolygon points='16,46 28,42 24,50' fill='%232d5a2d'/%3E%3Cpolygon points='28,10 40,8 42,24 30,26' fill='%234a8a4a'/%3E%3Cpolygon points='28,10 40,8 34,5' fill='%2355a055'/%3E%3Cpolygon points='40,8 42,24 45,14' fill='%23336633'/%3E%3Cpolygon points='30,26 42,24 36,30' fill='%232d5a2d'/%3E%3Cpolygon points='36,34 50,28 52,44 38,46' fill='%233a6b3a'/%3E%3Cpolygon points='36,34 50,28 44,24' fill='%234a8a4a'/%3E%3Cpolygon points='50,28 52,44 55,34' fill='%23336633'/%3E%3Cpolygon points='38,46 52,44 46,52' fill='%232d5a2d'/%3E%3C/svg%3E">
+<title>Household Ledger</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231E5C46'/%3E%3Ccircle cx='32' cy='32' r='20' fill='none' stroke='%23B08D3E' stroke-width='2.5'/%3E%3Ccircle cx='32' cy='32' r='13' fill='none' stroke='%23F5F7F3' stroke-width='1.5' stroke-dasharray='3 3'/%3E%3Ccircle cx='32' cy='32' r='5' fill='%23B08D3E'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Besley:wght@500;600;700&family=Public+Sans:wght@300;400;500;600&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <style>
 /* ── LIGHT PALETTE ── */
+/* ── BANKNOTE LEDGER PALETTE ──
+   Paper carries a faint green cast like security stock; ink is a
+   green-black; the working accent is engraved banknote green; carmine
+   is reserved for debits/owed; gold appears only at the $1M milestone. */
 :root {
-  /* backgrounds */
-  --bg:        #f7f8fa;
-  --surface:   #ffffff;
-  --surface2:  #eef0f4;
-  --surface3:  #e2e5eb;
-  /* borders */
-  --border:    rgba(30,40,70,.09);
-  --border2:   rgba(30,40,70,.18);
-  /* text */
-  --text:      #1a1e2e;
-  --muted:     #555e7a;
-  --faint:     #9aa0b4;
-  /* forest green */
-  --green:     #1e7a48;
-  --green-lt:  #38a06a;
-  --green-bg:  #eaf6f0;
-  --green-bd:  rgba(30,122,72,.18);
-  /* slate blue */
-  --blue:      #2b4fa8;
-  --blue-lt:   #4a72d4;
-  --blue-bg:   #eef2fc;
-  --blue-bd:   rgba(43,79,168,.18);
-  /* terracotta / red */
-  --terra:     #c0392b;
-  --terra-bg:  #fdf0ee;
-  --terra-bd:  rgba(192,57,43,.18);
-  /* warm amber */
-  --amber:     #a06010;
-  --amber-bg:  #fef8ec;
-  --amber-bd:  rgba(160,96,16,.2);
-  /* chart colors */
-  --c1: #2b4fa8;
-  --c2: #6a9fd8;
-  --c3: #1e7a48;
-  --c4: #e8a030;
-  --r:10px; --rl:14px;
-  --mono:'DM Mono',monospace; --sans:'DM Sans',sans-serif;
-  --shadow: 0 1px 4px rgba(30,40,70,.08);
+  /* paper */
+  --bg:        #F5F7F3;
+  --surface:   #FDFDFB;
+  --surface2:  #EDF1EA;
+  --surface3:  #E0E6DD;
+  /* hairlines */
+  --border:    rgba(28,43,39,.10);
+  --border2:   rgba(28,43,39,.20);
+  /* ink */
+  --text:      #1C2B27;
+  --muted:     #54655D;
+  --faint:     #8C9A91;
+  /* banknote green (primary accent + positive) */
+  --green:     #1E5C46;
+  --green-lt:  #2E7D5B;
+  --green-bg:  #E9F1EC;
+  --green-bd:  rgba(30,92,70,.20);
+  /* primary action -- same engraved green (legacy name kept) */
+  --blue:      #1E5C46;
+  --blue-lt:   #2E7D5B;
+  --blue-bg:   #E9F1EC;
+  --blue-bd:   rgba(30,92,70,.20);
+  /* vermillion -- debits, owed, over budget. Brighter than the green ink
+     so the two separate by LIGHTNESS, which protan vision preserves;
+     hue alone is never the only signal. */
+  --terra:     #C44E36;
+  --terra-bg:  #F9EEEA;
+  --terra-bd:  rgba(196,78,54,.22);
+  --red:       #C44E36;
+  /* foil gold -- milestone only */
+  --amber:     #B08D3E;
+  --amber-bg:  #F7F2E7;
+  --amber-bd:  rgba(176,141,62,.25);
+  --gold:      #B08D3E;
+  /* chart series: engraved green, check-ink blue, gold, vermillion
+     (blue replaces sage: fully distinguishable under protanopia, and
+     blue security ink is authentic banknote vernacular) */
+  --c1: #1E5C46;
+  --c2: #3E6B8F;
+  --c3: #B08D3E;
+  --c4: #C44E36;
+  --r:6px; --rl:10px;
+  --mono:'Spline Sans Mono',monospace;
+  --sans:'Public Sans',sans-serif;
+  --display:'Besley',Georgia,serif;
+  --shadow: 0 1px 3px rgba(28,43,39,.07);
 }
 
 
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;line-height:1.5}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh;font-size:15px;line-height:1.5;font-variant-numeric:tabular-nums}
+
+/* Quality floor */
+:focus-visible{outline:2px solid var(--green-lt);outline-offset:2px;border-radius:2px}
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;transition-duration:.01ms !important}
+}
+
+/* Accounting-rule semantics (single rule = subtotal, 3px double rule =
+   bottom line) are expressed directly on .nw-total-row and
+   .var-section-total rather than as utility classes. */
+
+/* ── THIS WEEK ── */
+.tw-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.tw-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}
+@media (max-width: 820px){ .tw-stats{grid-template-columns:1fr} }
+.tw-stat{padding:12px 16px}
+.tw-stat-val{font-family:var(--mono);font-size:24px;font-weight:500;letter-spacing:-.02em;line-height:1.2}
+.tw-stat-sub{font-size:11px;color:var(--muted);margin-top:3px}
+@media (max-width: 820px){ .tw-grid{grid-template-columns:1fr} }
+.tw-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:20px 24px;box-shadow:var(--shadow)}
+.tw-eyebrow{font-family:var(--mono);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px}
+.tw-big{font-family:var(--mono);font-size:28px;font-weight:500;letter-spacing:-.02em;line-height:1.15}
+.tw-sub{font-size:12px;color:var(--muted);margin-top:4px}
+.tw-link{display:inline-block;margin-top:10px;font-size:12px;color:var(--green);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.tw-bar{position:relative;height:10px;background:var(--surface2);border:1px solid var(--border);border-radius:3px;margin-top:12px;overflow:visible}
+.tw-bar-fill{position:absolute;left:0;top:0;bottom:0;background:var(--green);border-radius:2px 0 0 2px;transition:width .5s ease}
+.tw-bar-fill.over{background:var(--terra)}
+.tw-bar-pace{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--gold)}
+.tw-bar-caption{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:6px;font-family:var(--mono)}
+
+/* ── QUICK ADD ── */
+.hdr-add{font-family:var(--sans);font-size:13px;font-weight:600;padding:7px 16px;background:var(--green);color:#fff;border:none;border-radius:var(--r);cursor:pointer}
+.hdr-add:hover{background:var(--green-lt)}
+.qa-seg{display:flex;gap:2px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);padding:3px;margin-bottom:16px}
+.qa-seg-btn{flex:1;font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:7px 4px;background:transparent;border:none;border-radius:4px;cursor:pointer;color:var(--muted)}
+.qa-seg-btn.active{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
+.qa-check-row{display:flex;gap:16px;margin:10px 0 4px}
+.qa-check-row label{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
 
 /* ── SETUP ── */
 #auth-overlay{position:fixed;inset:0;background:var(--bg);z-index:300;display:none;align-items:center;justify-content:center;padding:24px}
+#setup-overlay{position:fixed;inset:0;background:var(--bg);z-index:200;display:none;align-items:center;justify-content:center;padding:24px}
 .auth-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:40px;max-width:340px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.12);text-align:center}
 .auth-box h2{font-family:var(--mono);font-size:16px;font-weight:600;margin:0 0 8px}
 .auth-box p{font-size:13px;color:var(--muted);margin:0 0 24px}
@@ -91,19 +143,32 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 .setup-skip a{color:var(--muted);cursor:pointer;text-decoration:underline}
 
 /* ── HEADER ── */
-.hdr{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;box-shadow:var(--shadow)}
-.hdr-l{display:flex;align-items:center;gap:10px}
-.hdr h1{font-family:var(--mono);font-size:14px;font-weight:500;letter-spacing:-.02em;color:var(--text)}
-.hdr-leaf{color:var(--green-lt);font-size:16px;line-height:1}
+.hdr{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 28px;display:flex;align-items:center;justify-content:space-between;gap:24px;position:sticky;top:0;z-index:10;box-shadow:var(--shadow)}
+.hdr-l{display:flex;align-items:baseline;gap:10px;white-space:nowrap}
+.hdr h1{font-family:var(--display);font-size:18px;font-weight:600;letter-spacing:.005em;color:var(--text)}
+
+/* ── Guilloché band: investments toward $1M ── */
+.gl-strip{background:var(--surface);border-bottom:1px solid var(--border)}
+.gl-band{position:relative;width:100%;height:32px;overflow:hidden}
+.gl-svg{position:absolute;inset:0;width:100%;height:100%}
+.gl-svg path{fill:none;stroke:var(--green);stroke-width:.8}
+.gl-svg path.gl-gold{stroke:var(--gold)}
+.gl-base path{opacity:.16}
+.gl-fill{clip-path:inset(0 100% 0 0);transition:clip-path .8s ease}
+.gl-fill path{opacity:.85}
+.gl-now{position:absolute;top:50%;transform:translateY(-50%);font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text);background:var(--surface);padding:0 4px;border:1px solid var(--border2);border-radius:3px;display:none}
+.gl-goal{position:absolute;right:10px;top:50%;transform:translateY(-50%);font-family:var(--mono);font-size:11px;font-weight:600;color:var(--gold);letter-spacing:.04em}
 .badge{font-family:var(--mono);font-size:10px;color:var(--faint);background:var(--surface2);border:1px solid var(--border);padding:2px 7px;border-radius:4px}
+.badge.live{color:#16a34a;background:#f0fdf4;border-color:#86efac}
+.badge.demo{color:var(--muted);background:var(--surface2);border-color:var(--border)}
 .hdr-r{display:flex;align-items:center;gap:10px}
 .ts{font-family:var(--mono);font-size:11px;color:var(--faint)}
-.icon-btn{font-family:var(--mono);font-size:11px;padding:5px 10px;background:transparent;border:1px solid var(--border2);border-radius:6px;color:var(--muted);cursor:pointer;transition:color .15s,border-color .15s,background .15s}
+.icon-btn{font-family:var(--mono);font-size:12.5px;padding:6px 12px;background:transparent;border:1px solid var(--border2);border-radius:6px;color:var(--muted);cursor:pointer;transition:color .15s,border-color .15s,background .15s}
 .icon-btn:hover{color:var(--text);border-color:var(--muted);background:var(--surface2)}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 /* ── LAYOUT ── */
-.main{max-width:1100px;margin:0 auto;padding:24px 20px}
+.main{max-width:1560px;margin:0 auto;padding:24px 32px}
 
 /* ── BANNER ── */
 .banner{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:12px 16px;font-size:13px;color:var(--muted);display:flex;align-items:center;gap:10px;margin-bottom:20px}
@@ -112,9 +177,9 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 .spinner{width:13px;height:13px;border:2px solid var(--border2);border-top-color:var(--blue);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0}
 
 /* ── TABS ── */
-.tabs{display:flex;background:var(--surface2);border-radius:var(--r);padding:3px;margin-bottom:22px;width:fit-content;box-shadow:inset 0 1px 2px rgba(0,0,0,.06)}
-.tab-btn{font-family:var(--sans);font-size:13px;font-weight:500;padding:7px 17px;background:transparent;border:none;border-radius:7px;cursor:pointer;color:var(--muted);transition:background .15s,color .15s,box-shadow .15s}
-.tab-btn.active{background:var(--surface);color:var(--text);box-shadow:0 1px 4px rgba(44,36,22,.12)}
+.tabs{display:flex;gap:2px;background:transparent;border-bottom:1px solid var(--border2);margin-bottom:22px;width:100%}
+.tab-btn{font-family:var(--mono);font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:.07em;padding:9px 14px;background:transparent;border:none;border-bottom:2px solid transparent;margin-bottom:-1px;cursor:pointer;color:var(--muted);transition:color .15s,border-color .15s}
+.tab-btn.active{color:var(--text);border-bottom-color:var(--green)}
 .tab-btn:hover:not(.active){color:var(--text)}
 .tab-panel{display:none}
 .tab-panel.active{display:block;animation:fadeIn .18s ease}
@@ -145,7 +210,6 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 .card-title{font-family:var(--mono);font-size:10px;font-weight:500;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;margin-bottom:11px}
 .arow{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px}
 .arow:last-child{border-bottom:none}
-.aname{color:var(--muted)}
 .aval{font-family:var(--mono);font-size:12px;font-weight:500;color:var(--text)}
 .aval.neg{color:var(--terra)}
 
@@ -159,7 +223,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 
 /* ── TABLE ── */
 .tbl-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);overflow:hidden;box-shadow:var(--shadow)}
-.tbl{width:100%;border-collapse:collapse;font-size:13px}
+.tbl{width:100%;border-collapse:collapse;font-size:14px}
 .tbl th{font-family:var(--mono);font-size:10px;font-weight:500;color:var(--faint);text-transform:uppercase;letter-spacing:.05em;padding:10px 12px;text-align:left;background:var(--surface2);border-bottom:1px solid var(--border);white-space:nowrap}
 .tbl th.r,.tbl td.r{text-align:right}
 .tbl th.c,.tbl td.c{text-align:center}
@@ -167,7 +231,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 .tbl tbody tr:last-child{border-bottom:none}
 .tbl tbody tr:hover{background:var(--surface2)}
 .tbl tbody tr.editing{background:var(--amber-bg)!important}
-.tbl td{padding:9px 12px;vertical-align:middle;color:var(--text)}
+.tbl td{padding:10px 12px;vertical-align:middle;color:var(--text)}
 .tbl td.dt{font-family:var(--mono);font-size:12px;color:var(--muted);white-space:nowrap}
 .tbl td.dc{max-width:240px}
 .tbl td.co{font-family:var(--mono);font-size:12px;white-space:nowrap}
@@ -177,7 +241,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 .tag.p{background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-bd)}
 .racts{display:flex;gap:4px;opacity:0;transition:opacity .15s}
 tr:hover .racts,tr.editing .racts{opacity:1}
-.rbtn{font-size:11px;padding:3px 8px;border-radius:5px;border:1px solid var(--border2);background:transparent;cursor:pointer;color:var(--muted);font-family:var(--mono);transition:background .1s,color .1s}
+.rbtn{font-size:12.5px;padding:4px 10px;border-radius:5px;border:1px solid var(--border2);background:transparent;cursor:pointer;color:var(--muted);font-family:var(--mono);transition:background .1s,color .1s}
 .rbtn:hover{background:var(--surface2);color:var(--text)}
 .rbtn.del:hover{background:var(--terra-bg);color:var(--terra);border-color:var(--terra-bd)}
 .rbtn.save{background:var(--blue);color:#fff;border-color:transparent}
@@ -201,6 +265,22 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .fx-section{margin-bottom:16px}
 .fx-section-head{font-family:var(--mono);font-size:10px;font-weight:500;color:var(--faint);text-transform:uppercase;letter-spacing:.07em;padding:8px 0 6px 0;border-bottom:1px solid var(--border);margin-bottom:0}
 
+.nw-section{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:14px 16px;box-shadow:var(--shadow)}
+.nw-section-title{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px}
+.nw-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);font-size:14px}
+.nw-row:last-child{border-bottom:none}
+.nw-row-label{color:var(--text)}
+.nw-row-val{font-weight:500;color:var(--text)}
+.nw-row-val.pos{color:var(--green)}
+.nw-row-val.neg{color:var(--red)}
+.nw-total-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0 6px;margin-top:4px;border-top:1px solid var(--border2);border-bottom:3px double var(--text);font-size:15px;font-weight:600}
+.nw-snap-form{background:var(--surface2);border:1px solid var(--border);border-radius:var(--rl);padding:16px}
+.nw-snap-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+.nw-snap-field label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px;font-weight:500}
+.nw-snap-field input{width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--surface);color:var(--text);box-sizing:border-box}
+.nw-snap-btn{background:var(--blue);color:#fff;border:none;border-radius:8px;padding:9px 20px;font-size:13px;font-weight:600;cursor:pointer}
+.nw-snap-btn:hover{opacity:.88}
+.nw-flag{font-size:11px;color:var(--muted);font-style:italic;margin-top:6px}
 .fx-table{width:100%;border-collapse:collapse;font-size:13px;background:var(--surface);border-radius:var(--rl);overflow:hidden;border:1px solid var(--border);box-shadow:var(--shadow)}
 .fx-table tr{border-bottom:1px solid var(--border);transition:background .1s}
 .fx-table tr:last-child{border-bottom:none}
@@ -211,6 +291,10 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .fx-table td.fx-name{color:var(--text);font-weight:500}
 .fx-table td.fx-name:hover{background:var(--blue-bg);border-radius:4px}
 .fx-table td.fx-name.paid-name{text-decoration:line-through;color:var(--muted)}
+.fx-table td.fx-cost{cursor:text}
+.fx-table td.fx-cost:hover{background:var(--blue-bg);border-radius:4px}
+.edit-hint{font-size:10px;color:var(--faint);margin-left:4px;opacity:0;transition:opacity .15s}
+.fx-table tr:hover .edit-hint{opacity:1}
 .fx-table td.fx-src{font-family:var(--mono);font-size:11px;color:var(--faint);width:100px}
 .fx-table td.fx-cost{font-family:var(--mono);font-size:12px;text-align:right;width:90px;white-space:nowrap;cursor:text}
 .fx-table td.fx-cost:hover{background:var(--blue-bg);border-radius:4px}
@@ -219,7 +303,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .fx-table td.fx-date.unpaid{color:var(--amber)}
 
 /* custom checkbox for paid status */
-.fx-check-box{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;border:2px solid var(--border2);cursor:pointer;transition:background .15s,border-color .15s;flex-shrink:0;user-select:none}
+.fx-check-box{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:5px;border:2px solid var(--border2);cursor:pointer;transition:background .15s,border-color .15s;flex-shrink:0;user-select:none}
 .fx-check-box.checked{background:var(--green);border-color:var(--green)}
 .fx-check-box.checked::after{content:'✓';color:#fff;font-size:12px;font-weight:700;line-height:1}
 .fx-check-box:hover:not(.checked){border-color:var(--green-lt);background:var(--green-bg)}
@@ -304,7 +388,41 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .loan-table td.lrate{font-family:var(--mono);font-size:12px;color:var(--muted)}
 .loan-table td.lint{font-family:var(--mono);font-size:12px;color:var(--terra)}
 .loan-rate-bar{height:4px;background:var(--surface3);border-radius:2px;margin-top:3px;overflow:hidden}
-.loan-rate-fill{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--green),var(--terra))}
+/* CVD-safe: rate magnitude is encoded by BAR LENGTH (width), not hue. Single
+   ink-blue fill replaces the old green->red gradient (protan-collapsing axis). */
+.loan-rate-fill{height:100%;border-radius:2px;background:var(--c2)}
+
+/* editable balance cell */
+.lbal-input{width:106px;text-align:right;font-family:var(--mono);font-size:12px;font-weight:500;
+  color:var(--text);background:var(--surface);border:1px solid var(--border2);border-radius:var(--r);
+  padding:4px 7px;outline:none;transition:border-color .15s,background .15s}
+.lbal-input:hover{border-color:var(--blue-lt)}
+.lbal-input:focus{border-color:var(--blue);background:var(--blue-bg)}
+.lbal-input.saving{opacity:.45}
+.loan-row-zero{opacity:.5}
+.loan-row-zero .lbal-input{color:var(--faint)}
+.loan-edit-hint{font-size:11px;color:var(--faint);margin:2px 2px 10px;font-family:var(--mono)}
+
+/* payoff projection */
+.loan-proj{margin-top:22px;background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);box-shadow:var(--shadow);padding:18px 20px}
+.loan-proj-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:14px}
+.loan-proj-title{font-family:var(--display);font-size:18px;font-weight:600;color:var(--text)}
+.loan-proj-controls{display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap}
+.loan-proj-paylabel{display:flex;flex-direction:column;font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);gap:5px}
+.loan-pay-input{font-family:var(--mono);font-size:15px;font-weight:600;color:var(--text);background:var(--surface);border:1px solid var(--border2);border-radius:var(--r);padding:7px 10px;width:130px;outline:none}
+.loan-pay-input:focus{border-color:var(--blue)}
+.loan-strat{display:inline-flex;border:1px solid var(--border2);border-radius:var(--r);overflow:hidden}
+.loan-strat-btn{font-family:var(--mono);font-size:11px;padding:7px 13px;background:transparent;color:var(--muted);border:none;cursor:pointer;transition:all .15s}
+.loan-strat-btn+.loan-strat-btn{border-left:1px solid var(--border2)}
+.loan-strat-btn.active{background:var(--blue);color:#fff}
+.loan-proj-warn{background:var(--terra-bg);border:1px solid var(--terra-bd);border-left:3px solid var(--terra);border-radius:var(--r);padding:10px 13px;font-size:13px;color:var(--terra);margin-bottom:14px;font-weight:500}
+.loan-proj-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+.loan-proj-stat{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);padding:11px 14px}
+.loan-proj-stat .pl{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);margin-bottom:5px}
+.loan-proj-stat .pv{font-family:var(--mono);font-size:18px;font-weight:600;color:var(--text)}
+.loan-proj-stat .pd{font-size:11px;color:var(--muted);margin-top:3px}
+.loan-proj-chart{height:240px;position:relative;margin-bottom:10px}
+.loan-proj-note{font-size:11px;color:var(--faint);line-height:1.55;border-top:1px solid var(--border);padding-top:10px}
 
 /* ── TRANSACTION PAGE CARD STRIP ── */
 .card-strip{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
@@ -341,9 +459,12 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .bj-total-row .bj-val{color:var(--blue);font-size:13px}
 
 .var-section{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);overflow:hidden;margin-bottom:14px;box-shadow:var(--shadow)}
+.var-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;align-items:start}
+.var-grid .var-section{margin-bottom:0}
+@media (max-width: 1100px){ .var-grid{grid-template-columns:1fr} }
 .var-section-head{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--surface2);border-bottom:1px solid var(--border)}
 .var-section-title{font-family:var(--mono);font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.var-section-total{font-family:var(--mono);font-size:13px;font-weight:500;color:var(--text)}
+.var-section-total{font-family:var(--mono);font-size:13px;font-weight:500;color:var(--text);border-bottom:3px double var(--text);padding-bottom:2px}
 .var-add-btn{font-family:var(--mono);font-size:11px;padding:4px 10px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;transition:opacity .15s}
 .var-add-btn:hover{opacity:.85}
 .var-entry-table{width:100%;border-collapse:collapse;font-size:13px}
@@ -413,7 +534,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .card-drawer-loading{padding:30px;text-align:center;color:var(--faint);font-size:12px;font-family:var(--mono)}
 .card-drawer-footer{padding:10px 16px;border-top:1px solid var(--border);font-family:var(--mono);font-size:11px;color:var(--faint);display:flex;justify-content:space-between;flex-shrink:0}
 
-/* ── PAYMENT MODAL ── */inset:0;background:rgba(0,0,0,.4);z-index:180;display:flex;align-items:center;justify-content:center;padding:24px}
+/* ── PAYMENT MODAL ── */
 .pay-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:180;display:flex;align-items:flex-start;justify-content:center;padding:40px 24px 24px}
 .pay-modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:28px;max-width:380px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.18);margin:auto}
 .pay-modal h3{font-family:var(--mono);font-size:14px;font-weight:500;margin-bottom:4px}
@@ -537,7 +658,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 <body>
 
 <!-- CHANGE PASSWORD MODAL -->
-<div id="chpw-overlay">
+<div id="chpw-overlay" style="display:none">
   <div class="chpw-box">
     <h3>Change Password</h3>
     <label>Current password</label>
@@ -548,8 +669,8 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     <input type="password" id="chpw-confirm" autocomplete="new-password">
     <div class="chpw-err" id="chpw-err"></div>
     <div class="chpw-actions">
-      <button class="btn-primary" onclick="submitChangePassword()">Update password</button>
-      <button class="btn-cancel" onclick="hideChangePassword()">Cancel</button>
+      <button class="btn-primary" data-action="submitChangePassword">Update password</button>
+      <button class="btn-cancel" data-action="hideChangePassword">Cancel</button>
     </div>
   </div>
 </div>
@@ -566,7 +687,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 </div>
 
 <!-- SETUP OVERLAY -->
-<div id="setup-overlay">
+<div id="setup-overlay" style="display:none">
   <div class="setup-card">
     <h2>Connect your Google Sheet</h2>
     <p>This dashboard reads and writes live data through a Google Apps Script web app. One-time setup takes about 5 minutes.</p>
@@ -588,7 +709,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     <div id="setup-back-wrap" style="display:none;text-align:center;margin-top:10px">
       <a data-action="hideSetup" style="font-size:12px;color:var(--muted);cursor:pointer;text-decoration:underline">← Back to dashboard</a>
       &nbsp;·&nbsp;
-      <a onclick="hideSetup();showChangePassword()" style="font-size:12px;color:var(--muted);cursor:pointer;text-decoration:underline">Change password</a>
+      <a data-action="setupChangePassword" style="font-size:12px;color:var(--muted);cursor:pointer;text-decoration:underline">Change password</a>
     </div>
   </div>
 </div>
@@ -597,30 +718,68 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 <div id="dashboard" style="display:none">
   <header class="hdr">
     <div class="hdr-l">
-      <span class="hdr-leaf">⬡</span>
-      <h1>finance dashboard</h1>
-      <span class="badge" id="src-badge">live</span>
+      <h1>Household Ledger</h1>
+      <span class="badge live" id="src-badge">● live</span>
     </div>
     <div class="hdr-r">
       <span class="ts" id="ts"></span>
+      <button class="hdr-add" data-action="showQuickAdd">+ Add</button>
       <button class="icon-btn" data-action="refreshData"><span id="ri">↻</span> refresh</button>
       <button class="icon-btn" data-action="showAddMonth">+ month</button>
       <button class="icon-btn" data-action="showSetup">⚙ settings</button>
-      <button class="icon-btn" onclick="showChangePassword()" title="Change password">🔑</button>
+      <button class="icon-btn" data-action="showChangePassword" title="Change password">🔑</button>
     </div>
   </header>
+  <div class="gl-strip">
+    <div class="gl-band" id="gl-band" title="Investments toward $1,000,000">
+      <svg class="gl-svg gl-base" viewBox="0 0 800 28" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M0,14 Q10,4 20,14 T40,14 T60,14 T80,14 T100,14 T120,14 T140,14 T160,14 T180,14 T200,14 T220,14 T240,14 T260,14 T280,14 T300,14 T320,14 T340,14 T360,14 T380,14 T400,14 T420,14 T440,14 T460,14 T480,14 T500,14 T520,14 T540,14 T560,14 T580,14 T600,14 T620,14 T640,14 T660,14 T680,14 T700,14 T720,14 T740,14 T760,14 T780,14 T800,14"/>
+        <path d="M0,14 Q10,24 20,14 T40,14 T60,14 T80,14 T100,14 T120,14 T140,14 T160,14 T180,14 T200,14 T220,14 T240,14 T260,14 T280,14 T300,14 T320,14 T340,14 T360,14 T380,14 T400,14 T420,14 T440,14 T460,14 T480,14 T500,14 T520,14 T540,14 T560,14 T580,14 T600,14 T620,14 T640,14 T660,14 T680,14 T700,14 T720,14 T740,14 T760,14 T780,14 T800,14"/>
+        <path d="M0,14 Q14,7 28,14 T56,14 T84,14 T112,14 T140,14 T168,14 T196,14 T224,14 T252,14 T280,14 T308,14 T336,14 T364,14 T392,14 T420,14 T448,14 T476,14 T504,14 T532,14 T560,14 T588,14 T616,14 T644,14 T672,14 T700,14 T728,14 T756,14 T784,14 T812,14"/>
+        <path class="gl-gold" d="M0,14 Q20,21 40,14 T80,14 T120,14 T160,14 T200,14 T240,14 T280,14 T320,14 T360,14 T400,14 T440,14 T480,14 T520,14 T560,14 T600,14 T640,14 T680,14 T720,14 T760,14 T800,14"/>
+      </svg>
+      <svg class="gl-svg gl-fill" id="gl-fill" viewBox="0 0 800 28" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M0,14 Q10,4 20,14 T40,14 T60,14 T80,14 T100,14 T120,14 T140,14 T160,14 T180,14 T200,14 T220,14 T240,14 T260,14 T280,14 T300,14 T320,14 T340,14 T360,14 T380,14 T400,14 T420,14 T440,14 T460,14 T480,14 T500,14 T520,14 T540,14 T560,14 T580,14 T600,14 T620,14 T640,14 T660,14 T680,14 T700,14 T720,14 T740,14 T760,14 T780,14 T800,14"/>
+        <path d="M0,14 Q10,24 20,14 T40,14 T60,14 T80,14 T100,14 T120,14 T140,14 T160,14 T180,14 T200,14 T220,14 T240,14 T260,14 T280,14 T300,14 T320,14 T340,14 T360,14 T380,14 T400,14 T420,14 T440,14 T460,14 T480,14 T500,14 T520,14 T540,14 T560,14 T580,14 T600,14 T620,14 T640,14 T660,14 T680,14 T700,14 T720,14 T740,14 T760,14 T780,14 T800,14"/>
+        <path d="M0,14 Q14,7 28,14 T56,14 T84,14 T112,14 T140,14 T168,14 T196,14 T224,14 T252,14 T280,14 T308,14 T336,14 T364,14 T392,14 T420,14 T448,14 T476,14 T504,14 T532,14 T560,14 T588,14 T616,14 T644,14 T672,14 T700,14 T728,14 T756,14 T784,14 T812,14"/>
+        <path class="gl-gold" d="M0,14 Q20,21 40,14 T80,14 T120,14 T160,14 T200,14 T240,14 T280,14 T320,14 T360,14 T400,14 T440,14 T480,14 T520,14 T560,14 T600,14 T640,14 T680,14 T720,14 T760,14 T800,14"/>
+      </svg>
+      <span class="gl-now" id="gl-now"></span>
+      <span class="gl-goal">$1M</span>
+    </div>
+  </div>
 
   <main class="main">
     <div id="banner" class="banner" style="display:none"></div>
 
     <div class="tabs">
-      <button class="tab-btn active"  data-tab="accounts">Accounts</button>
+      <button class="tab-btn active"  data-tab="thisweek">This Week</button>
+      <button class="tab-btn"         data-tab="accounts">Accounts</button>
       <button class="tab-btn"         data-tab="txns">Transactions</button>
-      <button class="tab-btn"         data-tab="fixed">Fixed expenses</button>
-      <button class="tab-btn"         data-tab="loans">Loans</button>
-      <button class="tab-btn"         data-tab="monthly">Monthly budget</button>
-      <button class="tab-btn"         data-tab="breakdown">Expense breakdown</button>
+      <button class="tab-btn"         data-tab="fixed">Recurring expenses</button>
+      <button class="tab-btn"         data-tab="budget">Budget</button>
       <button class="tab-btn"         data-tab="networth">Net worth</button>
+      <button class="tab-btn"         data-tab="loans">Student Loans</button>
+      <button class="tab-btn"         data-tab="mortgage">Mortgage</button>
+    </div>
+
+    <!-- THIS WEEK -->
+    <div id="tab-thisweek" class="tab-panel active">
+      <div class="tw-stats" id="tw-grid">
+        <div class="tw-card tw-stat" id="tw-checking"><div class="tw-eyebrow">Checking</div><div class="tw-stat-val">—</div></div>
+        <div class="tw-card tw-stat" id="tw-cards"><div class="tw-eyebrow">Cards owed</div><div class="tw-stat-val">—</div></div>
+        <div class="tw-card tw-stat" id="tw-daycare"><div class="tw-eyebrow">Daycare</div><div class="tw-stat-val">—</div></div>
+      </div>
+      <div class="tw-grid">
+        <div class="tw-card" id="tw-budget"><div class="tw-eyebrow">This month</div><div class="tw-big sk" style="height:24px;width:120px"> </div></div>
+        <div class="tw-card" id="tw-networth"><div class="tw-eyebrow">Net worth</div><div class="tw-big sk" style="height:24px;width:120px"> </div></div>
+      </div>
+      <div class="tw-card" id="tw-debt" style="margin-top:14px">
+        <div class="tw-eyebrow">Total debt over time</div>
+        <div class="tw-big" id="tw-debt-total">—</div>
+        <div class="tw-stat-sub" id="tw-debt-sub" style="margin-top:4px">Loading projection…</div>
+        <div style="height:300px;position:relative;margin-top:16px"><canvas id="c-tw-debt"></canvas></div>
+      </div>
     </div>
 
     <!-- TRANSACTIONS -->
@@ -660,6 +819,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 
     <!-- FIXED EXPENSES -->
     <div id="tab-fixed" class="tab-panel">
+      <div id="daycare-reminder"></div>
       <div class="fx-bar">
         <select class="msel" id="msel-fx" onchange="loadFixed(this.value)">
           <option value="">— select month —</option>
@@ -672,7 +832,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     </div>
 
     <!-- MONTHLY BUDGET -->
-    <div id="tab-monthly" class="tab-panel">
+    <div id="tab-budget" class="tab-panel">
       <div class="metrics" id="m-metrics">
         <div class="metric"><div class="mlabel">Budget</div><div class="mval sk" style="height:26px;width:88px"> </div></div>
         <div class="metric"><div class="mlabel">Latest spend</div><div class="mval sk" style="height:26px;width:88px"> </div></div>
@@ -690,11 +850,9 @@ tr:hover .racts,tr.editing .racts{opacity:1}
         </div>
         <div class="chart-wrap" style="height:270px"><canvas id="c-monthly"></canvas></div>
       </div>
-    </div>
 
-    <!-- BREAKDOWN -->
-    <div id="tab-breakdown" class="tab-panel">
-      <div class="metrics" id="bd-metrics">
+      <!-- Breakdown section (merged) -->
+      <div class="metrics" id="bd-metrics" style="margin-top:18px">
         <div class="metric"><div class="mlabel">Fixed</div><div class="mval sk" style="height:26px;width:80px"> </div></div>
         <div class="metric"><div class="mlabel">Variable</div><div class="mval sk" style="height:26px;width:80px"> </div></div>
         <div class="metric"><div class="mlabel">Discretionary</div><div class="mval sk" style="height:26px;width:80px"> </div></div>
@@ -716,17 +874,40 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 
     <!-- NET WORTH -->
     <div id="tab-networth" class="tab-panel">
+
+      <!-- Headline metrics -->
       <div class="metrics" id="nw-metrics">
         <div class="metric"><div class="mlabel">Net worth</div><div class="mval sk" style="height:26px;width:110px"> </div></div>
-        <div class="metric"><div class="mlabel">Liquid</div><div class="mval sk" style="height:26px;width:88px"> </div></div>
+        <div class="metric"><div class="mlabel">Investments</div><div class="mval sk" style="height:26px;width:100px"> </div></div>
+        <div class="metric"><div class="mlabel">Total debt</div><div class="mval sk" style="height:26px;width:100px"> </div></div>
         <div class="metric"><div class="mlabel">Home equity</div><div class="mval sk" style="height:26px;width:88px"> </div></div>
-        <div class="metric"><div class="mlabel">Miles</div><div class="mval sk" style="height:26px;width:80px"> </div></div>
       </div>
+
+      <!-- Investment history chart (full history) -->
       <div class="chart-card" id="nw-hist-card" style="margin-bottom:14px">
-        <div class="chart-head"><span class="chart-title">Net worth history (last 52 weeks)</span></div>
-        <div class="chart-wrap" style="height:200px"><canvas id="c-nw"></canvas></div>
+        <div class="chart-head">
+          <span class="chart-title">Investment balance — all time</span>
+          <span id="nw-hist-note" style="font-size:11px;color:var(--faint);margin-left:8px"></span>
+        </div>
+        <div class="chart-wrap" style="height:260px"><canvas id="c-nw"></canvas></div>
+        <div id="nw-milestone" style="padding:8px 12px 4px;border-top:1px solid var(--border)"></div>
       </div>
-      <div class="two-col" id="acct-grid"></div>
+
+      <!-- Net worth over time (from snapshots, builds week by week) -->
+      <div class="chart-card" id="nw-snap-card" style="margin-bottom:14px;display:none">
+        <div class="chart-head">
+          <span class="chart-title">Net worth over time</span>
+          <span style="font-size:11px;color:var(--faint);margin-left:8px">after debt · from snapshots</span>
+        </div>
+        <div class="chart-wrap" style="height:180px"><canvas id="c-nw-snap"></canvas></div>
+      </div>
+
+      <!-- Asset / liability breakdown + accounts -->
+      <div class="two-col" id="nw-breakdown"></div>
+
+      <!-- Snapshot action -->
+      <div id="nw-snapshot-area" style="margin-top:18px"></div>
+
     </div>
 
     <!-- LOANS -->
@@ -740,18 +921,22 @@ tr:hover .racts,tr.editing .racts{opacity:1}
       <div id="loan-content"><div class="tbl-empty">Loading…</div></div>
     </div>
 
+    <div id="tab-mortgage" class="tab-panel">
+      <div class="metrics" id="mtg-metrics">
+        <div class="metric"><div class="mlabel">Balance</div><div class="mval sk" style="height:26px;width:120px"> </div></div>
+        <div class="metric"><div class="mlabel">Home value</div><div class="mval sk" style="height:26px;width:120px"> </div></div>
+        <div class="metric"><div class="mlabel">Equity</div><div class="mval sk" style="height:26px;width:96px"> </div></div>
+        <div class="metric"><div class="mlabel">Rate</div><div class="mval sk" style="height:26px;width:64px"> </div></div>
+      </div>
+      <div id="mtg-content"><div class="tbl-empty">Loading…</div></div>
+    </div>
+
     <!-- ACCOUNTS -->
-    <div id="tab-accounts" class="tab-panel active">
-      <div id="daycare-reminder"></div>
+    <div id="tab-accounts" class="tab-panel">
       <div class="metrics" id="acct-metrics">
         <div class="metric"><div class="mlabel">Checking</div><div class="mval sk" style="height:26px;width:100px"> </div></div>
         <div class="metric"><div class="mlabel">Credit balance</div><div class="mval sk" style="height:26px;width:100px"> </div></div>
-        <div class="metric"><div class="mlabel">Credit limit</div><div class="mval sk" style="height:26px;width:100px"> </div></div>
-        <div class="metric"><div class="mlabel">Utilization</div><div class="mval sk" style="height:26px;width:80px"> </div></div>
       </div>
-
-      <!-- FCF estimate -->
-      <div id="fcf-card"></div>
 
       <!-- Account cards grid -->
       <div class="acct-cards-grid" id="acct-cards-grid"></div>
@@ -767,6 +952,9 @@ tr:hover .racts,tr.editing .racts{opacity:1}
         </div>
         <div class="chart-wrap" style="height:220px"><canvas id="c-credit"></canvas></div>
       </div>
+
+      <!-- FCF estimate -->
+      <div id="fcf-card" style="margin-top:14px"></div>
     </div>
 
   </main>
@@ -890,6 +1078,25 @@ tr:hover .racts,tr.editing .racts{opacity:1}
   </div>
 </div>
 
+<!-- QUICK ADD MODAL -->
+<div id="qa-modal-backdrop" class="pay-modal-backdrop" style="display:none" data-dismiss="hideQuickAdd">
+  <div class="pay-modal">
+    <h3>Add entry</h3>
+    <div class="qa-seg" id="qa-seg">
+      <button class="qa-seg-btn active" data-action="qaSetType" data-qa-type="txn">Transaction</button>
+      <button class="qa-seg-btn" data-action="qaSetType" data-qa-type="groceries">Grocery</button>
+      <button class="qa-seg-btn" data-action="qaSetType" data-qa-type="gas">Gas</button>
+      <button class="qa-seg-btn" data-action="qaSetType" data-qa-type="payment">Payment</button>
+      <button class="qa-seg-btn" data-action="qaSetType" data-qa-type="checking">Deposit</button>
+    </div>
+    <div id="qa-fields"></div>
+    <div class="pay-modal-err" id="qa-err"></div>
+    <div class="pay-modal-btns">
+      <button class="btn-primary" id="qa-submit-btn" data-action="submitQuickAdd">Save</button>
+      <button class="btn-cancel" data-action="hideQuickAdd">Cancel</button>
+    </div>
+  </div>
+</div>
 <!-- ADD MONTH MODAL -->
 <div id="add-month-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:150;display:none;align-items:center;justify-content:center;padding:24px">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:28px;max-width:400px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
@@ -908,9 +1115,18 @@ tr:hover .racts,tr.editing .racts{opacity:1}
   </div>
 </div>
 
+<script src="config.js"></script>  <!-- local-only, gitignored; defines window.CONFIG.SCRIPT_URL (see config.example.js) -->
 <script>
 // ── state ──
-var SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbySlRO6ZO-9Uk1DsOB0qCV4Y5GE9Sc8nTW3ouhVGOK_7lnW1cF0uXrJr3GXp3RJQEm9Qg/exec';
+// Local-timezone date string (YYYY-MM-DD). NEVER use toISOString() for
+// "today" -- it returns UTC, which after ~7-8pm Eastern is tomorrow's date.
+function localDateStr(d){
+  var y = d.getFullYear(), m = d.getMonth()+1, day = d.getDate();
+  return y + '-' + (m<10?'0':'') + m + '-' + (day<10?'0':'') + day;
+}
+function localToday(){ return localDateStr(new Date()); }
+
+var SCRIPT_URL = (window.CONFIG && window.CONFIG.SCRIPT_URL) || '';  // endpoint from config.js (gitignored); localStorage 'fin_url' still overrides at init
 var cMonthly = null, cBreakdown = null, cNW = null, cCredit = null;
 var allData = null;
 var txns = [], fixedData = { fixed: [], variable: [] }, varEntries = null, acctData = null;
@@ -920,7 +1136,9 @@ var isDemo = false;
 var bannerTimer = null;
 var $ = function(id){ return document.getElementById(id); };
 var esc = function(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
-var fmt = function(n,d){ d=d||0; if(n==null) return '—'; return (n<0?'-':'')+'$'+Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}); };
+// Accounting notation: negatives in parentheses -- ($1,234.56) -- so
+// credit/debit never depends on distinguishing red from green (CVD-safe).
+var fmt = function(n,d){ d=d||0; if(n==null) return '—'; var s='$'+Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}); return n<0 ? '('+s+')' : s; };
 var smo = function(s){ var p=s.split(' '); return p[0].slice(0,3)+' '+p[1].slice(2); };
 
 // ── Theme helpers — read CSS vars at render time ──
@@ -963,11 +1181,9 @@ function lsSetJSON(key, value){
 // Called once on DOMContentLoaded. Wires all static HTML element
 // interactions via addEventListener — no inline onclick attributes.
 function initEventListeners(){
-  console.log('[init] initEventListeners running');
   function on(id, fn){
     var el=$(id);
-    if(el){ el.addEventListener('click', fn); console.log('[init] wired: '+id); }
-    else { console.warn('[init] element not found: '+id); }
+    if(el){ el.addEventListener('click', fn); }
   }
 
   // Wire elements by ID where they already exist
@@ -983,6 +1199,19 @@ function initEventListeners(){
   // Wire remaining elements via data-action attribute
   // This avoids needing to add IDs to every button
   var ACTION_MAP = {
+    'payCard':        function(e){ var el=e.target.closest('[data-action]'); showPayModal(el.dataset.key, el.dataset.name, parseFloat(el.dataset.balance)||0); },
+    'voidCard':       function(e){ var el=e.target.closest('[data-action]'); voidPayment(el.dataset.key, el.dataset.name, parseFloat(el.dataset.amount)||0, el.dataset.date||''); },
+    'chkDeposit':     function(){ showChkModal('deposit'); },
+    'editFixedName':  function(e){ var el=e.target.closest('[data-action]'); editFixedName(parseFloat(el.dataset.args), el); },
+    'editFixedCost':  function(e){ var el=e.target.closest('[data-action]'); editFixedCost(parseFloat(el.dataset.args), el); },
+    'chkWithdrawal':  function(){ showChkModal('withdrawal'); },
+    'setupChangePassword': function(){ hideSetup(); showChangePassword(); },
+    'showQuickAdd':       showQuickAdd,
+    'hideQuickAdd':       hideQuickAdd,
+    'submitQuickAdd':     submitQuickAdd,
+    'qaSetType':          qaSetType,
+    'gotoAccounts':       gotoAccounts,
+    'gotoNetWorth':       gotoNetWorth,
     'loadSaved':          loadSaved,
     'useDemoData':        useDemoData,
     'hideSetup':          hideSetup,
@@ -1021,14 +1250,25 @@ function initEventListeners(){
     if(!el) return;
     var action = el.dataset.action;
     if(ACTION_MAP[action]){
+      if(el.tagName === 'A') e.preventDefault();
       e.stopPropagation();
       ACTION_MAP[action](e);
+    } else if(typeof window[action] === 'function'){
+      // Generic fallback: data-args="a,b,c" -> fn(a,b,c), numbers auto-parsed.
+      // Keeps per-row handlers out of HTML strings (no quote-escaping ever).
+      if(el.tagName === 'A') e.preventDefault();
+      e.stopPropagation();
+      var args = (el.dataset.args != null && el.dataset.args !== '')
+        ? el.dataset.args.split(',').map(function(t){ return /^-?\d+(\.\d+)?$/.test(t) ? parseFloat(t) : t; })
+        : [];
+      window[action].apply(null, args);
     }
   });
 
   // Global Escape key closes any open modal
   document.addEventListener('keydown', function(e){
     if(e.key !== 'Escape') return;
+    hideQuickAdd();
     hideSplitModal();
     hideChkModal();
     hidePayModal();
@@ -1045,7 +1285,9 @@ function showBanner(msg, type) {
   var b = $('banner');
   b.style.display = 'flex';
   b.className = 'banner'+(type?' '+type:'');
-  b.innerHTML = type==='loading' ? '<div class="spinner"></div><span>'+msg+'</span>' : '<span>'+msg+'</span>';
+  // Symbol prefix so status doesn't depend on color alone (CVD-safe)
+  var sym = type==='ok' ? '✓ ' : type==='err' ? '⚠ ' : '';
+  b.innerHTML = type==='loading' ? '<div class="spinner"></div><span>'+msg+'</span>' : '<span>'+sym+msg+'</span>';
   if (type==='ok') bannerTimer = setTimeout(function(){ b.style.display='none'; }, 2600);
 }
 function hideBanner(){ $('banner').style.display='none'; }
@@ -1066,7 +1308,6 @@ function loadSaved(){
   else $('setup-err').textContent='No saved URL found.';
 }
 async function connectSheet(){
-  console.log('[connectSheet] called, url-input value:', $('url-input') ? $('url-input').value : 'ELEMENT NOT FOUND');
   var url=$('url-input').value.trim();
   if(!url.startsWith('https://script.google.com')){ $('setup-err').textContent='Please enter a valid Apps Script web app URL.'; return; }
   $('setup-err').textContent='';
@@ -1074,14 +1315,14 @@ async function connectSheet(){
   try {
     var data=await apiFetch(url,'all');
     SCRIPT_URL=url; lsSet('fin_url',url);
-    hideSetup(); $('src-badge').textContent='live';
+    hideSetup(); $('src-badge').textContent='● live'; $('src-badge').className='badge live';
     renderAll(data); showBanner('Connected to Google Sheet','ok');
   } catch(e){
     $('setup-err').textContent='Connection failed: '+e.message+'. Make sure access is set to "Anyone".';
   } finally { btn.disabled=false; btn.textContent='Connect'; }
 }
 function useDemoData(){
-  isDemo=true; hideSetup(); $('src-badge').textContent='demo';
+  isDemo=true; hideSetup(); $('src-badge').textContent='demo'; $('src-badge').className='badge demo';
   var d = demoData();
   d.accounts      = demoAccounts();
   d.cardTotals    = demoCardTotals();
@@ -1096,7 +1337,7 @@ function useDemoData(){
 // Once a password is set via the dashboard, it's stored in localStorage
 // under PW_KEY and takes precedence over AUTH_HASH.
 // To reset to the baked-in password, clear localStorage key 'fin_pw_hash'.
-var AUTH_HASH = 'e3c652f0ba0b4801205814f8b6bc49672c4c74e25b497770bb89b22cdeb4e951'; // changeme123
+var AUTH_HASH = '62547dcd3f31e86bd133f7e715b5cdefae1dc4770cac0e50f34a91fd9405467a'; // changeme123
 var AUTH_KEY  = 'fin_auth_v1';  // stores the session token (hash of current pw)
 var PW_KEY    = 'fin_pw_hash';  // stores a custom password hash if set via dashboard
 
@@ -1182,18 +1423,21 @@ async function submitChangePassword() {
 }
 
 function bootDashboard() {
-  var url = SCRIPT_URL || lsGet('fin_url');
+  // Saved URL (entered in settings) takes precedence over the baked-in
+  // constant -- otherwise pasting a new deployment URL silently reverts
+  // to the old hardcoded one on every page load.
+  var url = lsGet('fin_url') || SCRIPT_URL;
   if(url) {
     SCRIPT_URL = url;
     lsSet('fin_url', url);
     $('dashboard').style.display = 'block';
-    $('src-badge').textContent   = 'live';
+    $('src-badge').textContent = '● live';
+    $('src-badge').className   = 'badge live';
     showBanner('Loading data…', 'loading');
     apiFetch(url, 'all').then(function(data){
       renderAll(data); showBanner('Ready', 'ok');
     }).catch(function(e){
       showBanner('Could not load: ' + e.message, 'err');
-      showSetup();
     });
   }
 }
@@ -1202,18 +1446,39 @@ async function apiFetch(base, action, params){
   params = params || {};
   var url = base + '?action=' + action;
   Object.keys(params).forEach(function(k){ url += '&' + k + '=' + encodeURIComponent(params[k]); });
-  var res = await fetch(url);
+  // Cache-buster + no-store: the browser otherwise serves stale cached
+  // responses for repeated identical GETs (e.g. refetching variableEntries
+  // right after adding an entry), making fresh writes invisible until a
+  // hard refresh.
+  url += '&_ts=' + Date.now();
+  var res = await fetch(url, { cache: 'no-store' });
   if(!res.ok) throw new Error('HTTP ' + res.status);
   var data = await res.json();
   if(data.error) throw new Error(data.error);
   return data;
 }
-async function apiPost(base, payload){
-  var res = await fetch(base, { method:'POST', body:JSON.stringify(payload) });
-  if(!res.ok) throw new Error('HTTP ' + res.status);
-  var data = await res.json();
-  if(data.error) throw new Error(data.error);
-  return data;
+// Unique key per write operation -- lets the server detect and ignore
+// duplicate requests, which makes automatic retries safe.
+function genIdemKey(action){
+  return 'idem_'+action+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,10);
+}
+
+async function apiPost(base, payload, _retried){
+  try {
+    var res = await fetch(base, { method:'POST', body:JSON.stringify(payload) });
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    var data = await res.json();
+    if(data.error) throw new Error(data.error);
+    return data;
+  } catch(e) {
+    // Retry ONLY when the payload carries an idemKey -- the server will
+    // recognize the key and skip the write if the first attempt landed.
+    if(payload && payload.idemKey && !_retried && (e.message||'').indexOf('HTTP') !== 0){
+      await new Promise(function(r){ setTimeout(r, 2000); });
+      return apiPost(base, payload, true);
+    }
+    throw e;
+  }
 }
 
 // ── REFRESH ──────────────────────────────────────────────────
@@ -1244,7 +1509,7 @@ async function refreshData(){
 function renderAll(data){
   allData=data;
   if(data.config) applyConfig(data.config); // apply server config first
-  var monthly=data.monthly||[], nw=data.networth||{}, budget=data.budget||BUDGET||13205;
+  var monthly=data.monthly||[], budget=data.budget||13205;
   // Stash accounts data on allData for loadAccounts to use
   if(data.accounts){
     allData.creditHistory = data.accounts.creditHistory||[];
@@ -1268,7 +1533,6 @@ function renderAll(data){
   });
   renderMonthly(monthly,budget);
   renderBreakdown(monthly);
-  renderNetWorth(nw);
   // auto-load most recent month for both tabs
   if(firstMonth){
     loadTxns(firstMonth,true);
@@ -1276,6 +1540,15 @@ function renderAll(data){
   }
   loadAccounts();
   renderDaycareReminder();
+  renderThisWeek();
+  // Warm net worth in the background so the header band fills without a
+  // tab visit (server caches it 5 min; nwData prevents refetch on tab click)
+  if(!isDemo && SCRIPT_URL && !nwData){
+    setTimeout(function(){ loadNetWorth(); }, 1200);
+    // If the first warm attempt failed (slow compute / dropped response),
+    // try once more so the header band and This Week card still fill.
+    setTimeout(function(){ if(!nwData) loadNetWorth(); }, 15000);
+  }
 }
 
 // ── monthly chart ──
@@ -1345,45 +1618,564 @@ function renderBreakdown(monthly){
 }
 
 // ── net worth ──
+// ── THIS WEEK ─────────────────────────────────────────────────
+function renderThisWeek(){
+  if(!$('tw-grid')) return;
+  // Each card isolated: one render error must not strand the others
+  [twChecking, twCards, twDaycare, twBudget, twNetWorth].forEach(function(fn){
+    try { fn(); } catch(e) { console.error('ThisWeek card failed:', fn.name, e); }
+  });
+  try { loadDebtChart(); } catch(e) { console.error('debt chart failed:', e); }
+}
+
+function twChecking(){
+  var el=$('tw-checking'); if(!el) return;
+  var cb=allData&&allData.cardBalances;
+  var bal=cb&&cb.checkingBalance!=null?cb.checkingBalance:null;
+  el.innerHTML='<div class="tw-eyebrow">Checking</div>'+
+    '<div class="tw-stat-val">'+(bal!=null?fmt(bal,2):'—')+'</div>'+
+    '<div class="tw-stat-sub">Chase</div>';
+}
+
+function twCards(){
+  var el=$('tw-cards'); if(!el) return;
+  var cards=allData&&allData.cardBalances&&allData.cardBalances.cards;
+  if(!cards){
+    el.innerHTML='<div class="tw-eyebrow">Cards owed</div><div class="tw-stat-val">—</div>';
+    return;
+  }
+  var today=new Date(); var dom=today.getDate();
+  var total=0, due=[];
+  CARD_MAP.forEach(function(c){
+    var info=cards[c.sheetKey]; if(!info||info.balance==null) return;
+    total+=info.balance;
+    if(info.balance<=0.005) return;
+    var day=parseInt(c.due)||0; if(!day) return;
+    var d=new Date(today.getFullYear(),today.getMonth(),day,12);
+    if(day<dom) d=new Date(today.getFullYear(),today.getMonth()+1,day,12);
+    var days=Math.round((d-new Date(today.getFullYear(),today.getMonth(),dom,12))/86400000);
+    var short=c.sheetKey==='Wells Fargo'?'WF':c.sheetKey==='Prime Visa'?'Prime':c.sheetKey;
+    due.push({short:short,days:days});
+  });
+  due.sort(function(a,b){return a.days-b.days;});
+  var hint=due.slice(0,2).map(function(x){return esc(x.short)+' '+x.days+'d';}).join(' · ');
+  el.innerHTML='<div class="tw-eyebrow">Cards owed</div>'+
+    '<div class="tw-stat-val">'+fmt(Math.round(total*100)/100,2)+'</div>'+
+    '<div class="tw-stat-sub">'+(hint?('next due: '+hint+' · '):'')+
+    '<span class="tw-link" style="margin-top:0" data-action="gotoAccounts">cards →</span></div>';
+}
+
+function twDaycare(){
+  var el=$('tw-daycare'); if(!el) return;
+  var today=new Date(localToday()+'T12:00:00');
+  var rows=daycareSchedule();
+  var nextPay=null, closedBefore=[];
+  for(var i=0;i<rows.length;i++){
+    var r=rows[i];
+    if(r.friday < today) continue;
+    if(r.skipped){ if(!nextPay) closedBefore.push(r); continue; }
+    nextPay=r; break;
+  }
+  var h='<div class="tw-eyebrow">Daycare</div>';
+  if(nextPay){
+    var days=Math.round((nextPay.friday-today)/86400000);
+    h+='<div class="tw-stat-val">'+nextPay.friday.toLocaleDateString('en-US',{month:'short',day:'numeric'})+'</div>'+
+       '<div class="tw-stat-sub">'+fmt(DC_AMOUNT)+' · '+(days<=0?'today':'in '+days+'d')+
+       (closedBefore.length?' · <span style="color:var(--gold)">◇ closed '+closedBefore[0].monday.toLocaleDateString('en-US',{month:'short',day:'numeric'})+'</span>':'')+'</div>';
+  } else {
+    h+='<div class="tw-stat-val">—</div>';
+  }
+  el.innerHTML=h;
+}
+
+function twBudget(){
+  var el=$('tw-budget'); if(!el) return;
+  var m=allData&&allData.monthly&&allData.monthly[0];
+  var h='<div class="tw-eyebrow">This month'+(m?' · '+esc(m.month):'')+'</div>';
+  if(!m){ el.innerHTML=h+'<div class="tw-big">—</div>'; return; }
+  var spent=m.totalExpenses||0;
+  var budget=(allData&&allData.budget)||13205;
+  var pct=Math.min(100, spent/budget*100);
+  var today=new Date();
+  var dim=new Date(today.getFullYear(),today.getMonth()+1,0).getDate();
+  var pace=today.getDate()/dim*100;
+  var isCur=m.month===today.toLocaleDateString('en-US',{month:'long'})+' '+today.getFullYear();
+  var over=spent>budget;
+  h+='<div class="tw-big">'+fmt(spent)+'<span style="font-size:13px;color:var(--muted)"> of '+fmt(budget)+'</span></div>'+
+     '<div class="tw-bar"><div class="tw-bar-fill'+(over?' over':'')+'" style="width:'+pct+'%"></div>'+
+     (isCur?'<div class="tw-bar-pace" style="left:'+Math.min(99,pace)+'%" title="month is '+Math.round(pace)+'% elapsed"></div>':'')+'</div>'+
+     '<div class="tw-bar-caption"><span>'+Math.round(spent/(budget||1)*100)+'% spent'+(over?' ⚠ over budget':'')+'</span>'+
+     (isCur?'<span>'+Math.round(pace)+'% elapsed</span>':'')+'</div>';
+  el.innerHTML=h;
+}
+
+function twNetWorth(){
+  var el=$('tw-networth'); if(!el) return;
+  var h='<div class="tw-eyebrow">Net worth</div>';
+  if(!nwData){ el.innerHTML=h+'<div class="tw-big">—</div><div class="tw-sub">loading…</div>'; return; }
+  var ms=nwData.projections&&nwData.projections[1]&&nwData.projections[1].milestone;
+  h+='<div class="tw-big">'+fmt(nwData.netWorth)+'</div>'+
+     '<div class="tw-sub">investments '+fmt(nwData.investments)+
+     (ms?' · $1M ~'+new Date(ms+'T12:00:00').toLocaleDateString('en-US',{month:'short',year:'numeric'})+' @ 8%':'')+'</div>'+
+     '<span class="tw-link" data-action="gotoNetWorth">details →</span>';
+  el.innerHTML=h;
+}
+
+function gotoAccounts(){ var b=document.querySelector('.tab-btn[data-tab="accounts"]'); if(b) b.click(); }
+function gotoNetWorth(){ var b=document.querySelector('.tab-btn[data-tab="networth"]'); if(b) b.click(); }
+
+// ── QUICK ADD ─────────────────────────────────────────────────
+var qaType='txn';
+
+function showQuickAdd(){
+  qaType='txn'; qaRenderSeg(); qaRenderFields();
+  $('qa-err').textContent='';
+  $('qa-modal-backdrop').style.display='flex';
+}
+function hideQuickAdd(){ var b=$('qa-modal-backdrop'); if(b) b.style.display='none'; }
+function qaSetType(e){
+  var el=e.target.closest('[data-qa-type]'); if(!el) return;
+  qaType=el.dataset.qaType; qaRenderSeg(); qaRenderFields();
+}
+function qaRenderSeg(){
+  document.querySelectorAll('.qa-seg-btn').forEach(function(b){
+    b.classList.toggle('active', b.dataset.qaType===qaType);
+  });
+}
+function qaCurMonth(){ return (allData&&allData.months&&allData.months[0])||curMonthTxn||''; }
+
+function qaRenderFields(){
+  var f=$('qa-fields'); var today=localToday();
+  function field(label,inner){ return '<div class="pay-field"><label>'+label+'</label>'+inner+'</div>'; }
+  var pmSel='<select id="qa-pm" class="msel" style="width:100%">'+
+    PM_OPTIONS.map(function(p){return '<option value="'+esc(p)+'">'+(p||'—')+'</option>';}).join('')+'</select>';
+  if(qaType==='txn'){
+    f.innerHTML=
+      field('Date','<input type="date" id="qa-date" value="'+today+'">')+
+      field('Description','<input type="text" id="qa-desc" placeholder="e.g. Target">')+
+      field('Amount ($)','<input type="number" id="qa-amt" step="0.01" placeholder="0.00">')+
+      field('Payment method',pmSel)+
+      '<div class="qa-check-row">'+
+      '<label><input type="checkbox" id="qa-disc"> Discretionary</label>'+
+      '<label><input type="checkbox" id="qa-ben" checked> Ben</label>'+
+      '<label><input type="checkbox" id="qa-jenna" checked> Jenna</label></div>';
+  } else if(qaType==='groceries'||qaType==='gas'){
+    f.innerHTML=
+      field('Date','<input type="date" id="qa-date" value="'+today+'">')+
+      (qaType==='groceries'?field('Store','<input type="text" id="qa-store" placeholder="e.g. Wegmans">'):'')+
+      field('Amount ($)','<input type="number" id="qa-amt" step="0.01" placeholder="0.00">')+
+      field('Payment method',pmSel);
+  } else if(qaType==='checking'){
+    f.innerHTML=
+      field('Type','<select id="qa-chk-type" class="msel" style="width:100%"><option value="deposit">Deposit / paycheck</option><option value="withdrawal">Withdrawal</option></select>')+
+      field('Date','<input type="date" id="qa-date" value="'+today+'">')+
+      field('Description','<input type="text" id="qa-desc" value="Paycheck">')+
+      field('Amount ($)','<input type="number" id="qa-amt" step="0.01" placeholder="0.00">');
+  } else {
+    var cardSel='<select id="qa-card" class="msel" style="width:100%">'+
+      CARD_MAP.map(function(c){return '<option value="'+esc(c.sheetKey)+'">'+esc(c.name)+'</option>';}).join('')+'</select>';
+    f.innerHTML=
+      field('Card',cardSel)+
+      field('Amount ($)','<input type="number" id="qa-amt" step="0.01" placeholder="0.00">')+
+      field('Payment date','<input type="date" id="qa-date" value="'+today+'">');
+  }
+}
+
+async function submitQuickAdd(){
+  var btn=$('qa-submit-btn');
+  var month=qaCurMonth();
+  var amtEl=$('qa-amt');
+  var amt=amtEl?parseFloat(amtEl.value):NaN;
+  $('qa-err').textContent='';
+  if(isNaN(amt)){ $('qa-err').textContent='Enter an amount.'; return; }
+  if(!month){ $('qa-err').textContent='No month loaded yet — refresh first.'; return; }
+  btn.disabled=true; btn.textContent='Saving…';
+  try{
+    if(qaType==='txn'){
+      await apiPost(SCRIPT_URL,{action:'addTransaction', idemKey:genIdemKey('txn'), month:month,
+        date:$('qa-date').value, description:$('qa-desc').value.trim(), cost:amt,
+        paymentMethod:$('qa-pm').value, discretionary:$('qa-disc').checked,
+        ben:$('qa-ben').checked, jenna:$('qa-jenna').checked});
+      if(curMonthTxn===month) loadTxns(month,true);
+      quickRefresh(); refreshCardBalances();
+    } else if(qaType==='groceries'||qaType==='gas'){
+      await apiPost(SCRIPT_URL,{action:'addVariableEntry', idemKey:genIdemKey('var'), month:month,
+        category:qaType, date:$('qa-date').value, amount:Math.abs(amt),
+        payment:$('qa-pm').value,
+        store:qaType==='groceries'?$('qa-store').value.trim():undefined});
+      if(curMonthFx===month) loadFixed(month,true);
+      refreshCardBalances();
+    } else if(qaType==='checking'){
+      var isDep=$('qa-chk-type').value==='deposit';
+      await apiPost(SCRIPT_URL,{action:'makeCheckingEntry', idemKey:genIdemKey('chk'), month:month,
+        description:$('qa-desc').value.trim()||'Paycheck',
+        amount:isDep?Math.abs(amt):-Math.abs(amt),
+        date:$('qa-date').value});
+      quickRefresh(); refreshCardBalances();
+    } else {
+      var key=$('qa-card').value;
+      await apiPost(SCRIPT_URL,{action:'makeCardPayment', idemKey:genIdemKey('pay'), month:month,
+        cardName:key, amount:amt, date:$('qa-date').value});
+      if(allData&&allData.cardBalances&&allData.cardBalances.cards&&allData.cardBalances.cards[key]){
+        var qc=allData.cardBalances.cards[key];
+        qc.balance=Math.round((qc.balance-amt)*100)/100;
+        qc.lastPayment=-Math.abs(amt);
+        qc.lastDate=$('qa-date').value;
+        loadAccounts();
+      }
+      refreshCardBalances();
+    }
+    hideQuickAdd();
+    showBanner('Saved','ok');
+    renderThisWeek();
+  }catch(e){
+    $('qa-err').textContent=(e.message&&e.message.indexOf('fetch')>=0)
+      ?'Network error — refresh to check if saved before trying again.'
+      :('Failed: '+e.message);
+  }finally{
+    btn.disabled=false; btn.textContent='Save';
+  }
+}
+
+// ── NET WORTH TAB ─────────────────────────────────────────────
+var nwData = null;
+
+// Drive the header guilloché band: fill = investments / $1M
+function updateLedgerBand(investments){
+  var band = $('gl-band'), fill = $('gl-fill'), now = $('gl-now');
+  if(!band || !fill || !investments) return;
+  var p = Math.max(0, Math.min(100, investments / PROJECTION_TARGET * 100));
+  fill.style.clipPath = 'inset(0 ' + (100 - p) + '% 0 0)';
+  if(now){
+    now.textContent = '$' + Math.round(investments/1000) + 'k';
+    now.style.left = 'min(calc(' + p + '% + 6px), calc(100% - 78px))';
+    now.style.display = 'inline';
+  }
+}
+
+async function loadNetWorth(force){
+  if(nwData && !force){ renderNetWorth(nwData); return; }
+  if(isDemo){ renderNetWorth(demoNetWorth()); return; }
+  if(!SCRIPT_URL){ return; }
+  $('nw-metrics').innerHTML = '<div class="tbl-empty">Loading…</div>';
+  try {
+    var data = await apiFetch(SCRIPT_URL, 'networth');
+    if(!data || data.error){
+      $('nw-metrics').innerHTML = '<div class="tbl-empty">Error: '+(data && data.error ? data.error : 'empty response')+'</div>';
+      return;
+    }
+    // Zeroed result = flaky read server-side; wait briefly and try once more
+    if((!data.investments || !data.history || !data.history.length) && !force){
+      await new Promise(function(r){ setTimeout(r, 2500); });
+      return loadNetWorth(true);
+    }
+    nwData = data;
+    renderNetWorth(data);
+  } catch(e) {
+    $('nw-metrics').innerHTML = '<div class="tbl-empty">Error: '+esc(e.message)+'</div>';
+  }
+}
+
+function demoNetWorth(){
+  return {
+    investments: 430000, cash: 25000, physicalAssets: 480000,
+    mortgage: 310000, studentLoans: 150000, carLoans: 0,
+    fivetwonine: 32000, netWorth: 475000,
+    totalAssets: 935000, totalLiabilities: 460000,
+    accounts: { 'Fidelity 401K - Ben': 180000, 'Fidelity - 403b - Jenna': 74000,
+                'Fidelity Roth - Ben': 48000, 'Fidelity - Roth - Jenna': 22000,
+                'NY State 529 - Wesley': 25000, 'NY State 529 - Maxwell': 7000,
+                'Crypto': 6000 },
+    history: [], snapshots: [], projections: [],
+  };
+}
+
+var cNW = null, cNWSnap = null;
+
 function renderNetWorth(nw){
-  var accts=nw.accounts||{}, history=nw.history||[], equity=nw.equity||148801;
-  var miles=(accts['United']||38312)+(accts['Delta']||16145)+(accts['American Airlines']||278);
-  $('nw-metrics').innerHTML=
-    '<div class="metric"><div class="mlabel">Net worth</div><div class="mval pos">'+fmt(nw.netWorth)+'</div><div class="msub">all accounts</div></div>'+
-    '<div class="metric"><div class="mlabel">Liquid</div><div class="mval">'+fmt(nw.liquid)+'</div><div class="msub">cash + savings</div></div>'+
-    '<div class="metric"><div class="mlabel">Home equity</div><div class="mval">'+fmt(equity)+'</div><div class="msub">est. − mortgage</div></div>'+
-    '<div class="metric"><div class="mlabel">Airline miles</div><div class="mval">'+(nw.miles||miles).toLocaleString()+'</div><div class="msub">United+Delta+AA</div></div>';
-  if(history.length>1){
-    if(cNW) cNW.destroy();
-    var t=chartTheme();
-    cNW=new Chart($('c-nw'),{
-      type:'line',
-      data:{labels:history.map(function(h){var d=new Date(h.date);return d.toLocaleDateString('en-US',{month:'short',year:'2-digit'});}),
-        datasets:[{label:'Net worth',data:history.map(function(h){return h.worth;}),
-          borderColor:t.green,borderWidth:2,pointRadius:0,fill:true,
-          backgroundColor:'rgba(0,0,0,0)',tension:.3}]},
-      options:{responsive:true,maintainAspectRatio:false,
-        plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){return fmt(ctx.parsed.y);}}}},
-        scales:{
-          x:{ticks:{color:t.tick,font:{size:11},maxTicksLimit:12},grid:{display:false},border:{display:false}},
-          y:{ticks:{color:t.tick,font:{size:11},callback:function(v){return '$'+Math.round(v/1000)+'k';}},grid:{color:t.grid},border:{display:false}}
+  if(!nw) return;
+  var investments    = nw.investments    || 0;
+  var cash           = nw.cash           || 0;
+  var physicalAssets = nw.physicalAssets || 0;
+  var mortgage       = nw.mortgage       || 0;
+  var studentLoans   = nw.studentLoans   || 0;
+  var carLoans       = nw.carLoans       || 0;
+  var fivetwonine    = nw.fivetwonine    || 0;
+  var netWorth       = nw.netWorth       || 0;
+  var totalAssets    = nw.totalAssets    || (investments + cash + physicalAssets);
+  var totalDebt      = nw.totalLiabilities || (mortgage + studentLoans + carLoans);
+  var homeEquity     = physicalAssets - mortgage;
+  var history        = nw.history        || [];
+  var snapshots      = nw.snapshots      || [];
+  var accounts       = nw.accounts       || {};
+
+  updateLedgerBand(investments);
+  twNetWorth();
+
+  // -- Headline metrics --
+  $('nw-metrics').innerHTML =
+    '<div class="metric"><div class="mlabel">Net worth</div><div class="mval pos">'+fmt(netWorth)+'</div><div class="msub">assets - debt</div></div>'+
+    '<div class="metric"><div class="mlabel">Investments</div><div class="mval">'+fmt(investments)+'</div><div class="msub">incl. 529s</div></div>'+
+    '<div class="metric"><div class="mlabel">Total debt</div><div class="mval neg">'+fmt(totalDebt)+'</div><div class="msub">mtg + student'+(carLoans?'+car':'')+'</div></div>'+
+    '<div class="metric"><div class="mlabel">Home equity</div><div class="mval">'+fmt(homeEquity)+'</div><div class="msub">est. value - mortgage</div></div>';
+
+  // -- Investment history chart + projections --
+  if(history.length > 1){
+    if(cNW){ cNW.destroy(); cNW = null; }
+    var t = chartTheme();
+    var projections = nw.projections || [];
+
+    // Thin historical data to ~104 points max -- but ALWAYS keep the final
+    // point: it's where the projections attach, so dropping it leaves a
+    // visible gap between the history line and the dashed projections.
+    var step = history.length > 200 ? Math.ceil(history.length / 104) : 1;
+    var thinned = history.filter(function(_,i){ return i % step === 0 || i === history.length - 1; });
+
+    // Build unified label set from history + ALL projections (the slowest
+    // rate runs longest; using only one would truncate the others)
+    var allDates = thinned.map(function(h){ return h.date; });
+    projections.forEach(function(proj){
+      proj.points.forEach(function(p){
+        if(allDates.indexOf(p.date) < 0) allDates.push(p.date);
+      });
+    });
+    allDates.sort();
+
+    // Historical dataset (null for future dates)
+    var histMap = {};
+    thinned.forEach(function(h){ histMap[h.date] = h.investments || h.worth || 0; });
+    var lastHistDate = thinned[thinned.length-1].date;
+    var histData = allDates.map(function(d){ return d <= lastHistDate ? (histMap[d] || null) : null; });
+
+    // Projection datasets
+    // Each rate gets its own DASH PATTERN as well as color, so the three
+    // lines are tellable apart without relying on hue (CVD-safe):
+    // 6% dotted gold, 8% short-dash blue, 10% long-dash green
+    var projColors = ['#B08D3E','#3E6B8F','#1E5C46'];
+    var projDashes = [[2,3],[6,4],[12,4]];
+    var projDatasets = projections.map(function(proj, pi){
+      var pMap = {};
+      proj.points.forEach(function(p){ pMap[p.date] = p.value; });
+      return {
+        label: proj.label + ' return',
+        data: allDates.map(function(d){ return d >= lastHistDate ? (pMap[d] || null) : null; }),
+        borderColor: projColors[pi],
+        borderWidth: 1.5,
+        borderDash: projDashes[pi] || [5, 4],
+        pointRadius: 0,
+        fill: false,
+        tension: 0.2,
+      };
+    });
+
+    // $1M reference line
+    var millionData = allDates.map(function(){ return PROJECTION_TARGET; });
+
+    var datasets = [{
+      label: 'Investments',
+      data: histData,
+      borderColor: t.green || '#1E5C46',
+      borderWidth: 2, pointRadius: 0, fill: true,
+      backgroundColor: 'rgba(30,92,70,0.06)', tension: 0.3,
+    }].concat(projDatasets).concat([{
+      label: '$1M',
+      data: millionData,
+      borderColor: 'rgba(176,141,62,0.55)',
+      borderWidth: 1,
+      borderDash: [3, 3],
+      pointRadius: 0,
+      fill: false,
+    }]);
+
+    cNW = new Chart($('c-nw'), {
+      type: 'line',
+      data: {
+        labels: allDates.map(function(d){
+          var dt = new Date(d);
+          return dt.toLocaleDateString('en-US',{month:'short',year:'2-digit'});
+        }),
+        datasets: datasets,
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: true,
+            labels: { color: t.tick, font: { size: 11 }, boxWidth: 20,
+              filter: function(item){ return item.text !== '$1M'; }
+            }
+          },
+          tooltip: { callbacks: { label: function(ctx){ return ctx.dataset.label + ': ' + fmt(ctx.parsed.y); } } }
+        },
+        scales: {
+          x: { ticks: { color: t.tick, font: { size: 10 }, maxTicksLimit: 12 }, grid: { display: false }, border: { display: false } },
+          y: { ticks: { color: t.tick, font: { size: 10 }, callback: function(v){ return '$'+Math.round(v/1000)+'k'; } }, grid: { color: t.grid }, border: { display: false } }
         }
       }
     });
-    $('nw-hist-card').style.display='block';
+    $('nw-hist-card').style.display = 'block';
+
+    // Milestone callout
+    var milestoneHtml = '';
+    if(projections.length > 0){
+      var contribNote = '$' + (projections[0].weeklyContrib * 52 / 1000).toFixed(0) + 'k/yr TTM avg contributions';
+      milestoneHtml = projections.map(function(p){
+        if(!p.milestone) return '';
+        var d = new Date(p.milestone);
+        var label = d.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+        return '<span style="margin-right:14px;font-size:12px"><span style="font-weight:600">'+p.label+':</span> '+label+'</span>';
+      }).join('');
+      if(milestoneHtml) milestoneHtml = '<div style="margin-top:8px;color:var(--text)">$1M milestone &mdash; '+milestoneHtml+'<span style="font-size:11px;color:var(--faint)">('+contribNote+')</span></div>';
+    }
+    $('nw-hist-note').innerHTML = history.length + ' weekly entries since ' + history[0].date.slice(0,7) + (milestoneHtml ? '' : '');
+    var milestoneEl = $('nw-milestone');
+    if(milestoneEl) milestoneEl.innerHTML = milestoneHtml;
+
   } else {
-    $('nw-hist-card').style.display='none';
+    $('nw-hist-card').style.display = 'none';
   }
-  var retKeys=['Fidelity 401K - Ben','Fidelity - 403b - Jenna','Fidelity Roth - Ben','Fidelity - Roth - Jenna','Fidelity Traditional IRA','Fidelity 401K - Jenna','Fidelity Individual'];
-  var othKeys=['Discover Savings','NY State 529 - Wesley','NY State 529 - Maxwell','Crypto','TreasuryDirect'];
-  var rows=function(keys){return keys.filter(function(k){return accts[k]!=null;}).map(function(k){return '<div class="arow"><span class="aname">'+esc(k.replace('Fidelity ','').replace('NY State ',''))+'</span><span class="aval">'+fmt(accts[k])+'</span></div>';}).join('');};
-  $('acct-grid').innerHTML=
-    '<div class="card"><div class="card-title">Retirement &amp; investment</div>'+(rows(retKeys)||'<div style="font-size:13px;color:var(--faint)">No data</div>')+'</div>'+
-    '<div class="card"><div class="card-title">Other accounts</div>'+(rows(othKeys)||'<div style="font-size:13px;color:var(--faint)">No data</div>')+'</div>';
+
+  // -- Net worth over time from snapshots --
+  if(snapshots.length > 1){
+    if(cNWSnap){ cNWSnap.destroy(); cNWSnap = null; }
+    var t2 = chartTheme();
+    cNWSnap = new Chart($('c-nw-snap'), {
+      type: 'line',
+      data: {
+        labels: snapshots.map(function(s){ var d=new Date(s.date); return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}); }),
+        datasets: [{
+          label: 'Net worth',
+          data: snapshots.map(function(s){ return s.netWorth; }),
+          borderColor: t2.green, borderWidth: 2, pointRadius: 2, fill: false, tension: 0.2
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: function(ctx){ return fmt(ctx.parsed.y); } } }
+        },
+        scales: {
+          x: { ticks: { color: t2.tick, font:{ size:10 }, maxTicksLimit:10 }, grid:{ display:false }, border:{display:false} },
+          y: { ticks: { color: t2.tick, font:{ size:10 }, callback: function(v){ return '$'+Math.round(v/1000)+'k'; }}, grid:{color:t2.grid}, border:{display:false} }
+        }
+      }
+    });
+    $('nw-snap-card').style.display = 'block';
+  } else {
+    $('nw-snap-card').style.display = 'none';
+  }
+
+  // -- Asset / liability breakdown --
+  function nwRow(label, val, cls){
+    return '<div class="nw-row"><span class="nw-row-label">'+esc(label)+'</span><span class="nw-row-val '+(cls||'')+'">'+fmt(val)+'</span></div>';
+  }
+  var assetHtml =
+    '<div class="nw-section" style="margin-bottom:14px">'+
+    '<div class="nw-section-title">Assets</div>'+
+    nwRow('Investments (incl. 529s)', investments)+
+    nwRow('Cash (Discover, ex-NHSC)', cash)+
+    nwRow('Physical assets (house + cars)', physicalAssets)+
+    '<div class="nw-total-row"><span>Total assets</span><span>'+fmt(totalAssets)+'</span></div>'+
+    '</div>';
+
+  var debtHtml =
+    '<div class="nw-section">'+
+    '<div class="nw-section-title">Liabilities</div>'+
+    nwRow('Mortgage', mortgage)+
+    nwRow('Student loans', studentLoans)+
+    (carLoans ? nwRow('Car loans', carLoans) : '<div class="nw-row"><span class="nw-row-label">Car loans</span><span class="nw-row-val" style="color:var(--faint)">not tracked</span></div>')+
+    '<div class="nw-total-row"><span>Total debt</span><span>'+fmt(totalDebt)+'</span></div>'+
+    '</div>';
+
+  // Account breakdown -- classify by whether key contains Fidelity/retirement keywords
+  var retKeywords = ['Fidelity', '401K', '403b', 'Roth', 'IRA'];
+  var othKeywords = ['529', 'Crypto', 'TreasuryDirect', 'SDGR', 'Discover'];
+  function displayName(k){ return k.replace(/ \(\d+\)$/, '').replace('Fidelity ','').replace('NY State ',''); }
+  function isRetirement(k){ return retKeywords.some(function(w){ return k.indexOf(w) >= 0; }); }
+  var retHtml = Object.keys(accounts)
+    .filter(function(k){ return isRetirement(k); })
+    .map(function(k){ return nwRow(displayName(k), accounts[k]); }).join('');
+  var othHtml = Object.keys(accounts)
+    .filter(function(k){ return !isRetirement(k); })
+    .map(function(k){ return nwRow(displayName(k), accounts[k]); }).join('');
+
+  var acctHtml =
+    '<div class="nw-section" style="margin-bottom:14px">'+
+    '<div class="nw-section-title">Retirement &amp; investment</div>'+
+    (retHtml || '<div style="font-size:13px;color:var(--faint)">No data</div>')+
+    (fivetwonine ? '<div class="nw-flag">529s: '+fmt(fivetwonine)+' (included in investments above)</div>' : '')+
+    '</div>'+
+    '<div class="nw-section">'+
+    '<div class="nw-section-title">Other accounts</div>'+
+    (othHtml || '<div style="font-size:13px;color:var(--faint)">No data</div>')+
+    '</div>';
+
+  $('nw-breakdown').innerHTML =
+    '<div>'+assetHtml+debtHtml+'</div>'+
+    '<div>'+acctHtml+'</div>';
+
+  // -- Snapshot action --
+  var lastSnap = snapshots.length ? snapshots[snapshots.length - 1] : null;
+  $('nw-snapshot-area').innerHTML = renderSnapshotForm(nw, lastSnap);
+}
+
+function renderSnapshotForm(nw, lastSnap){
+  if(isDemo) return '';
+  var defMortgage     = lastSnap ? Math.abs(lastSnap.mortgage||0)     : Math.abs(nw.mortgage||0);
+  var defStudentLoans = lastSnap ? Math.abs(lastSnap.studentLoans||0) : Math.abs(nw.studentLoans||0);
+  var defCarLoans     = lastSnap ? Math.abs(lastSnap.carLoans||0)     : 0;
+  var defFivetwonine  = lastSnap && lastSnap.fivetwonine ? lastSnap.fivetwonine : (nw.fivetwonine||'');
+  var today = localToday();
+  return '<div class="nw-snap-form">'+
+    '<div style="font-size:13px;font-weight:600;margin-bottom:12px">Record weekly snapshot</div>'+
+    '<div class="nw-snap-grid">'+
+    '<div class="nw-snap-field"><label>Date</label><input type="date" id="snap-date" value="'+today+'"></div>'+
+    '<div class="nw-snap-field"><label>Investments (auto)</label><input type="number" id="snap-investments" value="'+parseFloat(nw.investments||0).toFixed(2)+'" style="color:var(--muted)" readonly></div>'+
+    '<div class="nw-snap-field"><label>Cash (Discover, ex-NHSC)</label><input type="number" id="snap-cash" value="'+(nw.cash||0).toFixed(2)+'"></div>'+
+    '<div class="nw-snap-field"><label>Physical assets</label><input type="number" id="snap-physical" value="'+(nw.physicalAssets||0).toFixed(2)+'"></div>'+
+    '<div class="nw-snap-field"><label>Mortgage</label><input type="number" id="snap-mortgage" value="'+defMortgage.toFixed(2)+'"></div>'+
+    '<div class="nw-snap-field"><label>Student loans</label><input type="number" id="snap-student" value="'+defStudentLoans.toFixed(2)+'"></div>'+
+    '<div class="nw-snap-field"><label>Car loans</label><input type="number" id="snap-carloan" value="'+defCarLoans.toFixed(2)+'"></div>'+
+    '<div class="nw-snap-field"><label>529 balance (optional)</label><input type="number" id="snap-529" value="'+(defFivetwonine||'')+'"></div>'+
+    '</div>'+
+    '<button class="nw-snap-btn" data-action="submitSnapshot">Save snapshot</button>'+
+    (lastSnap ? '<div class="nw-flag">Last snapshot: '+lastSnap.date+' — net worth '+fmt(lastSnap.netWorth)+'</div>' : '<div class="nw-flag">No snapshots yet — this will be your first.</div>')+
+    '<div id="snap-status" style="margin-top:8px;font-size:12px;color:var(--green)"></div>'+
+    '</div>';
+}
+
+async function submitSnapshot(){
+  var payload = {
+    action:        'saveNetWorthSnapshot',
+    date:          $('snap-date').value,
+    investments:   $('snap-investments').value,
+    cash:          $('snap-cash').value,
+    physicalAssets:$('snap-physical').value,
+    mortgage:      $('snap-mortgage').value,
+    studentLoans:  $('snap-student').value,
+    carLoans:      $('snap-carloan').value,
+    fivetwonine:   $('snap-529').value,
+  };
+  $('snap-status').textContent = 'Saving…';
+  try {
+    var result = await apiPost(SCRIPT_URL, payload);
+    $('snap-status').textContent = 'Saved — net worth '+fmt(result.netWorth);
+    $('snap-status').style.color = 'var(--green)';
+    nwData = null; // clear cache so next load fetches fresh
+    var fresh = await apiFetch(SCRIPT_URL, 'networth');
+    if(fresh){ nwData = fresh; renderNetWorth(fresh); }
+  } catch(e){
+    $('snap-status').textContent = 'Error: '+e.message;
+    $('snap-status').style.color = 'var(--red)';
+  }
 }
 
 // ── LOANS TAB ────────────────────────────────────────────────
 var loanData = null;
+var loanPay   = 1562.50;     // editable monthly payment for the payoff projection (default = current student-loan payment)
+var loanStrat = 'avalanche'; // 'avalanche' (highest rate first) | 'snowball' (smallest balance first)
+var cLoanProj = null;        // Chart.js instance for the payoff projection; destroyed before each re-render
 
 async function loadLoans(){
   if(loanData){ renderLoans(loanData); return; }
@@ -1399,20 +2191,25 @@ async function loadLoans(){
 function renderLoans(data){
   var loans=data.loans||[];
   var maxRate=loans.reduce(function(m,l){return Math.max(m,l.rate||0);},0);
+  var activeN=loans.filter(function(l){return l.balance>0;}).length;
   $('loan-metrics').innerHTML=
     '<div class="metric"><div class="mlabel">Total balance</div><div class="mval neg">'+fmt(data.totalBalance)+'</div><div class="msub">outstanding</div></div>'+
     '<div class="metric"><div class="mlabel">Monthly interest</div><div class="mval neg">'+fmt(data.totalInterest,2)+'</div><div class="msub">accruing</div></div>'+
-    '<div class="metric"><div class="mlabel">Loans</div><div class="mval">'+loans.length+'</div><div class="msub">active</div></div>'+
+    '<div class="metric"><div class="mlabel">Loans</div><div class="mval">'+activeN+'</div><div class="msub">active</div></div>'+
     '<div class="metric"><div class="mlabel">Avg rate</div><div class="mval">'+(loans.length?((loans.reduce(function(s,l){return s+(l.rate||0);},0)/loans.length).toFixed(2))+'%':'—')+'</div><div class="msub">across all loans</div></div>';
+
   var html='<table class="loan-table"><thead><tr>'+
     '<th>#</th><th>Type</th><th class="r">Balance</th><th class="r">Rate</th><th class="r">Mo. Interest</th><th class="r">Payment</th>'+
     '</tr></thead><tbody>';
-  loans.forEach(function(l){
+  loans.forEach(function(l,idx){
     var rp=maxRate>0?(l.rate||0)/maxRate*100:0;
-    html+='<tr>'+
+    var zero=l.balance<=0?' loan-row-zero':'';
+    // Balance is the ONLY editable cell. data-row is the sheet edit target
+    // (Loans!D{row}); empty in demo, which routes the save to a local-only path.
+    html+='<tr class="'+zero.trim()+'">'+
       '<td style="font-family:var(--mono);font-size:11px;color:var(--faint)">'+esc(l.num||'')+'</td>'+
       '<td class="ltype">'+esc(l.type)+'</td>'+
-      '<td class="lbal r">'+fmt(l.balance,2)+'</td>'+
+      '<td class="lbal r"><input class="lbal-input" id="lbal-'+idx+'" data-idx="'+idx+'" data-row="'+(l.row||'')+'" value="'+(l.balance||0).toFixed(2)+'" inputmode="decimal" aria-label="Balance for loan '+esc(l.num||String(idx+1))+', editable"></td>'+
       '<td class="lrate r">'+(l.rate!=null?l.rate.toFixed(3)+'%':'—')+
         '<div class="loan-rate-bar"><div class="loan-rate-fill" style="width:'+rp.toFixed(1)+'%"></div></div></td>'+
       '<td class="lint r">'+(l.interest!=null?fmt(l.interest,2):'—')+'</td>'+
@@ -1425,23 +2222,605 @@ function renderLoans(data){
     '<td></td>'+
     '<td class="r" style="font-family:var(--mono);font-size:12px;color:var(--terra)">'+fmt(data.totalInterest,2)+'</td>'+
     '<td class="r" style="font-family:var(--mono);font-size:12px">'+fmt(data.totalPayment,2)+'</td>'+
-    '</tr></tbody></table>';
+    '</tr></tbody></table>'+
+    '<div class="loan-edit-hint">Tap a balance to edit — saves to the Loans sheet on Enter or when you click away. Interest &amp; totals come back recomputed from the sheet.</div>';
+
+  // Projection shell. Built once (the payment field must keep focus while you
+  // type) — renderLoanProjection() only rewrites the stats, warning, and chart.
+  html+=
+    '<div class="loan-proj">'+
+      '<div class="loan-proj-head">'+
+        '<div class="loan-proj-title">Payoff projection</div>'+
+        '<div class="loan-proj-controls">'+
+          '<label class="loan-proj-paylabel">Monthly payment'+
+            '<input class="loan-pay-input" id="loan-pay" inputmode="decimal" value="'+loanPay.toFixed(2)+'" aria-label="Monthly payment toward loans"></label>'+
+          '<div class="loan-strat" role="group" aria-label="Payoff strategy">'+
+            '<button type="button" class="loan-strat-btn'+(loanStrat==='avalanche'?' active':'')+'" data-strat="avalanche">Avalanche</button>'+
+            '<button type="button" class="loan-strat-btn'+(loanStrat==='snowball'?' active':'')+'" data-strat="snowball">Snowball</button>'+
+          '</div>'+
+        '</div>'+
+      '</div>'+
+      '<div id="loan-proj-warn-wrap"></div>'+
+      '<div class="loan-proj-stats" id="loan-proj-stats"></div>'+
+      '<div class="loan-proj-chart"><canvas id="c-loan-proj"></canvas></div>'+
+      '<div class="loan-proj-note">Forward simulation only — the dashboard never writes these numbers back to the sheet. '+
+        'Each month every loan accrues interest at its rate &divide; 12, then the whole monthly payment is applied in '+
+        '<b>avalanche</b> (highest rate first) or <b>snowball</b> (smallest balance first) order, rolling to the next loan as each clears. '+
+        'The two strategies are compared by the figures above (interest paid, months) rather than by overlapping lines, so nothing relies on color.</div>'+
+    '</div>';
+
   $('loan-content').innerHTML=html;
+
+  // Balance inputs: property listeners, not inline onclick (the delegated
+  // dispatcher only routes clicks; these are blur/keydown/focus).
+  loans.forEach(function(l,idx){
+    var inp=$('lbal-'+idx); if(!inp) return;
+    inp.onfocus=function(){ this.select(); };
+    inp.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); this.blur(); } };
+    inp.onblur=function(){ saveLoanBalance(this); };
+  });
+  // Payment field: reproject only (preserves focus/caret while typing).
+  var pay=$('loan-pay');
+  if(pay) pay.oninput=function(){ var v=parseFloat((this.value||'').replace(/[^0-9.]/g,'')); loanPay=(isFinite(v)&&v>=0)?v:0; renderLoanProjection(); };
+  // Strategy toggle: flip active class in place, reproject only.
+  Array.prototype.forEach.call(document.querySelectorAll('.loan-strat-btn'),function(btn){
+    btn.onclick=function(){
+      loanStrat=this.getAttribute('data-strat');
+      Array.prototype.forEach.call(document.querySelectorAll('.loan-strat-btn'),function(b){ b.classList.toggle('active', b===btn); });
+      renderLoanProjection();
+    };
+  });
+
+  renderLoanProjection();
+}
+
+// Save a single edited balance. Mirrors the server guardrails client-side,
+// updates optimistically, and on success takes the sheet's recomputed values
+// as the source of truth (interest/totals are sheet formulas — re-deriving
+// them locally would drift from the sheet's day-count convention).
+function saveLoanBalance(inp){
+  var idx=parseInt(inp.getAttribute('data-idx'),10);
+  var row=inp.getAttribute('data-row');
+  var loans=(loanData&&loanData.loans)||[];
+  var loan=loans[idx]; if(!loan) return;
+  var val=parseFloat((inp.value||'').replace(/[^0-9.]/g,''));
+
+  // Guardrail: finite, >= 0. Fail loudly; revert to last-known-good.
+  if(!isFinite(val) || val<0){
+    showBanner('Balance must be a number \u2265 0','err');
+    inp.value=(loan.balance||0).toFixed(2);
+    return;
+  }
+  val=Math.round(val*100)/100;
+  if(val===loan.balance){ inp.value=val.toFixed(2); return; } // no-op edit
+
+  // Demo or no sheet row → local-only update, never a phantom write.
+  if(isDemo || !row){
+    loan.balance=val;
+    loan.interest=(loan.rate!=null)?Math.round(val*loan.rate/1200*100)/100:loan.interest;
+    loanData.totalBalance =Math.round(loans.reduce(function(s,l){return s+(l.balance||0);},0)*100)/100;
+    loanData.totalInterest=Math.round(loans.reduce(function(s,l){return s+(l.interest||0);},0)*100)/100;
+    showBanner('Demo \u2014 balance updated locally (not saved)','ok');
+    renderLoans(loanData);
+    return;
+  }
+
+  inp.classList.add('saving');
+  var payload={action:'updateLoanBalance', row:parseInt(row,10), balance:val, idemKey:genIdemKey('loanbal')};
+  apiPost(SCRIPT_URL, payload).then(function(res){
+    loan.balance = (res.balance!=null) ? res.balance : val;
+    if(res.loanInterest!=null) loan.interest = res.loanInterest;
+    if(res.totalBalance!=null)  loanData.totalBalance  = res.totalBalance;
+    if(res.totalInterest!=null) loanData.totalInterest = res.totalInterest;
+    if(res.totalPayment!=null)  loanData.totalPayment  = res.totalPayment;
+    // Cross-tab staleness: this balance also feeds Net Worth and the Accounts
+    // tab. Server already invalidated its NW cache; drop the client caches too.
+    if(allData && res.totalBalance!=null) allData.loanTotal = res.totalBalance;
+    nwData = null;
+    showBanner('Balance updated','ok');
+    renderLoans(loanData); // full re-render; payment + strategy restored from module vars
+  }).catch(function(e){
+    inp.classList.remove('saving');
+    inp.value=(loan.balance||0).toFixed(2); // revert
+    showBanner('Save failed: '+(e.message||'network error')+' \u2014 refresh to check if it saved before retrying.','err');
+  });
+}
+
+// Forward amortization. monthlyPay is a single pool applied across loans in
+// strategy order AFTER interest accrues each month. Returns the total-balance
+// trajectory plus summary stats. Capped at 600 months so a sub-interest
+// payment can't loop forever — that case is surfaced via neverPays.
+function projectLoans(loans, monthlyPay, strategy){
+  var work=loans.filter(function(l){return l.balance>0;}).map(function(l){
+    return { bal:l.balance, mr:(l.rate!=null?l.rate:0)/1200 }; // monthly rate as a fraction
+  });
+  if(!work.length) return { paidOff:true, months:0, totalInterest:0, traj:[{m:0,bal:0}], neverPays:false };
+
+  work.sort(strategy==='snowball'
+    ? function(a,b){ return a.bal-b.bal; }   // smallest balance first
+    : function(a,b){ return b.mr-a.mr; });    // highest rate first (avalanche)
+
+  var startBal=work.reduce(function(s,w){return s+w.bal;},0);
+  var firstInterest=work.reduce(function(s,w){return s+w.bal*w.mr;},0);
+  var neverPays = monthlyPay <= firstInterest + 0.005; // can't even cover interest
+  var minNeeded = Math.ceil((firstInterest+1)*100)/100;
+
+  var traj=[{m:0,bal:Math.round(startBal*100)/100}];
+  var totalInterest=0, m=0, CAP=600;
+  while(m<CAP){
+    var total=work.reduce(function(s,w){return s+w.bal;},0);
+    if(total<=0.005) break;
+    for(var i=0;i<work.length;i++){ var intr=work[i].bal*work[i].mr; work[i].bal+=intr; totalInterest+=intr; }
+    var paySurplus=monthlyPay;
+    for(var j=0;j<work.length && paySurplus>0;j++){
+      if(work[j].bal<=0) continue;
+      var d=Math.min(paySurplus, work[j].bal);
+      work[j].bal-=d; paySurplus-=d;
+    }
+    m++;
+    var rem=work.reduce(function(s,w){return s+Math.max(0,w.bal);},0);
+    traj.push({m:m, bal:Math.round(rem*100)/100});
+    if(neverPays && m>=120) break; // 10yr of divergence is enough to show the shape
+  }
+  return { paidOff:false, months:m, totalInterest:Math.round(totalInterest*100)/100,
+           traj:traj, neverPays:neverPays, minNeeded:minNeeded, hitCap:(m>=CAP) };
+}
+
+function loanStat(label,val,sub){
+  return '<div class="loan-proj-stat"><div class="pl">'+label+'</div><div class="pv">'+val+'</div><div class="pd">'+(sub||'')+'</div></div>';
+}
+
+function renderLoanProjection(){
+  var statsEl=$('loan-proj-stats'), warnEl=$('loan-proj-warn-wrap');
+  if(!statsEl||!warnEl) return; // shell not mounted yet
+  var loans=(loanData&&loanData.loans)||[];
+  var active=loans.filter(function(l){return l.balance>0;});
+
+  if(cLoanProj){ cLoanProj.destroy(); cLoanProj=null; }
+
+  if(!active.length){
+    warnEl.innerHTML='';
+    statsEl.innerHTML=loanStat('Status','Paid off','No outstanding balance to project.');
+    return;
+  }
+
+  var sel=projectLoans(loans, loanPay, loanStrat);
+  var other=projectLoans(loans, loanPay, loanStrat==='avalanche'?'snowball':'avalanche');
+
+  // Failure mode #1: payment at/below interest → balance never amortizes.
+  if(sel.neverPays){
+    warnEl.innerHTML='<div class="loan-proj-warn">At '+fmt(loanPay,2)+'/mo you are at or below the '+fmt(loanData.totalInterest,2)+
+      ' monthly interest \u2014 the balance never falls. You need at least about '+fmt(sel.minNeeded,2)+'/mo to make progress.</div>';
+  } else {
+    warnEl.innerHTML='';
+  }
+
+  var stats='';
+  if(sel.neverPays){
+    stats+=loanStat('Min to amortize', fmt(sel.minNeeded,2), 'covers interest, then chips principal');
+    stats+=loanStat('Monthly interest', fmt(loanData.totalInterest,2), 'at current balances');
+    stats+=loanStat('Total balance', fmt(loanData.totalBalance,2), active.length+' active loan'+(active.length>1?'s':''));
+  } else {
+    var payoff=new Date(); payoff.setMonth(payoff.getMonth()+sel.months);
+    stats+=loanStat('Payoff date', payoff.toLocaleDateString('en-US',{month:'short',year:'numeric'}), sel.months+' months'+(sel.hitCap?' (capped)':''));
+    stats+=loanStat('Time to debt-free', (sel.months/12).toFixed(1)+' yrs', 'at '+fmt(loanPay,2)+'/mo');
+    stats+=loanStat('Total interest', fmt(sel.totalInterest,2), 'over the payoff');
+    if(!other.neverPays){
+      var saves=other.totalInterest - sel.totalInterest; // >0: selected saves interest
+      var sooner=other.months - sel.months;              // >0: selected is faster
+      var even=(Math.abs(saves)<1 && Math.abs(sooner)<1);
+      var pv=even?'\u2248 even':(saves>=0?fmt(saves,0)+' saved':fmt(-saves,0)+' more');
+      var pd=(Math.abs(sooner)<1)?'same payoff date':(sooner>0?sooner+' mo sooner':Math.abs(sooner)+' mo later');
+      stats+=loanStat((loanStrat==='avalanche'?'Avalanche':'Snowball')+' vs other', pv, even?'same either way':pd);
+    }
+  }
+  statsEl.innerHTML=stats;
+
+  // Chart: single series, check-ink blue (--c2), protan-safe (no hue encodes
+  // meaning). Category labels + maxTicksLimit, matching the Net Worth chart
+  // (Chart.js 4.4.1 here has no time-scale adapter loaded).
+  var c2=getComputedStyle(document.documentElement).getPropertyValue('--c2').trim()||'#3E6B8F';
+  var faint=getComputedStyle(document.documentElement).getPropertyValue('--faint').trim()||'#9aa';
+  var labels=sel.traj.map(function(p){ var d=new Date(); d.setMonth(d.getMonth()+p.m); return d.toLocaleDateString('en-US',{month:'short',year:'2-digit'}); });
+  var vals=sel.traj.map(function(p){ return p.bal; });
+  var cv=$('c-loan-proj'); if(!cv) return;
+  cLoanProj=new Chart(cv,{
+    type:'line',
+    data:{ labels:labels, datasets:[{
+      label:(loanStrat==='avalanche'?'Avalanche':'Snowball')+' balance',
+      data:vals, borderColor:c2, backgroundColor:'rgba(62,107,143,0.10)',
+      borderWidth:2, pointRadius:0, fill:true, tension:0.12
+    }]},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        tooltip:{ callbacks:{
+          title:function(it){ var d=new Date(); d.setMonth(d.getMonth()+it[0].dataIndex); return d.toLocaleDateString('en-US',{month:'short',year:'numeric'}); },
+          label:function(ctx){ return 'Balance '+fmt(ctx.parsed.y); } } }
+      },
+      scales:{
+        x:{ ticks:{color:faint, font:{size:10}, maxTicksLimit:10}, grid:{display:false}, border:{display:false} },
+        y:{ beginAtZero:true, ticks:{color:faint, font:{size:10}, callback:function(v){ return '$'+Math.round(v/1000)+'k'; }}, grid:{color:'rgba(0,0,0,0.05)'}, border:{display:false} }
+      }
+    }
+  });
+}
+
+// ============ MORTGAGE TAB ============
+var mortgageData = null;   // cached server payload (read-only schedule = source of truth)
+var mtgExtra     = 0;      // editable extra principal / month for the payoff scenario
+var cMtgHist     = null;   // balance + equity history/projection chart
+var cMtgProj     = null;   // payoff scenario chart
+
+function mdate(iso){
+  if(!iso) return '—';
+  var p=String(iso).split('-'); if(p.length<2) return String(iso);
+  var mo=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(p[1],10)-1]||'';
+  return mo+' '+p[0];
+}
+function monthsFromNow(iso){
+  if(!iso) return null;
+  var p=String(iso).split('-'); if(p.length<2) return null;
+  var now=new Date();
+  return (parseInt(p[0],10)-now.getFullYear())*12 + (parseInt(p[1],10)-(now.getMonth()+1));
+}
+function cssv(name, fallback){ var v=getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v||fallback; }
+
+// Single-balance amortization. Shared primitive (the car tab + the This Week
+// stacked chart will reuse it). monthlyPayment is principal+interest only;
+// escrow is a pass-through that never touches principal. 600-month cap so a
+// sub-interest payment can't loop forever -- that case is flagged via neverPays.
+function amortize(balance, annualRatePct, monthlyPayment){
+  var mr=(annualRatePct||0)/100/12, bal=balance, fi=bal*mr;
+  var neverPays = monthlyPayment <= fi + 0.005;
+  var minNeeded = Math.ceil((fi+1)*100)/100;
+  var traj=[{m:0,bal:Math.round(bal*100)/100}], ti=0, m=0, CAP=600;
+  while(m<CAP && bal>0.005){
+    var intr=bal*mr; bal+=intr; ti+=intr;
+    var pay=Math.min(monthlyPayment, bal); bal-=pay;
+    m++; traj.push({m:m, bal:Math.round(Math.max(0,bal)*100)/100});
+    if(neverPays && m>=120) break;
+  }
+  return {months:m, totalInterest:Math.round(ti*100)/100, traj:traj, neverPays:neverPays, minNeeded:minNeeded, hitCap:m>=CAP};
+}
+
+async function loadMortgage(){
+  if(isDemo){ mortgageData=demoMortgage(); renderMortgage(mortgageData); return; }
+  try{
+    var d = await apiFetch(SCRIPT_URL, 'mortgage');
+    if(d && d.error){
+      $('mtg-content').innerHTML='<div class="tbl-empty">Mortgage data unavailable: '+esc(d.error)+
+        '. If this reads &ldquo;Unknown action: mortgage&rdquo;, the deployed Apps Script is older than this file &mdash; redeploy (pencil-edit the existing deployment &rarr; New version; do not mint a new URL).</div>';
+      return;
+    }
+    mortgageData=d; renderMortgage(d);
+  }catch(e){
+    $('mtg-content').innerHTML='<div class="tbl-empty">Couldn&rsquo;t load mortgage data: '+esc(e.message||'network error')+'</div>';
+  }
+}
+
+function mtgStat(label,val,sub){
+  return '<div class="loan-proj-stat"><div class="pl">'+label+'</div><div class="pv">'+val+'</div><div class="pd">'+(sub||'')+'</div></div>';
+}
+
+function renderMortgage(d){
+  var pi=d.principalAndInterest||0, escAmt=d.escrow||0;
+
+  $('mtg-metrics').innerHTML=
+    '<div class="metric"><div class="mlabel">Balance</div><div class="mval">'+fmt(d.currentBalance)+'</div><div class="msub">as of '+mdate(d.currentDate)+'</div></div>'+
+    '<div class="metric"><div class="mlabel">Home value</div><div class="mval">'+fmt(d.valuation)+'</div><div class="msub">avg of estimates</div></div>'+
+    '<div class="metric"><div class="mlabel">Equity</div><div class="mval">'+fmt(d.equity)+'</div><div class="msub">'+(d.equityPct!=null?d.equityPct.toFixed(1)+'% of value':'')+'</div></div>'+
+    '<div class="metric"><div class="mlabel">Rate</div><div class="mval">'+(d.rate!=null?d.rate.toFixed(3)+'%':'—')+'</div><div class="msub">'+((d.refiRate!=null&&d.origRate!=null&&d.refiRate!==d.origRate)?'refi from '+d.origRate.toFixed(2)+'%':'fixed')+'</div></div>';
+
+  var html='';
+
+  // balance + equity history & projection
+  html+='<div class="loan-proj" style="margin-top:2px">'+
+    '<div class="loan-proj-head"><div class="loan-proj-title">Balance &amp; equity &mdash; history and projection</div></div>'+
+    '<div class="loan-proj-chart" style="height:280px"><canvas id="c-mtg-hist"></canvas></div>'+
+    '<div class="loan-proj-note">Solid = logged payments through '+mdate(d.currentDate)+'; dashed = the sheet&rsquo;s projection at the current '+(d.rate!=null?d.rate.toFixed(3)+'%':'')+' schedule (it models a refinance from '+(d.origRate!=null?d.origRate.toFixed(2):'?')+'% to '+(d.refiRate!=null?d.refiRate.toFixed(3):'?')+'%). Balance (blue, left axis) descends; equity&nbsp;% (vermillion, right axis) rises &mdash; distinguished by axis, direction, and label, not color alone.</div>'+
+    '</div>';
+
+  // payoff projection w/ editable extra principal
+  html+='<div class="loan-proj">'+
+    '<div class="loan-proj-head">'+
+      '<div class="loan-proj-title">Payoff projection</div>'+
+      '<div class="loan-proj-controls"><label class="loan-proj-paylabel">Extra principal / mo'+
+        '<input class="loan-pay-input" id="mtg-extra" inputmode="decimal" value="'+mtgExtra.toFixed(2)+'" aria-label="Extra principal payment per month"></label></div>'+
+    '</div>'+
+    '<div class="loan-edit-hint">Base payment '+fmt(d.payment,2)+'/mo = P&amp;I '+fmt(pi,2)+' + escrow '+fmt(escAmt,2)+' (taxes/insurance, non-amortizing). Baseline payoff is the sheet&rsquo;s own schedule; extra principal is applied forward from the current balance at '+(d.rate!=null?d.rate.toFixed(3)+'%':'the current rate')+'.</div>'+
+    '<div id="mtg-proj-warn-wrap"></div>'+
+    '<div class="loan-proj-stats" id="mtg-proj-stats"></div>'+
+    '<div class="loan-proj-chart"><canvas id="c-mtg-proj"></canvas></div>'+
+    '<div class="loan-proj-note">Baseline curve is the sheet&rsquo;s projected balance to payoff. The &ldquo;with extra&rdquo; curve is computed from the current balance and reaches zero sooner.</div>'+
+    '</div>';
+
+  // cost & savings summary
+  if(d.costProjected!=null){
+    html+='<div class="loan-proj-stats" style="margin-top:14px">'+
+      mtgStat('Projected total P&amp;I', fmt(d.costProjected,0), 'interest + principal, full loan life')+
+      (d.costInitial!=null?mtgStat('Original projection', fmt(d.costInitial,0), 'before any extra payments'):'')+
+      (d.costSavings!=null?mtgStat('Saved so far', fmt(d.costSavings,0), 'from extra principal already paid'):'')+
+      '</div>';
+  }
+
+  // reconciliation note (two balance sources)
+  if(d.physicalAssetsBalance!=null){
+    var delta=Math.round((d.currentBalance - d.physicalAssetsBalance)*100)/100;
+    if(Math.abs(delta)>=1){
+      html+='<div class="loan-proj-warn" style="margin-top:14px">Two balance sources disagree: this schedule shows '+fmt(d.currentBalance)+' ('+mdate(d.currentDate)+'), but net worth uses Physical&nbsp;Assets!B8 = '+fmt(d.physicalAssetsBalance)+' &mdash; a '+fmt(Math.abs(delta),2)+' gap. Point net worth at the schedule&rsquo;s current-month balance so there&rsquo;s one source of truth.</div>';
+    }
+  }
+
+  // payment history (logged actuals)
+  var paid=(d.ledger||[]).filter(function(r){return r.paid;});
+  if(paid.length){
+    html+='<div class="loan-proj-title" style="margin:20px 0 4px;font-size:16px">Payment history &mdash; '+paid.length+' logged payments</div>'+
+      '<div style="max-height:340px;overflow:auto;border:1px solid var(--border);border-radius:8px;margin-top:10px">'+
+      '<table class="loan-table" style="margin-top:0;border:none;box-shadow:none;border-radius:0"><thead><tr>'+
+      '<th>Date</th><th class="r">Payment</th><th class="r">Interest</th><th class="r">Escrow</th><th class="r">Principal</th><th class="r">Balance</th><th class="r">Equity</th>'+
+      '</tr></thead><tbody>';
+    paid.forEach(function(r){
+      html+='<tr>'+
+        '<td style="font-family:var(--mono);font-size:11px">'+mdate(r.date)+'</td>'+
+        '<td class="r" style="font-family:var(--mono);font-size:12px">'+fmt(r.payment,2)+'</td>'+
+        '<td class="lint r">'+fmt(r.interest,2)+'</td>'+
+        '<td class="r" style="font-family:var(--mono);font-size:12px;color:var(--muted)">'+fmt(r.escrow,2)+'</td>'+
+        '<td class="r" style="font-family:var(--mono);font-size:12px">'+fmt(r.principal,2)+'</td>'+
+        '<td class="lbal r">'+fmt(r.balance,2)+'</td>'+
+        '<td class="r" style="font-family:var(--mono);font-size:11px;color:var(--muted)">'+(r.equityPct!=null?r.equityPct.toFixed(1)+'%':'—')+'</td>'+
+        '</tr>';
+    });
+    html+='</tbody></table></div>';
+  }
+
+  $('mtg-content').innerHTML=html;
+
+  renderMtgHistory(d);
+
+  var ex=$('mtg-extra');
+  if(ex) ex.oninput=function(){ var x=parseFloat((this.value||'').replace(/[^0-9.]/g,'')); mtgExtra=(isFinite(x)&&x>=0)?x:0; renderMtgProjection(); };
+
+  renderMtgProjection();
+}
+
+function renderMtgHistory(d){
+  if(cMtgHist){ cMtgHist.destroy(); cMtgHist=null; }
+  var cv=$('c-mtg-hist'); if(!cv) return;
+  var L=d.ledger||[]; if(!L.length) return;
+  var c2=cssv('--c2','#3E6B8F'), terra=cssv('--terra','#C44E36'), faint=cssv('--faint','#9aa');
+  var split=(d.lastPaidIdx!=null && d.lastPaidIdx>=0)?d.lastPaidIdx:L.length-1;
+  var labels=L.map(function(r){ return mdate(r.date); });
+  var actualBal=L.map(function(r,i){ return i<=split ? r.balance : null; });
+  var projBal  =L.map(function(r,i){ return i>=split ? r.balance : null; }); // overlap at split connects the lines
+  var equity   =L.map(function(r){ return r.equityPct; });
+  cMtgHist=new Chart(cv,{
+    type:'line',
+    data:{labels:labels, datasets:[
+      {label:'Balance (logged)',    data:actualBal, borderColor:c2, borderWidth:2, pointRadius:0, fill:false, tension:0.1, yAxisID:'y'},
+      {label:'Balance (projected)', data:projBal,   borderColor:c2, borderDash:[5,4], borderWidth:2, pointRadius:0, fill:false, tension:0.1, yAxisID:'y'},
+      {label:'Equity %',            data:equity,    borderColor:terra, borderWidth:1.5, pointRadius:0, fill:false, tension:0.1, yAxisID:'y1'}
+    ]},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{mode:'index', intersect:false},
+      plugins:{
+        legend:{display:true, labels:{boxWidth:18, font:{size:11}, color:faint, usePointStyle:false}},
+        tooltip:{callbacks:{label:function(ctx){
+          if(ctx.parsed.y==null) return null;
+          if(ctx.dataset.yAxisID==='y1') return 'Equity '+ctx.parsed.y.toFixed(1)+'%';
+          return ctx.dataset.label.replace(/ \(.*/,'')+' '+fmt(ctx.parsed.y);
+        }}}
+      },
+      scales:{
+        x:{ticks:{color:faint, font:{size:10}, maxTicksLimit:9}, grid:{display:false}, border:{display:false}},
+        y:{position:'left', beginAtZero:true, ticks:{color:faint, font:{size:10}, callback:function(v){return '$'+Math.round(v/1000)+'k';}}, grid:{color:'rgba(0,0,0,0.05)'}, border:{display:false}},
+        y1:{position:'right', beginAtZero:true, max:100, ticks:{color:faint, font:{size:10}, callback:function(v){return v+'%';}}, grid:{display:false}, border:{display:false}}
+      }
+    }
+  });
+}
+
+function renderMtgProjection(){
+  var statsEl=$('mtg-proj-stats'), warnEl=$('mtg-proj-warn-wrap');
+  if(!statsEl||!warnEl||!mortgageData) return;
+  if(cMtgProj){ cMtgProj.destroy(); cMtgProj=null; }
+  var d=mortgageData;
+  var bal=d.currentBalance, rate=d.rate||0, pi=d.principalAndInterest||0;
+
+  // Authoritative baseline = the sheet's projected balances from the current
+  // month forward (everything after the last logged payment).
+  var L=d.ledger||[];
+  var startIdx=(d.lastPaidIdx!=null && d.lastPaidIdx>=0)?d.lastPaidIdx:0;
+  var fwd=L.slice(startIdx);                       // [current, ...projected]
+  var sheetBal=fwd.map(function(r){return r.balance;});
+  var baselineRemInterest=0;
+  for(var i=startIdx+1;i<L.length;i++){ if(typeof L[i].interest==='number') baselineRemInterest+=L[i].interest; }
+  baselineRemInterest=Math.round(baselineRemInterest*100)/100;
+
+  // amortize baseline vs scenario -> method-consistent savings delta
+  var baseA=amortize(bal, rate, pi);
+  var scenA=amortize(bal, rate, pi+mtgExtra);
+
+  if(baseA.neverPays){
+    warnEl.innerHTML='<div class="loan-proj-warn">Base P&amp;I '+fmt(pi,2)+'/mo is below the '+fmt(bal*rate/1200,2)+' monthly interest &mdash; check the rate/payment inputs.</div>';
+  } else warnEl.innerHTML='';
+
+  var payMonths=monthsFromNow(d.payoffDate);
+  var stats=mtgStat('Payoff date', mdate(d.payoffDate), (payMonths!=null?payMonths+' months ('+(payMonths/12).toFixed(1)+' yrs)':''));
+  stats+=mtgStat('Remaining interest', fmt(baselineRemInterest,0), 'now &rarr; payoff, baseline');
+  if(mtgExtra>0 && !baseA.neverPays){
+    var saveI=Math.round((baseA.totalInterest - scenA.totalInterest)*100)/100;
+    var saveM=baseA.months - scenA.months;
+    stats+=mtgStat('Extra '+fmt(mtgExtra,0)+'/mo', fmt(saveI,0)+' saved', (saveM>0?saveM+' months sooner':'—'));
+  } else {
+    stats+=mtgStat('Add extra principal', '—', 'type an amount to see payoff accelerate');
+  }
+  statsEl.innerHTML=stats;
+
+  // chart: sheet baseline curve + (when extra>0) computed accelerated curve
+  var c2=cssv('--c2','#3E6B8F'), gold=cssv('--gold','#B08D3E'), faint=cssv('--faint','#9aa');
+  var labels=fwd.map(function(r){ return mdate(r.date); });
+  var ds=[{label:'Baseline (sheet)', data:sheetBal, borderColor:c2, backgroundColor:'rgba(62,107,143,0.08)', borderWidth:2, pointRadius:0, fill:true, tension:0.12}];
+  if(mtgExtra>0){
+    var sv=fwd.map(function(r,i){ return (i<scenA.traj.length)?scenA.traj[i].bal:0; }); // pad past scenario payoff with 0
+    ds.push({label:'With extra', data:sv, borderColor:gold, borderDash:[6,4], borderWidth:2, pointRadius:0, fill:false, tension:0.12});
+  }
+  var cv=$('c-mtg-proj'); if(!cv) return;
+  cMtgProj=new Chart(cv,{
+    type:'line',
+    data:{labels:labels, datasets:ds},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{mode:'index', intersect:false},
+      plugins:{
+        legend:{display:(mtgExtra>0), labels:{boxWidth:18, font:{size:11}, color:faint}},
+        tooltip:{callbacks:{label:function(ctx){ return (ctx.parsed.y!=null)?ctx.dataset.label+' '+fmt(ctx.parsed.y):null; }}}
+      },
+      scales:{
+        x:{ticks:{color:faint, font:{size:10}, maxTicksLimit:9}, grid:{display:false}, border:{display:false}},
+        y:{beginAtZero:true, ticks:{color:faint, font:{size:10}, callback:function(v){return '$'+Math.round(v/1000)+'k';}}, grid:{color:'rgba(0,0,0,0.05)'}, border:{display:false}}
+      }
+    }
+  });
+}
+
+function demoMortgage(){
+  var rate=6.125, val=497936.67, bal0=321000, pi=1950.43, escAmt=1364.52, start=new Date(2023,3,1);
+  var a=amortize(bal0, rate, pi);
+  var ledger=a.traj.map(function(p,i){
+    var dt=new Date(start); dt.setMonth(dt.getMonth()+i);
+    var intr=Math.round(p.bal*rate/1200*100)/100;
+    return {date:dt.toISOString().slice(0,10), paid:(i<=37), balance:p.bal,
+      payment:(p.bal>0?Math.round((pi+escAmt)*100)/100:0), interest:intr, escrow:escAmt,
+      principal:Math.round((pi-intr)*100)/100, equityPct:Math.round((val-p.bal)/val*10000)/100};
+  });
+  var cur=ledger[37];
+  return {origRate:6.5, refiRate:6.125, rate:6.125, valuation:val, purchasePrice:370000,
+    currentBalance:cur.balance, currentDate:cur.date, equity:Math.round((val-cur.balance)*100)/100,
+    equityPct:cur.equityPct, payment:Math.round((pi+escAmt)*100)/100, principalAndInterest:pi, escrow:escAmt,
+    payoffDate:ledger[ledger.length-1].date, refiAtIdx:0, lastPaidIdx:37,
+    costInitial:773652.22, costProjected:759116.98, costSavings:14535.25,
+    physicalAssetsBalance:314854.57, ledger:ledger};
+}
+
+// ============ THIS WEEK: stacked total-debt-over-time chart ============
+// Lives on the landing tab, so it must not block first paint: renderThisWeek
+// fires loadDebtChart() fire-and-forget. It reuses loanData/mortgageData if a
+// tab already loaded them, otherwise fetches in the background (and warms those
+// caches for the other tabs). Fetch-and-render once; resets to 'idle' on error
+// so a later render can retry. Stacked bands are separated by hue (blue vs
+// amber -- a protan-safe pair), lightness, and legend label, never hue alone.
+var cTwDebt=null, debtChartState='idle';   // idle | loading | done
+
+async function loadDebtChart(){
+  if(debtChartState!=='idle') return;       // fetch + render exactly once
+  if(!$('tw-debt')) return;
+  debtChartState='loading';
+  try{
+    var ln, mg;
+    if(isDemo){ ln=loanData||demoLoans(); mg=mortgageData||demoMortgage(); }
+    else{
+      ln = loanData    || await apiFetch(SCRIPT_URL,'loans');
+      mg = mortgageData || await apiFetch(SCRIPT_URL,'mortgage');
+      if(ln && !ln.error) loanData    = loanData    || ln;   // warm caches for the tabs
+      if(mg && !mg.error) mortgageData = mortgageData || mg;
+    }
+    if((ln && ln.error) || (mg && mg.error)){ debtChartState='idle'; return; } // allow retry
+    renderDebtChart(ln, mg);
+    debtChartState='done';
+  }catch(e){
+    debtChartState='idle';
+    var sub=$('tw-debt-sub'); if(sub) sub.textContent='Debt projection unavailable right now.';
+  }
+}
+
+function renderDebtChart(ln, mg){
+  if(!$('tw-debt')) return;
+  // student-loan total balance per month, at the current payment/strategy
+  var loans=(ln && ln.loans) || [];
+  var stud=projectLoans(loans, loanPay, loanStrat);
+  var studBal=(stud.traj||[{m:0,bal:0}]).map(function(p){return p.bal;});
+  // mortgage forward balances from the current month (sheet projection = truth)
+  var L=(mg && mg.ledger) || [];
+  var si=(mg && mg.lastPaidIdx!=null && mg.lastPaidIdx>=0) ? mg.lastPaidIdx : 0;
+  var mtgBal=L.slice(si).map(function(r){return r.balance;});
+  if(!mtgBal.length && mg && mg.currentBalance!=null) mtgBal=[mg.currentBalance];
+
+  var N=Math.max(studBal.length, mtgBal.length, 1);
+  // pad to a common axis: plateau at the last value if a series never reached 0
+  // (avoids a false cliff to zero); pad with 0 once a series is actually paid off
+  function padTo(a, n){ var out=a.slice(); var last=out.length?out[out.length-1]:0; var f=(last<=0.005)?0:last; while(out.length<n) out.push(f); return out; }
+  var S=padTo(studBal, N), M=padTo(mtgBal, N);
+
+  // headline + caption
+  var studNow=studBal.length?studBal[0]:0, mtgNow=mtgBal.length?mtgBal[0]:0;
+  $('tw-debt-total').textContent=fmt(Math.round((studNow+mtgNow)*100)/100);
+  var studPayM=-1; for(var i=1;i<studBal.length;i++){ if(studBal[i]<=0.005){ studPayM=i; break; } }
+  var bits=['mortgage '+fmt(mtgNow)+' + student '+fmt(studNow)];
+  if(studPayM>0){ var pd=new Date(); pd.setMonth(pd.getMonth()+studPayM); bits.push('student clears ~'+pd.toLocaleDateString('en-US',{month:'short',year:'numeric'})); }
+  else if(stud.neverPays){ bits.push('student loans not amortizing at current payment'); }
+  if(mg && mg.payoffDate) bits.push('mortgage ~'+mdate(mg.payoffDate));
+  $('tw-debt-sub').innerHTML=esc(bits.join(' · '));
+
+  var labels=[]; for(var k=0;k<N;k++){ var d=new Date(); d.setMonth(d.getMonth()+k); labels.push(d.toLocaleDateString('en-US',{month:'short',year:'2-digit'})); }
+
+  if(cTwDebt){ cTwDebt.destroy(); cTwDebt=null; }
+  var cv=$('c-tw-debt'); if(!cv) return;
+  var c2=cssv('--c2','#3E6B8F'), gold=cssv('--gold','#B08D3E'), faint=cssv('--faint','#8C9A91');
+  // bottom band = mortgage (larger, longest-lived); top band = student (clears first)
+  cTwDebt=new Chart(cv,{
+    type:'line',
+    data:{labels:labels, datasets:[
+      {label:'Mortgage',      data:M, borderColor:c2,   backgroundColor:'rgba(62,107,143,0.55)', borderWidth:1.5, pointRadius:0, fill:true, tension:0.1},
+      {label:'Student loans', data:S, borderColor:gold, backgroundColor:'rgba(176,141,62,0.62)', borderWidth:1.5, pointRadius:0, fill:true, tension:0.1}
+    ]},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{mode:'index', intersect:false},
+      plugins:{
+        legend:{display:true, labels:{boxWidth:18, font:{size:11}, color:faint}},
+        tooltip:{callbacks:{
+          label:function(ctx){ return ctx.dataset.label+' '+fmt(ctx.parsed.y); },
+          footer:function(items){ var t=0; items.forEach(function(it){ t+=it.parsed.y||0; }); return 'Total '+fmt(Math.round(t*100)/100); }
+        }}
+      },
+      scales:{
+        x:{stacked:true, ticks:{color:faint, font:{size:10}, maxTicksLimit:10}, grid:{display:false}, border:{display:false}},
+        y:{stacked:true, beginAtZero:true, ticks:{color:faint, font:{size:10}, callback:function(v){return '$'+Math.round(v/1000)+'k';}}, grid:{color:'rgba(0,0,0,0.05)'}, border:{display:false}}
+      }
+    }
+  });
 }
 
 function demoLoans(){
-  return { totalBalance:148209.95, totalInterest:683.47, totalPayment:1562.50, loans:[
-    {num:'1',type:'Unsubsidized',  balance:14823.45,rate:6.840,interest:84.57, payment:0},
-    {num:'2',type:'Unsubsidized',  balance:18234.12,rate:6.840,interest:104.00,payment:0},
-    {num:'3',type:'Graduate PLUS', balance:22145.67,rate:7.540,interest:139.11,payment:0},
-    {num:'4',type:'Graduate PLUS', balance:19876.54,rate:7.540,interest:124.84,payment:0},
-    {num:'5',type:'Unsubsidized',  balance:16543.21,rate:5.280,interest:72.84, payment:0},
-    {num:'6',type:'Unsubsidized',  balance:12987.43,rate:5.280,interest:57.18, payment:0},
-    {num:'7',type:'Graduate PLUS', balance:23599.53,rate:7.540,interest:148.23,payment:1562.50},
+  // Totals match the summed rows so the demo is internally consistent and the
+  // projection lines up with the metric tiles (the live getLoanData sums the
+  // real sheet rows + reads D26).
+  return { totalBalance:128209.95, totalInterest:730.77, totalPayment:1562.50, loans:[
+    {row:4, num:'1',type:'Unsubsidized',  balance:14823.45,rate:6.840,interest:84.57, payment:0},
+    {row:5, num:'2',type:'Unsubsidized',  balance:18234.12,rate:6.840,interest:104.00,payment:0},
+    {row:6, num:'3',type:'Graduate PLUS', balance:22145.67,rate:7.540,interest:139.11,payment:0},
+    {row:7, num:'4',type:'Graduate PLUS', balance:19876.54,rate:7.540,interest:124.84,payment:0},
+    {row:8, num:'5',type:'Unsubsidized',  balance:16543.21,rate:5.280,interest:72.84, payment:0},
+    {row:9, num:'6',type:'Unsubsidized',  balance:12987.43,rate:5.280,interest:57.18, payment:0},
+    {row:10,num:'7',type:'Graduate PLUS', balance:23599.53,rate:7.540,interest:148.23,payment:1562.50},
   ]};
 }
 
 // Quick refresh — only fetches card balances (fast, no all-sheet scan)
+// Immediately update a card's balance in local allData and re-render tiles.
+// Called after any write that changes a card balance so UI updates without waiting for quickRefresh.
+
+async function refreshCardBalances(){
+  if(!SCRIPT_URL || isDemo) return;
+  try {
+    var fresh = await apiFetch(SCRIPT_URL, 'cardBalances');
+    if(fresh && allData){ allData.cardBalances = fresh; loadAccounts(); twCards(); twChecking(); }
+  } catch(e) {}
+}
+
 async function quickRefresh(){
   if(!SCRIPT_URL || isDemo) return;
   try {
@@ -1728,7 +3107,7 @@ function renderCardStrip(){
     var balance = info ? info.balance : null;
     if(balance === null) return;
     var cls = balance > 0.005 ? 'owed' : balance < -0.005 ? 'credit' : 'zero';
-    var label = Math.abs(balance) < 0.005 ? '$0' : fmt(Math.abs(balance), 2);
+    var label = Math.abs(balance) < 0.005 ? '$0' : fmt(balance, 2);
     // Short card name: first word only (AMEX, Citi, Prime, etc.)
     var short = def.sheetKey === 'Wells Fargo' ? 'WF' :
                 def.sheetKey === 'Prime Visa'  ? 'Prime' :
@@ -1879,7 +3258,7 @@ function viewRow(t,i){
   if(pending) tr.className='txn-pending-row';
   if(pending) tr.id='pending-row-'+i;
   var cc=t.cost==null?'':(t.cost<0?'cpos':(t.cost>4000?'cneg':''));
-  var pendBtn = '<span class="tag pending" onclick="toggleRowPending('+i+')" title="'+(pending?'Remove pending flag':'Flag for review')+'">'+(pending?'⏳':'○')+'</span>';
+  var pendBtn = '<span class="tag pending" data-action="toggleRowPending" data-args="'+i+'" title="'+(pending?'Remove pending flag':'Flag for review')+'">'+(pending?'⏳':'○')+'</span>';
 
   // Tags for this row
   var rowTags = getRowTags(curMonthTxn, t.rowIndex);
@@ -1903,9 +3282,9 @@ function viewRow(t,i){
     '<td class="c">'+(t.jenna?'<span class="tag p">Jenna</span>':'')+'</td>'+
     '<td class="c">'+pendBtn+'</td>'+
     '<td><div class="racts">'+
-    '<button class="rbtn" onclick="editRow('+i+')">edit</button>'+
-    '<button class="rbtn split-btn" onclick="showSplitModal('+i+')" title="Split transaction">split</button>'+
-    '<button class="rbtn del" onclick="delRow('+i+')">del</button>'+
+    '<button class="rbtn" data-action="editRow" data-args="'+i+'">edit</button>'+
+    '<button class="rbtn split-btn" data-action="showSplitModal" data-args="'+i+'" title="Split transaction">split</button>'+
+    '<button class="rbtn del" data-action="delRow" data-args="'+i+'">del</button>'+
     '</div></td>';
   return tr;
 }
@@ -1923,7 +3302,7 @@ function editRow(i){
     '<td></td>'+
     '<td><div style="display:flex;gap:4px">'+
     '<button class="rbtn save" id="sbtn-'+i+'">save</button>'+
-    '<button class="rbtn" onclick="cancelRow('+i+')">cancel</button>'+
+    '<button class="rbtn" data-action="cancelRow" data-args="'+i+'">cancel</button>'+
     '</div></td>';
   replaceTr('tbody',i,tr);
   $('sbtn-'+i).onclick=function(){ saveRow(i,false); };
@@ -1931,7 +3310,7 @@ function editRow(i){
 function cancelRow(i){ replaceTr('tbody',i,viewRow(txns[i],i)); wireTagArea(i); }
 async function saveRow(i,isNew){
   var updated={
-    date:($('d-'+i).value || new Date().toISOString().split('T')[0]),
+    date:($('d-'+i).value || localToday()),
     description:$('desc-'+i).value,
     cost:$('cost-'+i).value!==''?parseFloat($('cost-'+i).value):null,
     paymentMethod:$('pm-'+i).value,
@@ -1951,15 +3330,19 @@ async function saveRow(i,isNew){
       var action = (isNew || !hasRowIndex) ? 'addTransaction' : 'updateTransaction';
       var payload = Object.assign({action: action, month: curMonthTxn}, updated);
       if(!isNew && hasRowIndex) payload.rowIndex = txns[i].rowIndex;
+      if(action === 'addTransaction') payload.idemKey = genIdemKey('txn');
       var result = await apiPost(SCRIPT_URL, payload);
       if(action === 'addTransaction') updated.rowIndex = result.rowIndex;
       showBanner('Saved','ok');
       quickRefresh();
+      refreshCardBalances();
     } catch(e){
-      // Re-enable on failure so user can retry
       inputs.forEach(function(el){el.disabled=false;});
       if(saveBtn){saveBtn.textContent='save';}
-      showBanner('Save failed: '+e.message,'err');
+      var msg = e.message && e.message.indexOf('fetch') >= 0
+        ? 'Network error — refresh to check if saved before trying again.'
+        : 'Save failed: '+e.message;
+      showBanner(msg,'err');
       cancelRow(i);
       return;
     }
@@ -1969,21 +3352,29 @@ async function saveRow(i,isNew){
 }
 async function delRow(i){
   if(!confirm('Delete this entry?')) return;
-  if(!isDemo&&SCRIPT_URL){
-    showBanner('Deleting…','loading');
-    try {
-      await apiPost(SCRIPT_URL,{action:'deleteTransaction',month:curMonthTxn,rowIndex:txns[i].rowIndex});
-      showBanner('Deleted','ok');
-      txns.splice(i,1); renderTxnTable();
-      quickRefresh();
-      return; // prevent the splice below from running again
-    }
-    catch(e){ showBanner('Delete failed: '+e.message,'err'); return; }
-  }
+  var removed = txns[i];
+  // Optimistic: row disappears the moment deletion is confirmed
   txns.splice(i,1); renderTxnTable();
+  if(isDemo || !SCRIPT_URL || removed.rowIndex == null) return;
+  showBanner('Deleting…','loading');
+  try {
+    await apiPost(SCRIPT_URL,{action:'deleteTransaction',month:curMonthTxn,rowIndex:removed.rowIndex});
+    showBanner('Deleted','ok');
+    // The sheet shifted rows below the deleted one up by 1 -- keep every
+    // local rowIndex in sync so a follow-up edit/delete hits the right row
+    txns.forEach(function(t){
+      if(t.rowIndex != null && t.rowIndex > removed.rowIndex) t.rowIndex--;
+    });
+    quickRefresh();
+    refreshCardBalances();
+  } catch(e){
+    // Restore the row -- the server still has it
+    txns.splice(i,0,removed); renderTxnTable();
+    showBanner('Delete failed: '+e.message,'err');
+  }
 }
 function addRow(){
-  var blank={rowIndex:null,date:new Date().toISOString().split('T')[0],description:'',cost:null,paymentMethod:'',discretionary:false,ben:false,jenna:false};
+  var blank={rowIndex:null,date:localToday(),description:'',cost:null,paymentMethod:'',discretionary:false,ben:false,jenna:false};
   txns.unshift(blank); renderTxnTable();
   var t=txns[0]; var tr=document.createElement('tr'); tr.dataset.i=0; tr.className='editing';
   tr.innerHTML=
@@ -1997,8 +3388,8 @@ function addRow(){
     '<td></td>'+
     '<td><div style="display:flex;gap:4px">'+
     '<button class="rbtn save" id="sbtn-0">save</button>'+
-    '<button class="rbtn split-btn" onclick="splitFromAddRow()" title="Split this entry">split</button>'+
-    '<button class="rbtn" onclick="cancelAdd()">cancel</button>'+
+    '<button class="rbtn split-btn" data-action="splitFromAddRow" title="Split this entry">split</button>'+
+    '<button class="rbtn" data-action="cancelAdd">cancel</button>'+
     '</div></td>';
   replaceTr('tbody',0,tr);
   $('sbtn-0').onclick=function(){ saveRow(0,true); };
@@ -2006,14 +3397,20 @@ function addRow(){
 }
 
 // Sync the live add-row inputs into txns[0] then open the split modal
-function splitFromAddRow(){
+var _splitAddInFlight = false;
+
+async function splitFromAddRow(){
+  if(_splitAddInFlight) return; // ignore extra clicks while the save runs
+  // Already auto-saved by a previous split click (e.g. modal was cancelled)?
+  // Reuse that row instead of saving the full amount again.
+  if(txns[0] && txns[0].rowIndex != null){ showSplitModal(0); return; }
   var desc  = $('desc-0') ? $('desc-0').value.trim() : '';
   var cost  = $('cost-0') ? parseFloat($('cost-0').value) : null;
   var pm    = $('pm-0')   ? $('pm-0').value   : '';
   var disc  = $('disc-0') ? $('disc-0').checked : false;
   var ben   = $('ben-0')  ? $('ben-0').checked  : false;
   var jenna = $('jenna-0')? $('jenna-0').checked : false;
-  var date  = $('d-0')    ? $('d-0').value       : new Date().toISOString().split('T')[0];
+  var date  = $('d-0')    ? $('d-0').value       : localToday();
 
   if(!desc && (cost === null || isNaN(cost))){
     $('desc-0').focus();
@@ -2026,12 +3423,31 @@ function splitFromAddRow(){
     return;
   }
 
-  // Write live values into txns[0] so showSplitModal reads them correctly
-  txns[0] = { rowIndex:null, date:date, description:desc, cost:cost,
-               paymentMethod:pm, discretionary:disc, ben:ben, jenna:jenna };
-
-  // After the split is saved, we want to remove the add-row (txns[0] will be replaced by split lines)
-  showSplitModal(0);
+  // Save the row first to get a real rowIndex, then open split modal.
+  // Guard + disabled controls prevent double-clicks creating duplicates.
+  _splitAddInFlight = true;
+  var addRow = document.querySelector('#tbody tr[data-i="0"]');
+  var controls = addRow ? addRow.querySelectorAll('input,button,select') : [];
+  controls.forEach(function(el){ el.disabled = true; });
+  showBanner('Saving before split…','loading');
+  try {
+    var result = await apiPost(SCRIPT_URL, {
+      action: 'addTransaction', idemKey: genIdemKey('txn'), month: curMonthTxn,
+      date: date, description: desc, cost: cost,
+      paymentMethod: pm, discretionary: disc, ben: ben, jenna: jenna,
+    });
+    if(result.error){ showBanner('Save failed: '+result.error, 'err'); return; }
+    var rowIdx = result.rowIndex;
+    txns[0] = { rowIndex: rowIdx, date: date, description: desc, cost: cost,
+                paymentMethod: pm, discretionary: disc, ben: ben, jenna: jenna };
+    showBanner('Saved. Opening split…','ok');
+    showSplitModal(0);
+  } catch(e) {
+    showBanner('Save failed: '+e.message,'err');
+  } finally {
+    _splitAddInFlight = false;
+    controls.forEach(function(el){ el.disabled = false; });
+  }
 }
 
 function cancelAdd(){ txns.shift(); renderTxnTable(); }
@@ -2165,23 +3581,32 @@ async function saveVarEntry(category){
 
   try {
     if(!isDemo && SCRIPT_URL){
-      await apiPost(SCRIPT_URL, {
+      var varPayload = {
         action:   'addVariableEntry',
+        idemKey:  genIdemKey('var'),
         month:    curMonthFx,
         category: category,
         date:     dateVal,
         amount:   amtVal,
         store:    storeVal,
         payment:  payVal,
-      });
+      };
+      await apiPost(SCRIPT_URL, varPayload);
     }
-    // Optimistically update local varEntries
+    // Optimistically update local varEntries and render immediately
     if(!varEntries) varEntries = { groceries:{ entries:[] }, gas:{ entries:[] } };
     var entry = { date:dateVal, cost:amtVal, payment:payVal };
     if(isGroc){ entry.store=storeVal; varEntries.groceries.entries.push(entry); }
     else { varEntries.gas.entries.push(entry); }
+    renderFixedTab();
 
     showBanner((isGroc?'Grocery':'Gas')+' entry of '+fmt(amtVal,2)+' added to '+curMonthFx, 'ok');
+    refreshCardBalances();
+    // Reconcile with server to get fresh rowIndices (insert shifts subsequent rows)
+    if(!isDemo && SCRIPT_URL && curMonthFx){
+      var fresh = await apiFetch(SCRIPT_URL, 'variableEntries', {month: curMonthFx});
+      if(fresh && !fresh.error) varEntries = fresh;
+    }
     renderFixedTab();
   } catch(e){
     showBanner('Save failed: '+e.message,'err');
@@ -2205,8 +3630,8 @@ function editVarEntry(prefix, idx){
     '<td><input class="ei" type="number" id="vedit-amt-'+idx+'" step="0.01" value="'+(e.cost||'')+'"></td>'+
     '<td><select class="ei" id="vedit-pay-'+idx+'"><option value="">—</option>'+pmOpts+'</select></td>'+
     '<td style="white-space:nowrap">'+
-    '<button class="rbtn save-btn" onclick="saveVarEdit(\''+prefix+'\','+idx+','+e.rowIndex+')">✓</button>'+
-    '<button class="rbtn cancel-btn" onclick="cancelVarEdit()">✕</button>'+
+    '<button class="rbtn save-btn" data-action="saveVarEdit" data-args="'+prefix+','+idx+','+e.rowIndex+'">✓</button>'+
+    '<button class="rbtn cancel-btn" data-action="cancelVarEdit">✕</button>'+
     '</td>';
   row.className = 'editing';
 }
@@ -2273,6 +3698,14 @@ async function delVarEntry(prefix, idx, rowIndex){
       varEntries[cat].entries.splice(idx, 1);
     }
     showBanner('Entry deleted','ok');
+    // Reverse the charge immediately
+    var deletedEntry = varEntries && varEntries[cat] ? varEntries[cat].entries[idx] : null;
+    if(deletedEntry && deletedEntry.payment && deletedEntry.cost)
+    // Reload from server to get fresh rowIndices (delete shifts subsequent rows)
+    if(!isDemo && SCRIPT_URL && curMonthFx){
+      var fresh = await apiFetch(SCRIPT_URL, 'variableEntries', {month: curMonthFx});
+      if(fresh && !fresh.error) varEntries = fresh;
+    }
     renderFixedTab();
   } catch(e){
     showBanner('Delete failed: '+e.message,'err');
@@ -2335,6 +3768,7 @@ function renderFixedTab(){
   // ── VARIABLE SECTION (top) ──────────────────────────────────
   html+='<div class="fx-section" style="margin-bottom:16px">';
   html+='<div style="font-family:var(--mono);font-size:10px;font-weight:500;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Recurring variable expenses</div>';
+  html+='<div class="var-grid">';
 
   // Groceries
   var groc = varEntries && varEntries.groceries;
@@ -2345,17 +3779,19 @@ function renderFixedTab(){
     '<span class="var-section-title">Groceries</span>'+
     '<span style="display:flex;align-items:center;gap:12px">'+
     '<span class="var-section-total">'+(grocTotal!=null?fmt(grocTotal,2):'—')+'</span>'+
-    (SCRIPT_URL&&!isDemo?'<button class="var-add-btn" onclick="toggleVarForm(\'groc\')">+ Add</button>':'')+
+    (SCRIPT_URL&&!isDemo?'<button class="var-add-btn" data-action="toggleVarForm" data-args="groc">+ Add</button>':'')+
     '</span></div>'+
     // inline add form
     '<div class="var-add-form" id="var-form-groc">'+
-    '<div><label>Date</label><input type="date" id="groc-date" value="'+new Date().toISOString().split('T')[0]+'"></div>'+
+    '<div><label>Date</label><input type="date" id="groc-date" value="'+localToday()+'"></div>'+
     '<div><label>Store</label><input type="text" id="groc-store" placeholder="e.g. Wegmans"></div>'+
     '<div><label>Amount</label><input type="number" id="groc-amount" step="0.01" placeholder="0.00"></div>'+
-    '<div><label>Payment</label><input type="text" id="groc-payment" placeholder="e.g. AMEX"></div>'+
+    '<div><label>Payment</label><select id="groc-payment">'+
+    PM_OPTIONS.filter(function(p){return p;}).map(function(p){return '<option value="'+esc(p)+'">'+esc(p)+'</option>';}).join('')+
+    '</select></div>'+
     '<div style="display:flex;gap:6px;align-self:flex-end">'+
-    '<button class="var-save-btn" id="groc-save-btn" onclick="saveVarEntry(\'groceries\')">Save</button>'+
-    '<button class="var-cancel-btn" onclick="toggleVarForm(\'groc\')">Cancel</button>'+
+    '<button class="var-save-btn" id="groc-save-btn" data-action="saveVarEntry" data-args="groceries">Save</button>'+
+    '<button class="var-cancel-btn" data-action="toggleVarForm" data-args="groc">Cancel</button>'+
     '</div></div>';
 
   if(grocEntries.length){
@@ -2372,8 +3808,8 @@ function renderFixedTab(){
         '<td class="vpay">'+esc(e.payment||'')+'</td>'+
         (SCRIPT_URL&&!isDemo?
           '<td style="white-space:nowrap">'+
-          '<button class="rbtn" onclick="editVarEntry(\'groc\','+idx+')" title="Edit">✎</button>'+
-          '<button class="rbtn del-btn" onclick="delVarEntry(\'groc\','+idx+','+ri+')" title="Delete">✕</button>'+
+          '<button class="rbtn" data-action="editVarEntry" data-args="groc,'+idx+'" title="Edit">✎</button>'+
+          '<button class="rbtn del-btn" data-action="delVarEntry" data-args="groc,'+idx+','+ri+'" title="Delete">✕</button>'+
           '</td>':'')+'</tr>';
     });
     html+='</tbody></table>';
@@ -2391,15 +3827,17 @@ function renderFixedTab(){
     '<span class="var-section-title">Gas</span>'+
     '<span style="display:flex;align-items:center;gap:12px">'+
     '<span class="var-section-total">'+(gasTotal!=null?fmt(gasTotal,2):'—')+'</span>'+
-    (SCRIPT_URL&&!isDemo?'<button class="var-add-btn" onclick="toggleVarForm(\'gas\')">+ Add</button>':'')+
+    (SCRIPT_URL&&!isDemo?'<button class="var-add-btn" data-action="toggleVarForm" data-args="gas">+ Add</button>':'')+
     '</span></div>'+
     '<div class="var-add-form" id="var-form-gas">'+
-    '<div><label>Date</label><input type="date" id="gas-date" value="'+new Date().toISOString().split('T')[0]+'"></div>'+
+    '<div><label>Date</label><input type="date" id="gas-date" value="'+localToday()+'"></div>'+
     '<div><label>Amount</label><input type="number" id="gas-amount" step="0.01" placeholder="0.00"></div>'+
-    '<div><label>Payment</label><input type="text" id="gas-payment" placeholder="e.g. Costco"></div>'+
+    '<div><label>Payment</label><select id="gas-payment">'+
+    PM_OPTIONS.filter(function(p){return p;}).map(function(p){return '<option value="'+esc(p)+'">'+esc(p)+'</option>';}).join('')+
+    '</select></div>'+
     '<div style="display:flex;gap:6px;align-self:flex-end">'+
-    '<button class="var-save-btn" id="gas-save-btn" onclick="saveVarEntry(\'gas\')">Save</button>'+
-    '<button class="var-cancel-btn" onclick="toggleVarForm(\'gas\')">Cancel</button>'+
+    '<button class="var-save-btn" id="gas-save-btn" data-action="saveVarEntry" data-args="gas">Save</button>'+
+    '<button class="var-cancel-btn" data-action="toggleVarForm" data-args="gas">Cancel</button>'+
     '</div></div>';
 
   if(gasEntries.length){
@@ -2415,8 +3853,8 @@ function renderFixedTab(){
         '<td class="vpay">'+esc(e.payment||'')+'</td>'+
         (SCRIPT_URL&&!isDemo?
           '<td style="white-space:nowrap">'+
-          '<button class="rbtn" onclick="editVarEntry(\'gas\','+idx+')" title="Edit">✎</button>'+
-          '<button class="rbtn del-btn" onclick="delVarEntry(\'gas\','+idx+','+ri+')" title="Delete">✕</button>'+
+          '<button class="rbtn" data-action="editVarEntry" data-args="gas,'+idx+'" title="Edit">✎</button>'+
+          '<button class="rbtn del-btn" data-action="delVarEntry" data-args="gas,'+idx+','+ri+'" title="Delete">✕</button>'+
           '</td>':'')+'</tr>';
     });
     html+='</tbody></table>';
@@ -2438,6 +3876,7 @@ function renderFixedTab(){
     });
     html+='</tbody></table></div>';
   }
+  html+='</div>'; // end var-grid
   html+='</div>'; // end fx-section variable
 
   // ── FIXED SECTION (below) ───────────────────────────────────
@@ -2450,18 +3889,27 @@ function renderFixedTab(){
     '<div class="fx-progress-bar"><div class="fx-progress-fill" style="width:'+dollarPct+'%"></div></div>'+
     '</div>'+
     '<div class="fx-section">'+
-    '<div class="fx-section-head" style="margin-bottom:8px">Recurring fixed expenses</div>'+
+    '<div class="fx-section-head" style="margin-bottom:8px">Fixed expenses</div>'+
     '<table class="fx-table" id="fx-table"><tbody id="fx-tbody">';
+
+  // Determine current month number for quarterly check
+  var curMonthNum = curMonthFx ? (new Date(curMonthFx + ' 1').getMonth() + 1) : 0;
 
   fixed.forEach(function(f,i){
     var isPaid=f.paid, costClass=f.cost<0?'negative':'', rowClass=isPaid?'fx-paid':'';
+    // Check if this is a quarterly expense not due this month
+    var qEntry = QUARTERLY_EXPENSES.filter(function(q){ return q.name === f.name; })[0];
+    var notDue  = qEntry && curMonthNum && qEntry.months.indexOf(curMonthNum) < 0;
+    var checkCell = notDue
+      ? '<td class="fx-check"><div class="fx-check-box" style="opacity:.2;cursor:default" title="Not due this month"></div></td>'
+      : '<td class="fx-check"><div class="fx-check-box '+(isPaid?'checked':'')+'" data-action="togglePaid" data-args="'+i+'" title="'+(isPaid?'Mark unpaid':'Mark paid')+'"></div></td>';
     html+=
       '<tr class="'+rowClass+'" id="fxr-'+i+'">'+
-      '<td class="fx-check"><div class="fx-check-box '+(isPaid?'checked':'')+'" onclick="togglePaid('+i+')" title="'+(isPaid?'Mark unpaid':'Mark paid')+'"></div></td>'+
-      '<td class="fx-name'+(isPaid?' paid-name':'')+'" id="fxname-'+i+'" title="Click to edit" onclick="editFixedName('+i+',this)" style="cursor:text">'+esc(f.name)+'</td>'+
+      checkCell+
+      '<td class="fx-name'+(isPaid?' paid-name':'')+'" id="fxname-'+i+'" title="Click to edit name" data-action="editFixedName" data-args="'+i+'" style="cursor:text">'+esc(f.name)+'<span class="edit-hint">✎</span></td>'+
       '<td class="fx-src">'+esc(f.source)+'</td>'+
-      '<td class="fx-cost '+costClass+'" id="fxcost-'+i+'" title="Click to edit" onclick="editFixedCost('+i+',this)">'+fmt(f.cost,2)+'</td>'+
-      '<td class="fx-date'+(isPaid?'':' unpaid')+'" id="fxdate-'+i+'">'+(isPaid&&f.paidDate?f.paidDate:'unpaid')+'</td>'+
+      '<td class="fx-cost '+costClass+'" id="fxcost-'+i+'" title="Click to edit amount" data-action="editFixedCost" data-args="'+i+'" style="cursor:text">'+fmt(f.cost,2)+'<span class="edit-hint">✎</span></td>'+
+      '<td class="fx-date'+(isPaid?'':notDue?' unpaid" style="color:var(--faint)"':' unpaid')+'" id="fxdate-'+i+'">'+(isPaid&&f.paidDate?f.paidDate:notDue?'n/a':'unpaid')+'</td>'+
       '</tr>';
   });
 
@@ -2472,7 +3920,7 @@ function renderFixedTab(){
 async function togglePaid(i){
   var f=fixedData.fixed[i];
   var nowPaid=!f.paid;
-  var paidDate=nowPaid?new Date().toISOString().split('T')[0]:'';
+  var paidDate=nowPaid?localToday():'';
 
   // Optimistic UI update
   fixedData.fixed[i]=Object.assign({},f,{paid:nowPaid,paidDate:paidDate});
@@ -2482,6 +3930,7 @@ async function togglePaid(i){
   if(!isDemo&&SCRIPT_URL){
     try {
       await apiPost(SCRIPT_URL,{action:'setFixedPaid',month:curMonthFx,rowIndex:f.rowIndex,paid:nowPaid,paidDate:paidDate});
+      refreshCardBalances();
     } catch(e){
       // Revert on failure
       fixedData.fixed[i]=f; updateFxRow(i); updateFxProgress();
@@ -2670,8 +4119,8 @@ function addSplitRow(desc, price, taxed, pm, disc, ben, jenna){
     '<input type="checkbox" class="split-ck" data-field="disc"  '+(disc? 'checked':'')+' title="Discretionary">'+
     '<input type="checkbox" class="split-ck" data-field="ben"   '+(ben?  'checked':'')+' title="Ben">'+
     '<input type="checkbox" class="split-ck" data-field="jenna" '+(jenna?'checked':'')+' title="Jenna">'+
-    '<button class="ia-sum-btn" onclick="toggleItemAdder('+id+')" title="Item calculator">∑</button>'+
-    '<button class="split-del" onclick="removeSplitRow('+id+')" title="Remove">×</button>';
+    '<button class="ia-sum-btn" data-action="toggleItemAdder" data-args="'+id+'" title="Item calculator">∑</button>'+
+    '<button class="split-del" data-action="removeSplitRow" data-args="'+id+'" title="Remove">×</button>';
 
   // Item adder panel — use distinct class so getSplitRows doesn't pick it up
   var adder = document.createElement('div');
@@ -2685,8 +4134,8 @@ function addSplitRow(desc, price, taxed, pm, disc, ben, jenna){
     '</div>'+
     '<div class="item-adder-rows" id="ia-rows-'+id+'"></div>'+
     '<div class="item-adder-foot">'+
-    '<button class="ia-add-item-btn" onclick="addItem('+id+')">+ item</button>'+
-    '<button class="ia-apply-btn" onclick="applyItems('+id+')">Apply →</button>'+
+    '<button class="ia-add-item-btn" data-action="addItem" data-args="'+id+'">+ item</button>'+
+    '<button class="ia-apply-btn" data-action="applyItems" data-args="'+id+'">Apply →</button>'+
     '<span class="ia-total" id="ia-total-'+id+'">$0.00</span>'+
     '</div></div>';
 
@@ -2722,7 +4171,7 @@ function addItem(sid){
     '<input type="number" placeholder="0.00" step="0.01" id="ia-price-'+iid+'"'+
       ' oninput="recalcItems('+sid+')" onchange="recalcItems('+sid+')">'+
     '<label class="ia-tax"><input type="checkbox" id="ia-tax-'+iid+'" onchange="recalcItems('+sid+')"> tax</label>'+
-    '<button class="ia-del" onclick="removeItem('+sid+','+iid+')" title="Remove">×</button>';
+    '<button class="ia-del" data-action="removeItem" data-args="'+sid+','+iid+'" title="Remove">×</button>';
   rows.appendChild(div);
   // Focus the price field of the new item
   setTimeout(function(){ var p=$('ia-price-'+iid); if(p){p.focus();p.select();} }, 30);
@@ -2931,9 +4380,10 @@ async function submitSplit(){
         var vl = varLines[i];
         var varPayload = {
           action:   'addVariableEntry',
+          idemKey:  genIdemKey('var'),
           month:    curMonthTxn,
           category: vl.varRoute,
-          date:     t.date || new Date().toISOString().split('T')[0],
+          date:     t.date || localToday(),
           amount:   Math.abs(vl.cost),   // ensure positive
           payment:  vl.paymentMethod || '',
           store:    vl.varRoute === 'groceries' ? (vl.description || '') : undefined,
@@ -2942,7 +4392,6 @@ async function submitSplit(){
         if(varResult && varResult.error) {
           throw new Error('Variable tracker error: ' + varResult.error + ' (month: ' + curMonthTxn + ', category: ' + vl.varRoute + ')');
         }
-        console.log('Variable entry saved:', varResult);
       }
 
       // 2. Handle transaction lines
@@ -2950,7 +4399,7 @@ async function submitSplit(){
         if(txnLines.length === 0){
           // All lines routed to variable — just delete the original transaction
           await apiPost(SCRIPT_URL, { action:'deleteTransaction', month:curMonthTxn, rowIndex:t.rowIndex });
-        } else if(txnLines.length === 1 && varLines.length === 0){
+	} else if(txnLines.length === 1){
           // No split needed — update the single txn line in place
           await apiPost(SCRIPT_URL, {
             action: 'updateTransaction', month: curMonthTxn, rowIndex: t.rowIndex,
@@ -2969,7 +4418,7 @@ async function submitSplit(){
         // Unsaved new row — add each txn line individually
         for(var i = 0; i < txnLines.length; i++){
           await apiPost(SCRIPT_URL, {
-            action: 'addTransaction', month: curMonthTxn, date: t.date,
+            action: 'addTransaction', idemKey: genIdemKey('txn'), month: curMonthTxn, date: t.date,
             description: txnLines[i].description, cost: txnLines[i].cost,
             paymentMethod: txnLines[i].paymentMethod,
             discretionary: txnLines[i].discretionary, ben: txnLines[i].ben, jenna: txnLines[i].jenna,
@@ -3019,7 +4468,7 @@ function showChkModal(type){
   $('chk-desc').value    = '';
   $('chk-amount').value  = '';
   $('chk-amount').min    = isDeposit ? '0.01' : undefined;
-  $('chk-date').value    = new Date().toISOString().split('T')[0];
+  $('chk-date').value    = localToday();
   $('chk-submit-btn').disabled     = false;
   $('chk-submit-btn').textContent  = 'Record entry';
 
@@ -3103,7 +4552,7 @@ function showPayModal(sheetKey, displayName, currentBalance){
   $('pay-amount').value = currentBalance > 0 ? currentBalance.toFixed(2) : '';
 
   // Default date = today
-  $('pay-date').value = new Date().toISOString().split('T')[0];
+  $('pay-date').value = localToday();
 
   // Populate month selector with available months, default to most recent
   var sel = $('pay-month');
@@ -3125,15 +4574,20 @@ function hidePayModal(){
   payCardKey = '';
 }
 
+
+
 async function voidPayment(sheetKey, displayName, amount, dateStr){
   if(!confirm('Void last payment of '+fmt(amount,2)+' for '+displayName+'?\n\nThis will delete the most recent row in Card Payments and add $'+amount.toFixed(2)+' back to the balance.')) return;
   showBanner('Voiding payment…','loading');
   try {
     var result = await apiPost(SCRIPT_URL, { action:'voidLastPayment', cardName:sheetKey });
     showBanner('Voided '+fmt(Math.abs(result.voidedAmount),2)+'. New balance: '+fmt(result.newBalance,2),'ok');
-    // Reload card balances so tile updates immediately
-    var fresh = await apiFetch(SCRIPT_URL, 'cardBalances');
-    if(fresh && allData){ allData.cardBalances = fresh; loadAccounts(); }
+    // Optimistically update card balance locally -- add back the voided amount
+    if(allData && allData.cardBalances && allData.cardBalances.cards && allData.cardBalances.cards[sheetKey]){
+      allData.cardBalances.cards[sheetKey].balance =
+        Math.round((allData.cardBalances.cards[sheetKey].balance + Math.abs(result.voidedAmount)) * 100) / 100;
+      loadAccounts();
+    }
   } catch(e){
     showBanner('Void failed: '+e.message,'err');
   }
@@ -3170,6 +4624,7 @@ async function submitPayment(){
   try {
     var result = await apiPost(SCRIPT_URL, {
       action:   'makeCardPayment',
+      idemKey:  genIdemKey('pay'),
       month:    month,
       cardName: payCardKey,
       amount:   amount,
@@ -3177,9 +4632,19 @@ async function submitPayment(){
     });
     hidePayModal();
     showBanner('Payment of '+fmt(amount,2)+' recorded on '+payCardKey+' in '+month, 'ok');
-    quickRefresh();
+    // Optimistically update balance AND last-payment meta locally, so the
+    // tile (incl. its Void button target) is correct immediately
+    if(allData && allData.cardBalances && allData.cardBalances.cards && allData.cardBalances.cards[payCardKey]){
+      var oc = allData.cardBalances.cards[payCardKey];
+      oc.balance     = Math.round((oc.balance - amount) * 100) / 100;
+      oc.lastPayment = -Math.abs(amount);
+      oc.lastDate    = date;
+      loadAccounts();
+    }
+    // Authoritative refresh in the background (cache was invalidated server-side)
+    refreshCardBalances();
   } catch(e){
-    $('pay-modal-err').textContent = 'Failed: ' + e.message;
+    $('pay-modal-err').textContent = 'Network error — refresh to check if payment was recorded before trying again.';
     $('pay-submit-btn').disabled   = false;
     $('pay-submit-btn').textContent = 'Record payment';
   }
@@ -3189,30 +4654,42 @@ async function submitPayment(){
 var DC_SCHEDULE_VISIBLE = false;
 
 function daycareSchedule(){
-  // Build schedule: pay on Friday, covers starting following Monday (+3 days)
-  // Every 4 weeks, skip if that Monday is a closed week
+  // Pay on Friday; each payment covers the next 4 OPEN weeks.
+  // Closed weeks (DC_CLOSED_MONDAYS) are not charged: they appear as
+  // skipped rows and push every subsequent payment out by one week.
   var DAYS = 24*60*60*1000;
   var closedSet = {};
   DC_CLOSED_MONDAYS.forEach(function(d){ closedSet[d]=true; });
 
-  var payments = [];
+  var rows = [];
   var friday = new Date(DC_LAST_PAID+'T12:00:00');
 
-  for(var iter=0; iter<30; iter++){
+  for(var iter=0; iter<14; iter++){
     var monday = new Date(friday.getTime() + 3*DAYS);
-    payments.push({ friday: friday, monday: monday, skipped: false });
-    var nextFriday = new Date(friday.getTime() + 28*DAYS);
-    var nextMonday = new Date(nextFriday.getTime() + 3*DAYS);
-    var nm = nextMonday.toISOString().split('T')[0];
-    if(closedSet[nm]){
-      // insert skipped entry so users can see it, then skip forward another 4 weeks
-      payments.push({ friday: nextFriday, monday: nextMonday, skipped: true });
-      nextFriday = new Date(nextFriday.getTime() + 28*DAYS);
+    // If the very next week is closed, no payment is due for it --
+    // surface it and start coverage at the following open week.
+    while(closedSet[localDateStr(monday)]){
+      rows.push({ friday: monday, monday: monday, skipped: true });
+      monday = new Date(monday.getTime() + 7*DAYS);
     }
-    friday = nextFriday;
+    friday = new Date(monday.getTime() - 3*DAYS);
+    rows.push({ friday: friday, monday: monday, skipped: false });
+
+    // Walk forward until 4 open weeks are covered, surfacing any closed
+    // weeks that fall inside this payment's window
+    var m = monday, open = 1;
+    while(open < 4){
+      m = new Date(m.getTime() + 7*DAYS);
+      if(closedSet[localDateStr(m)]){
+        rows.push({ friday: m, monday: m, skipped: true });
+      } else {
+        open++;
+      }
+    }
+    friday = new Date(m.getTime() + 4*DAYS); // Friday before the next uncovered Monday
     if(friday.getFullYear() > 2027) break;
   }
-  return payments;
+  return rows;
 }
 
 function renderDaycareReminder(){
@@ -3289,7 +4766,7 @@ function renderDaycareReminder(){
     '<div class="dc-title">'+title+'</div>'+
     '<div class="dc-detail">'+detail+'</div>'+
     '<div class="dc-schedule">'+
-    '<div class="dc-schedule-title"  id="dc-sched-toggle">'+
+    '<div class="dc-schedule-title" id="dc-sched-toggle" data-action="toggleDcSchedule">'+
     'Full payment schedule <span id="dc-sched-arrow">'+(DC_SCHEDULE_VISIBLE?'▲':'▼')+'</span>'+
     '</div>'+
     '<div class="dc-schedule-rows" id="dc-sched-rows" style="display:'+(DC_SCHEDULE_VISIBLE?'grid':'none')+'">'+
@@ -3329,6 +4806,8 @@ var PM_OPTIONS = ['', 'AMEX', 'Costco', 'Wells Fargo', 'Prime', 'United', "Lowe'
 var DC_AMOUNT         = 2380;
 var DC_LAST_PAID      = '2026-04-10';
 var DC_CLOSED_MONDAYS = ['2026-06-29','2026-12-21'];
+var QUARTERLY_EXPENSES = [{name:'Water', months:[1,4,7,10]}];
+var PROJECTION_TARGET  = 1000000;
 
 // Apply config received from Apps Script — call once after getAllData returns
 function applyConfig(cfg) {
@@ -3344,10 +4823,15 @@ function applyConfig(cfg) {
   // PM options
   if (cfg.pmOptions && cfg.pmOptions.length) PM_OPTIONS = cfg.pmOptions;
 
-  // Daycare config
-  if (cfg.daycareAmount    != null) DC_AMOUNT         = cfg.daycareAmount;
-  if (cfg.daycareLastPaid)          DC_LAST_PAID      = cfg.daycareLastPaid;
-  if (cfg.daycareClosedMondays)     DC_CLOSED_MONDAYS = cfg.daycareClosedMondays;
+  // Quarterly expenses
+  if (cfg.quarterlyExpenses) QUARTERLY_EXPENSES = cfg.quarterlyExpenses;
+
+  // Daycare + milestone -- previously hardcoded on both layers; now the
+  // Config sheet flows through the server to here
+  if (cfg.daycareAmount != null) DC_AMOUNT = cfg.daycareAmount;
+  if (cfg.daycareLastPaid)       DC_LAST_PAID = cfg.daycareLastPaid;
+  if (cfg.daycareClosedMondays && cfg.daycareClosedMondays.length) DC_CLOSED_MONDAYS = cfg.daycareClosedMondays;
+  if (cfg.projectionTarget)      PROJECTION_TARGET = cfg.projectionTarget;
 }
 
 function pmSelect(id, val, cls, dataField) {
@@ -3460,7 +4944,8 @@ function loadAccounts(){
   var savedAcct = lsGetJSON(ACCT_KEY, {});
   checkingManual = savedAcct.checking ? savedAcct.checking.balance : null;
   var checkingDisplay = checkingBal != null ? checkingBal : checkingManual;
-  var asOf = cb.month ? ' · ' + cb.month : '';
+  // Checking comes from the latest MONTH sheet, not Card Trackers
+  var asOf = cb.checkingSource ? ' · ' + cb.checkingSource : '';
 
   // Summary metrics
   var totalBalance = cb.totalBalance != null ? cb.totalBalance : null;
@@ -3475,14 +4960,10 @@ function loadAccounts(){
     '<div class="metric"><div class="mlabel">Total balance</div>'+
     '<div class="mval '+(totalBalance!=null&&totalBalance>2000?'neg':'')+'">'+
     (totalBalance!=null?fmt(totalBalance,2):'—')+'</div>'+
-    '<div class="msub">current across all cards</div></div>'+
-    '<div class="metric"><div class="mlabel">Combined limit</div>'+
-    '<div class="mval">'+(totalLimit?fmt(totalLimit):'—')+'</div>'+
-    '<div class="msub">all cards</div></div>'+
-    '<div class="metric"><div class="mlabel">Utilization</div>'+
-    '<div class="mval '+(util!=null&&util>0.3?'neg':'pos')+'">'+
-    (util!=null?(util*100).toFixed(1)+'%':'—')+'</div>'+
-    '<div class="msub">'+(util!=null&&util<0.1?'excellent':util!=null&&util<0.3?'good':'review')+'</div></div>';
+    '<div class="msub">'+
+    (totalLimit?'of '+fmt(totalLimit)+' limit':'all cards')+
+    (util!=null?' · '+(util*100).toFixed(1)+'% utilization ('+(util<0.1?'excellent':util<0.3?'good':'review')+')':'')+
+    '</div></div>';
 
   renderFcfCard();
   var grid = $('acct-cards-grid');
@@ -3521,8 +5002,8 @@ function loadAccounts(){
     chkRows+
     (SCRIPT_URL&&!isDemo
       ? '<div class="acct-checking-btns">'+
-        '<button class="acct-dep-btn" onclick="showChkModal(\'deposit\')">+ Deposit / paycheck</button>'+
-        '<button class="acct-wd-btn"  onclick="showChkModal(\'withdrawal\')">− Withdrawal</button>'+
+        '<button class="acct-dep-btn" data-action="chkDeposit">+ Deposit / paycheck</button>'+
+        '<button class="acct-wd-btn"  data-action="chkWithdrawal">− Withdrawal</button>'+
         '</div>'
       : '');
   grid.appendChild(chkCard);
@@ -3566,7 +5047,9 @@ function loadAccounts(){
     }
 
     var payBtn = isDemo ? '' :
-      '<button class="acct-pay-btn" onclick="event.stopPropagation();showPayModal(\''+esc(def.sheetKey)+'\',\''+esc(def.name)+'\','+(balance!=null?balance:0)+')">+ Record payment</button>';
+      '<button class="acct-pay-btn" data-action="payCard" data-key="'+esc(def.sheetKey)+
+      '" data-name="'+esc(def.name)+'" data-balance="'+(balance!=null?balance:0)+
+      '">+ Record payment</button>';
 
     // Last payment info + void button
     var lastPayment = sheetCard ? sheetCard.lastPayment : null;
@@ -3578,13 +5061,15 @@ function loadAccounts(){
       var lastPayDate = lastDate ? new Date(lastDate).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
       lastPayHtml = '<div class="acct-updated" style="color:var(--faint)">Last pmt: '+lastPayAmt+(lastPayDate?' on '+lastPayDate:'')+'</div>';
       if(!isDemo){
-        voidBtn = '<button class="acct-void-btn" onclick="event.stopPropagation();voidPayment(\''+esc(def.sheetKey)+'\',\''+esc(def.name)+'\','+Math.abs(lastPayment)+',\''+esc(lastPayDate||'')+'\')">Void last</button>';
+        voidBtn = '<button class="acct-void-btn" data-action="voidCard" data-key="'+esc(def.sheetKey)+
+          '" data-name="'+esc(def.name)+'" data-amount="'+Math.abs(lastPayment)+
+          '" data-date="'+esc(lastPayDate||'')+'">Void last</button>';
       }
     }
 
     card.style.cursor = 'pointer';
     card.title = 'Click to view all transactions';
-    card.onclick = function(){ openCardDrawer(def.pm, def.name); };
+    card.onclick = function(ev){ if(ev.target.closest('[data-action]')) return; openCardDrawer(def.pm, def.name); };
     card.innerHTML =
       '<div class="acct-card-head">'+
       '<span class="acct-card-name">'+esc(def.name)+'</span>'+
@@ -3677,7 +5162,7 @@ async function logCreditSnapshot(){
   if(isDemo || !SCRIPT_URL){ showBanner('Demo mode — not saved','ok'); return; }
   showBanner('Logging to Credit sheet…','loading');
   try {
-    await apiPost(SCRIPT_URL,{action:'logCreditSnapshot',date:new Date().toISOString().split('T')[0],balance:bal,limit:lim});
+    await apiPost(SCRIPT_URL,{action:'logCreditSnapshot',date:localToday(),balance:bal,limit:lim});
     showBanner('Logged','ok');
     var fresh = await apiFetch(SCRIPT_URL,'accounts');
     if(allData){ allData.creditHistory=fresh.creditHistory||[]; allData.loanTotal=fresh.loanTotal; }
@@ -3737,10 +5222,6 @@ function toggleRowPending(i){
     if(banner) banner.remove();
   }
 }
-function scrollToFirstPending(){
-  var first = document.querySelector('.txn-pending-row');
-  if(first) first.scrollIntoView({behavior:'smooth', block:'center'});
-}
 
 // ── helpers ──
 function replaceTr(tbodyId,i,newTr){
@@ -3756,7 +5237,9 @@ function showTab(id,btn){
   document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active');});
   document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');});
   $('tab-'+id).classList.add('active'); btn.classList.add('active');
-  if(id==='loans') loadLoans();
+  if(id==='loans')    loadLoans();
+  if(id==='mortgage') loadMortgage();
+  if(id==='networth') loadNetWorth();
 }
 
 // ── DEMO DATA ──
