@@ -107,22 +107,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 .qa-check-row label{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
 
 /* ── SETUP ── */
-#auth-overlay{position:fixed;inset:0;background:var(--bg);z-index:300;display:none;align-items:center;justify-content:center;padding:24px}
 #setup-overlay{position:fixed;inset:0;background:var(--bg);z-index:200;display:none;align-items:center;justify-content:center;padding:24px}
-.auth-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:40px;max-width:340px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.12);text-align:center}
-.auth-box h2{font-family:var(--mono);font-size:16px;font-weight:600;margin:0 0 8px}
-.auth-box p{font-size:13px;color:var(--muted);margin:0 0 24px}
-.auth-box input{width:100%;font-family:var(--mono);font-size:14px;padding:10px 14px;border:1px solid var(--border2);border-radius:var(--r);background:var(--surface2);color:var(--text);outline:none;box-sizing:border-box;margin-bottom:12px;text-align:center;letter-spacing:2px}
-.auth-box input:focus{border-color:var(--blue-lt)}
-.auth-err{font-size:12px;color:var(--terra);min-height:18px;margin-bottom:8px}
-#chpw-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:300;display:none;align-items:center;justify-content:center;padding:24px}
-.chpw-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:32px;max-width:340px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.15)}
-.chpw-box h3{font-family:var(--mono);font-size:14px;font-weight:600;margin:0 0 20px}
-.chpw-box label{display:block;font-size:11px;font-family:var(--mono);color:var(--muted);margin-bottom:4px;margin-top:12px}
-.chpw-box input{width:100%;font-family:var(--mono);font-size:13px;padding:8px 12px;border:1px solid var(--border2);border-radius:var(--r);background:var(--surface2);color:var(--text);outline:none;box-sizing:border-box}
-.chpw-box input:focus{border-color:var(--blue-lt)}
-.chpw-actions{display:flex;gap:8px;margin-top:20px}
-.chpw-err{font-size:12px;color:var(--terra);min-height:16px;margin-top:8px}
 .setup-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:32px;max-width:560px;width:100%;box-shadow:var(--shadow)}
 .setup-card h2{font-family:var(--mono);font-size:15px;font-weight:500;margin-bottom:6px;color:var(--text)}
 .setup-card p{font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:16px}
@@ -657,35 +642,6 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 </head>
 <body>
 
-<!-- CHANGE PASSWORD MODAL -->
-<div id="chpw-overlay" style="display:none">
-  <div class="chpw-box">
-    <h3>Change Password</h3>
-    <label>Current password</label>
-    <input type="password" id="chpw-current" autocomplete="current-password">
-    <label>New password</label>
-    <input type="password" id="chpw-new" autocomplete="new-password">
-    <label>Confirm new password</label>
-    <input type="password" id="chpw-confirm" autocomplete="new-password">
-    <div class="chpw-err" id="chpw-err"></div>
-    <div class="chpw-actions">
-      <button class="btn-primary" data-action="submitChangePassword">Update password</button>
-      <button class="btn-cancel" data-action="hideChangePassword">Cancel</button>
-    </div>
-  </div>
-</div>
-
-<!-- AUTH OVERLAY -->
-<div id="auth-overlay" style="display:flex">
-  <div class="auth-box">
-    <h2>Finance Dashboard</h2>
-    <p>Enter password to continue</p>
-    <input type="password" id="auth-input" placeholder="Password" autocomplete="current-password">
-    <div class="auth-err" id="auth-err"></div>
-    <button class="btn-primary" id="auth-submit" style="width:100%">Unlock</button>
-  </div>
-</div>
-
 <!-- SETUP OVERLAY -->
 <div id="setup-overlay" style="display:none">
   <div class="setup-card">
@@ -708,8 +664,6 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     </div>
     <div id="setup-back-wrap" style="display:none;text-align:center;margin-top:10px">
       <a data-action="hideSetup" style="font-size:12px;color:var(--muted);cursor:pointer;text-decoration:underline">← Back to dashboard</a>
-      &nbsp;·&nbsp;
-      <a data-action="setupChangePassword" style="font-size:12px;color:var(--muted);cursor:pointer;text-decoration:underline">Change password</a>
     </div>
   </div>
 </div>
@@ -727,7 +681,6 @@ tr:hover .racts,tr.editing .racts{opacity:1}
       <button class="icon-btn" data-action="refreshData"><span id="ri">↻</span> refresh</button>
       <button class="icon-btn" data-action="showAddMonth">+ month</button>
       <button class="icon-btn" data-action="showSetup">⚙ settings</button>
-      <button class="icon-btn" data-action="showChangePassword" title="Change password">🔑</button>
     </div>
   </header>
   <div class="gl-strip">
@@ -1205,7 +1158,6 @@ function initEventListeners(){
     'editFixedName':  function(e){ var el=e.target.closest('[data-action]'); editFixedName(parseFloat(el.dataset.args), el); },
     'editFixedCost':  function(e){ var el=e.target.closest('[data-action]'); editFixedCost(parseFloat(el.dataset.args), el); },
     'chkWithdrawal':  function(){ showChkModal('withdrawal'); },
-    'setupChangePassword': function(){ hideSetup(); showChangePassword(); },
     'showQuickAdd':       showQuickAdd,
     'hideQuickAdd':       hideQuickAdd,
     'submitQuickAdd':     submitQuickAdd,
@@ -1332,95 +1284,6 @@ function useDemoData(){
 }
 
 // ── api ──
-// ── PASSWORD PROTECTION ───────────────────────────────────────
-// AUTH_HASH is the fallback password hash baked into the HTML.
-// Once a password is set via the dashboard, it's stored in localStorage
-// under PW_KEY and takes precedence over AUTH_HASH.
-// To reset to the baked-in password, clear localStorage key 'fin_pw_hash'.
-var AUTH_HASH = '62547dcd3f31e86bd133f7e715b5cdefae1dc4770cac0e50f34a91fd9405467a'; // changeme123
-var AUTH_KEY  = 'fin_auth_v1';  // stores the session token (hash of current pw)
-var PW_KEY    = 'fin_pw_hash';  // stores a custom password hash if set via dashboard
-
-function getActiveHash() {
-  return lsGet(PW_KEY) || AUTH_HASH;
-}
-
-async function checkPassword(pw) {
-  if(typeof crypto === 'undefined' || !crypto.subtle) return pw;
-  var buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pw));
-  return [...new Uint8Array(buf)].map(function(x){ return x.toString(16).padStart(2,'0'); }).join('');
-}
-
-async function submitPassword() {
-  var pw = $('auth-input').value;
-  if(!pw) return;
-  var hash       = await checkPassword(pw);
-  var activeHash = getActiveHash();
-  if(hash === activeHash || (typeof crypto === 'undefined' && pw === activeHash)) {
-    lsSet(AUTH_KEY, hash);
-    $('auth-overlay').style.display = 'none';
-    bootDashboard();
-  } else {
-    $('auth-err').textContent = 'Incorrect password.';
-    $('auth-input').value = '';
-    $('auth-input').focus();
-  }
-}
-
-async function initAuth() {
-  var stored     = lsGet(AUTH_KEY);
-  var activeHash = getActiveHash();
-  if(stored && stored === activeHash) {
-    $('auth-overlay').style.display = 'none';
-    bootDashboard();
-    return;
-  }
-  $('auth-input').focus();
-  $('auth-input').addEventListener('keydown', function(e){
-    if(e.key === 'Enter') submitPassword();
-  });
-  $('auth-submit').addEventListener('click', submitPassword);
-}
-
-// ── CHANGE PASSWORD ───────────────────────────────────────────
-function showChangePassword() {
-  $('chpw-overlay').style.display = 'flex';
-  $('chpw-current').value = '';
-  $('chpw-new').value     = '';
-  $('chpw-confirm').value = '';
-  $('chpw-err').textContent = '';
-  $('chpw-current').focus();
-}
-function hideChangePassword() {
-  $('chpw-overlay').style.display = 'none';
-}
-async function submitChangePassword() {
-  var current = $('chpw-current').value;
-  var newPw   = $('chpw-new').value;
-  var confirm = $('chpw-confirm').value;
-
-  if(!current || !newPw || !confirm){
-    $('chpw-err').textContent = 'All fields required.'; return;
-  }
-  if(newPw !== confirm){
-    $('chpw-err').textContent = 'New passwords do not match.'; return;
-  }
-  if(newPw.length < 6){
-    $('chpw-err').textContent = 'Password must be at least 6 characters.'; return;
-  }
-
-  var currentHash = await checkPassword(current);
-  var activeHash  = getActiveHash();
-  if(currentHash !== activeHash){
-    $('chpw-err').textContent = 'Current password is incorrect.'; return;
-  }
-
-  var newHash = await checkPassword(newPw);
-  lsSet(PW_KEY,   newHash);  // store new hash as active password
-  lsSet(AUTH_KEY, newHash);  // update session token too
-  hideChangePassword();
-  showBanner('Password updated ✓', 'ok');
-}
 
 function bootDashboard() {
   // Saved URL (entered in settings) takes precedence over the baked-in
@@ -5484,7 +5347,7 @@ document.addEventListener('click', function(e){
 });
 
 // ── init ──
-initAuth();
+bootDashboard();   // boot directly (password gate removed)
 </script>
 </body>
 </html>
