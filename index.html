@@ -660,6 +660,15 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 
   /* 16px min on form fields stops iOS Safari auto-zooming when one is focused */
   input, select, textarea{ font-size:16px; }
+
+  /* tab bar: keep all tabs on one row and scroll sideways instead of overflowing */
+  .tabs{ overflow-x:auto; -webkit-overflow-scrolling:touch; flex-wrap:nowrap; }
+  .tab-btn{ flex:0 0 auto; white-space:nowrap; }
+
+  /* header: title + action buttons wrap onto extra rows instead of overflowing the
+     screen; tighter padding reclaims width */
+  .hdr{ flex-wrap:wrap; gap:8px 12px; padding:12px 14px; }
+  .hdr-r{ flex-wrap:wrap; gap:8px; }
 }
 </style>
 </head>
