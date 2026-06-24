@@ -638,6 +638,29 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 
 .sk{background:linear-gradient(90deg,var(--surface2) 25%,var(--surface3) 50%,var(--surface2) 75%);background-size:200% 100%;animation:shimmer 1.4s infinite;border-radius:4px;display:inline-block}
 @keyframes shimmer{to{background-position:-200% 0}}
+
+/* ── MOBILE / PHONE ─────────────────────────────────────────────────────────────
+   Single primary breakpoint for phone-specific rules. The component grid-collapses
+   at 600/820/1100 are intentionally left alone -- they all collapse before phone
+   width and target different component widths. Layout-only; does NOT touch colour
+   encoding, so the two-channel (lightness/dash/shape/label) scheme is unaffected. */
+@media (max-width: 768px){
+  /* reclaim horizontal space the desktop gutters eat on a ~375px screen */
+  .main{ padding:16px 12px; }
+
+  /* wide data tables: keep readable column widths and scroll sideways within the
+     table box, instead of crushing columns or forcing the page wider */
+  .tbl, .loan-table, .fx-table, .var-entry-table{
+    display:block;
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+    white-space:nowrap;
+  }
+  .tbl td.dc{ white-space:normal; }   /* let descriptions wrap inside their 240px cap */
+
+  /* 16px min on form fields stops iOS Safari auto-zooming when one is focused */
+  input, select, textarea{ font-size:16px; }
+}
 </style>
 </head>
 <body>
