@@ -1302,6 +1302,11 @@ function bootDashboard() {
     }).catch(function(e){
       showBanner('Could not load: ' + e.message, 'err');
     });
+  } else {
+    // No URL available -- e.g. on GitHub Pages, where the gitignored config.js
+    // isn't served (so SCRIPT_URL is '') and nothing is saved in localStorage yet.
+    // Show the setup screen so the URL can be entered and saved to this browser.
+    showSetup();
   }
 }
 
