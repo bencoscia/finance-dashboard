@@ -61,18 +61,21 @@ Google Sheet  ◄──►  apps_script.gs (Web App: doGet reads / doPost writes
 - **`config.js` isn't served on Pages.** It's gitignored, so on GitHub Pages `window.CONFIG` is undefined and `SCRIPT_URL` is empty — by design. The setup screen is the Pages onboarding (paste the URL once → saved to that browser's `localStorage['fin_url']`). `bootDashboard()` **must** fall back to `showSetup()` when there's no URL; a missing `else` there once left Pages blank-white. Works locally because `config.js` is present.
 - **No client-side password gate.** One was added and removed — it's theater: page source (hence any hash) is world-readable on Pages, and `SCRIPT_URL`, not the gate, protects the data. Don't reintroduce. Real access control = `SCRIPT_URL` secrecy now, a server-validated token later (§9).
 - **`SCRIPT_URL` precedence:** `localStorage['fin_url']` (set via setup) wins over `config.js`. A stale saved URL silently overrides a fresh `config.js` — clear it via the setup screen if you repoint.
+- **HSA double-reimbursement (cardinal risk).** Paying out a receipt twice is an over-withdrawal the IRS can claw back. Two layers: `reimburseReceipt` is `_withIdem`-wrapped **and** writes `reimbursed_amount` as an **absolute** value (a retry writes the same number, never adds), plus a server `_reimburseGuard` rejecting `> amount`, negative, `funding=HSA`, and pre-establishment rows. The UI "Reimburse to total ($)" field is the absolute total, not an increment — keep it so.
+- **HSA establishment gate.** Only expenses on/after `Config!hsa_established` qualify; earlier rows are flagged ⚠ and excluded from every total. **Blank `hsa_established` → gate OFF** (nothing disqualified) and the tab shows a ⚠ banner — set it or totals overstate.
+- **HSA balance is `B1`, blank ≠ 0.** `HSA Receipts!B1` (manual) is the only balance source; **blank → `null` → renders "—", never `$0`**, and `reimbursableNow`/`strandedEntitlement` stay `null` (not computed against 0). HSA is **not** in net worth yet (§9). Receipts store a **Drive link**, never an embedded image.
 
 ---
 
 ## 5. Server reference (`apps_script.gs`)
 
-**Read actions (14)** — registered in both chains, served by `doGet`:
-`all · quick · monthly · networth · transactions · fixed · variableEntries · accounts · cardTotals · cardBalances · cardTxns · config · loans · mortgage`
+**Read actions (15)** — registered in both chains, served by `doGet`:
+`all · quick · monthly · networth · transactions · fixed · variableEntries · accounts · cardTotals · cardBalances · cardTxns · config · loans · mortgage · hsa`
 
-**Write actions (18)** — `doPost` (★ = `_withIdem`-wrapped):
-`addTransaction★ · updateTransaction · deleteTransaction · splitTransaction · setFixedPaid · updateFixedCost · updateFixedName · updateLoanBalance★ · makeCardPayment★ · voidLastPayment · setSeedBalance · addVariableEntry★ · updateVariableEntry · deleteVariableEntry · makeCheckingEntry★ · saveNetWorthSnapshot · logCreditSnapshot · addMonth`
+**Write actions (19)** — `doPost` (★ = `_withIdem`-wrapped):
+`addTransaction★ · updateTransaction · deleteTransaction · splitTransaction · setFixedPaid · updateFixedCost · updateFixedName · updateLoanBalance★ · makeCardPayment★ · voidLastPayment · setSeedBalance · addVariableEntry★ · updateVariableEntry · deleteVariableEntry · makeCheckingEntry★ · saveNetWorthSnapshot · logCreditSnapshot · addMonth · reimburseReceipt★`
 
-**Sheets touched:** `Loans`, `Physical Assets`, `Credit`, `Discover Savings`, `Portfolio Management`, `Net Worth`, `Card Payments`, `Card Trackers`, `Config`, `Template`, and the monthly sheets (`"<Month> YYYY"`).
+**Sheets touched:** `Loans`, `Physical Assets`, `Credit`, `Discover Savings`, `Portfolio Management`, `Net Worth`, `Card Payments`, `Card Trackers`, `Config`, `HSA Receipts`, `Template`, and the monthly sheets (`"<Month> YYYY"`).
 
 **Key helpers:** `readSheet(name|sheet)` (cached per-request 2-D values) · `_withIdem(payload, fn)` (idempotency keys in CacheService, 6 h) · `cfg()` (reads `Config`, 5-min cache, per-key fallback to hardcoded defaults) · cache invalidation per month/card/net-worth.
 
@@ -80,13 +83,13 @@ Google Sheet  ◄──►  apps_script.gs (Web App: doGet reads / doPost writes
 
 ## 6. Client reference (`index.html`)
 
-**Tabs (8):** `thisweek` (landing; driven by `all`/`quick` + Quick Add) · `accounts` · `txns` · `fixed` (Recurring expenses) · `budget` (merged Monthly+Breakdown) · `networth` · `loans` (**label: "Student Loans"**, id stays `loans`) · `mortgage`.
+**Tabs (9):** `thisweek` (landing; driven by `all`/`quick` + Quick Add) · `accounts` · `txns` · `fixed` (Recurring expenses) · `budget` (merged Monthly+Breakdown) · `networth` · `loans` (**label: "Student Loans"**, id stays `loans`) · `mortgage` · `hsa`.
 
-**Loaders:** `loadAccounts · loadFixed · loadLoans · loadMortgage · loadNetWorth · loadTxns · loadSaved` (+ initial `all` fetch). Tab lazy-load is wired in `showTab(id)` (`if(id==='x') loadX();`).
+**Loaders:** `loadAccounts · loadFixed · loadLoans · loadMortgage · loadNetWorth · loadTxns · loadHsa · loadSaved` (+ initial `all` fetch). Tab lazy-load is wired in `showTab(id)` (`if(id==='x') loadX();`).
 
 **Boot:** entry point `bootDashboard()` (called once at load). URL precedence: `localStorage['fin_url']` > `window.CONFIG.SCRIPT_URL` (from `config.js`); if empty → `showSetup()`. This replaced a client-side password/unlock gate that was added then removed (§4).
 
-**Demo mode:** `isDemo` gates every loader to a `demoX()` synthesizer: `demoData · demoAccounts · demoTxns · demoFixed · demoVarEntries · demoNetWorth · demoCardTotals · demoCardBalances · demoLoans · demoMortgage`.
+**Demo mode:** `isDemo` gates every loader to a `demoX()` synthesizer: `demoData · demoAccounts · demoTxns · demoFixed · demoVarEntries · demoNetWorth · demoCardTotals · demoCardBalances · demoLoans · demoMortgage · demoHsa`.
 
 **Interaction model:** one delegated `click` listener → `ACTION_MAP[action]` or generic `window[action](...data-args)`; per-row controls carry `data-action`/`data-args` (numbers auto-parsed). No inline `on*=` (Invariant 2).
 
@@ -116,8 +119,9 @@ Google Sheet  ◄──►  apps_script.gs (Web App: doGet reads / doPost writes
 - **`Loans!M–W` — mortgage amortization (full schedule to payoff Feb 2055).** Header: N3 original rate, N4 valuation (`='Physical Assets'!B6`), N5 purchase. Ledger rows 8+: M date, N description/paid-flag (`TRUE`=logged actual), O balance, P payment (P&I + escrow), Q interest, R PMI, S property tax, T principal, U equity %. **Row 40 = `Refinance` marker** (its O cell = new rate; interest switches N3→O40 after it). Cost box: W9 initial projected P&I, W10 current projected P&I (`=SUM(Q:Q)+SUM(T:T)`), W11 savings (`=W9-W10`). Read-only in the dashboard via `getMortgageData`. `Physical Assets!B8` mirrors this ledger's current balance (last `TRUE`-flagged row's O) via formula, and is what `_computeNetWorth` reads for the mortgage liability.
 - **`Physical Assets`.** B3–B5 home estimates (Redfin/Zillow/realtor), B6 avg valuation, **B8 mortgage balance — formula `=XLOOKUP(TRUE, Loans!N8:N400, Loans!O8:O400, "NO PAID ROW", 0, -1)` deriving the ledger's current-month balance; net-worth source (was hand-typed, now self-maintaining — don't overtype)**, B9/B10 equity $ / %.
 - **Monthly sheets `"<Month> YYYY"`.** Per-month transactions/fixed/variable; the hot path for `getMonthlyData` (cached: CacheService + durable PropertiesService tier; recompute only changed months).
-- **`Config`.** `key | value | notes`; read by `cfg()`. Holds `BUDGET`, `DC_AMOUNT`, `DC_CLOSED_MONDAYS`, `QUARTERLY_EXPENSES`, `PROJECTION_TARGET`, `SEED_MONTH_CONFIG` (fallback to hardcoded defaults).
+- **`Config`.** `key | value | notes`; read by `cfg()`. Holds `BUDGET`, `DC_AMOUNT`, `DC_CLOSED_MONDAYS`, `QUARTERLY_EXPENSES`, `PROJECTION_TARGET`, `SEED_MONTH_CONFIG` (each with a hardcoded fallback), and `hsa_established` (HSA qualifying-date gate; **no fallback — blank disables the gate**, see §4).
 - **`Net Worth`.** Snapshots written by `saveNetWorthSnapshot`.
+- **`HSA Receipts` — reimbursement-entitlement ledger.** Metadata: **`B1` = current HSA balance (manual; blank→`null`, never 0), `B2` = balance as-of date.** Headers on **row 3**, data **rows 4+**. Cols A–K: A `id` (stable positive int, never reused — `reimburseReceipt` locates rows by id, not position), B `date_incurred`, C `amount`, D `provider`, E `description`, F `category`, G `funding` (`OOP`|`HSA`), H `receipt_link` (Drive URL), I `reimbursed_amount` (**absolute**; written by `reimburseReceipt`), J `reimbursed_date`, K `notes`. Read by `getHsa` → `{established, hsaBalance, balanceAsOf, unreimbursed, reimbursableNow, totalSubstantiated, strandedEntitlement, rows[]}`. Pure helpers `_hsaRollups` / `_reimburseGuard` are unit-tested in `testHsa`. **No edit/delete endpoints — correct rows directly in the Sheet.**
 
 ---
 

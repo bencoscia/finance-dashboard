@@ -266,6 +266,16 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .nw-snap-btn{background:var(--blue);color:#fff;border:none;border-radius:8px;padding:9px 20px;font-size:13px;font-weight:600;cursor:pointer}
 .nw-snap-btn:hover{opacity:.88}
 .nw-flag{font-size:11px;color:var(--muted);font-style:italic;margin-top:6px}
+/* HSA receipts -- status by glyph + word (never hue alone); protan-safe */
+.hsa-status{font-family:var(--mono);font-size:12px;white-space:nowrap;color:var(--text)}
+.hsa-glyph{display:inline-block;width:1.1em;text-align:center;margin-right:5px;font-weight:600}
+.hsa-note{font-size:12px;color:var(--text);background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--amber);border-radius:var(--r);padding:9px 12px;margin-bottom:14px}
+.hsa-note.warn{border-left-color:var(--terra)}
+.hsa-link{color:var(--c2);text-decoration:underline}
+.hsa-reimburse-btn{font-family:var(--mono);font-size:11px;padding:5px 11px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);cursor:pointer}
+.hsa-reimburse-btn:hover{background:var(--surface2)}
+.hsa-filter-btn{font-family:var(--mono);font-size:11px;padding:5px 11px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer;margin-bottom:10px}
+.hsa-filter-btn:hover{background:var(--surface2)}
 .fx-table{width:100%;border-collapse:collapse;font-size:13px;background:var(--surface);border-radius:var(--rl);overflow:hidden;border:1px solid var(--border);box-shadow:var(--shadow)}
 .fx-table tr{border-bottom:1px solid var(--border);transition:background .1s}
 .fx-table tr:last-child{border-bottom:none}
@@ -750,6 +760,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
       <button class="tab-btn"         data-tab="networth">Net worth</button>
       <button class="tab-btn"         data-tab="loans">Student Loans</button>
       <button class="tab-btn"         data-tab="mortgage">Mortgage</button>
+      <button class="tab-btn"         data-tab="hsa">HSA</button>
     </div>
 
     <!-- THIS WEEK -->
@@ -946,6 +957,17 @@ tr:hover .racts,tr.editing .racts{opacity:1}
       <div id="fcf-card" style="margin-top:14px"></div>
     </div>
 
+    <!-- HSA -->
+    <div id="tab-hsa" class="tab-panel">
+      <div class="metrics" id="hsa-metrics">
+        <div class="metric"><div class="mlabel">Unreimbursed pool</div><div class="mval sk" style="height:26px;width:120px"> </div></div>
+        <div class="metric"><div class="mlabel">Reimbursable now</div><div class="mval sk" style="height:26px;width:110px"> </div></div>
+        <div class="metric"><div class="mlabel">Total substantiated</div><div class="mval sk" style="height:26px;width:120px"> </div></div>
+      </div>
+      <div id="hsa-note-area"></div>
+      <div id="hsa-content"><div class="tbl-empty">Loading&hellip;</div></div>
+    </div>
+
   </main>
 </div>
 
@@ -1063,6 +1085,27 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     <div class="pay-modal-btns">
       <button class="btn-primary" id="pay-submit-btn" data-action="submitPayment">Record payment</button>
       <button class="btn-cancel" data-action="hidePayModal">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- HSA REIMBURSE MODAL -->
+<div id="hsa-modal-backdrop" class="pay-modal-backdrop" style="display:none" data-dismiss="hideHsaModal">
+  <div class="pay-modal">
+    <h3 id="hsa-modal-title">Reimburse</h3>
+    <div class="pay-modal-sub" id="hsa-modal-sub">Record a reimbursement from the HSA</div>
+    <div class="pay-field">
+      <label>Reimburse to total ($)</label>
+      <input type="number" id="hsa-amount" step="0.01" min="0" placeholder="0.00">
+    </div>
+    <div class="pay-field">
+      <label>Reimbursement date</label>
+      <input type="date" id="hsa-date">
+    </div>
+    <div class="pay-modal-err" id="hsa-modal-err"></div>
+    <div class="pay-modal-btns">
+      <button class="btn-primary" id="hsa-submit-btn" data-action="submitHsaReimburse">Record reimbursement</button>
+      <button class="btn-cancel" data-action="hideHsaModal">Cancel</button>
     </div>
   </div>
 </div>
@@ -1220,6 +1263,10 @@ function initEventListeners(){
     'showLogCredit':      showLogCredit,
     'logCreditSnapshot':  logCreditSnapshot,
     'toggleDcSchedule':   toggleDcSchedule,
+    'reimburseHsa':       function(e){ var el=e.target.closest('[data-action]'); showHsaModal(el.dataset.id); },
+    'submitHsaReimburse': submitHsaReimburse,
+    'hideHsaModal':       hideHsaModal,
+    'toggleHsaOpen':      toggleHsaOpen,
   };
 
   // Tab buttons — use existing data-tab attribute
@@ -5136,6 +5183,195 @@ function replaceTr(tbodyId,i,newTr){
   }
 }
 
+// ── HSA RECEIPTS ──────────────────────────────────────────────
+// Reimbursement-entitlement ledger. Hero metric = the unreimbursed pool
+// (out-of-pocket qualified expenses still claimable tax-free). Reimburse is
+// absolute + idempotent; the server guards funding=HSA, pre-establishment, and
+// over-amount. Status is shown by GLYPH + WORD (never hue alone) -- protan-safe.
+var hsaData = null;
+var hsaReimburseId = '';
+var hsaShowOpenOnly = false;
+
+var HSA_STATUS = {
+  open:        { g:'\u25CB', t:'Open' },        // hollow circle
+  partial:     { g:'\u25D1', t:'Partial' },     // half-filled circle
+  reimbursed:  { g:'\u25CF', t:'Reimbursed' },  // filled circle
+  paid_direct: { g:'\u25C6', t:'Paid direct' }, // diamond
+  unqualified: { g:'\u26A0', t:'Predates HSA' } // warning sign
+};
+
+async function loadHsa(force){
+  if(hsaData && !force){ renderHsa(hsaData); return; }
+  if(isDemo){ renderHsa(demoHsa()); return; }
+  if(!SCRIPT_URL){ return; }
+  $('hsa-content').innerHTML = '<div class="tbl-empty">Loading\u2026</div>';
+  try {
+    var data = await apiFetch(SCRIPT_URL, 'hsa');
+    if(!data || data.error){
+      $('hsa-content').innerHTML = '<div class="tbl-empty">Error: '+(data && data.error ? esc(data.error) : 'empty response')+'</div>';
+      return;
+    }
+    hsaData = data;
+    renderHsa(data);
+  } catch(e){
+    $('hsa-content').innerHTML = '<div class="tbl-empty">Error: '+esc(e.message)+'</div>';
+  }
+}
+
+function demoHsa(){
+  // Exercises every state: open / partial / reimbursed / paid-direct, plus an
+  // unqualified pre-establishment row, and stranded entitlement (pool 2700 >
+  // balance 2000).
+  return {
+    established:'2025-04-17', hsaBalance:2000, balanceAsOf:'2026-06-01',
+    unreimbursed:2700, reimbursableNow:2000, totalSubstantiated:4800, strandedEntitlement:700,
+    rows:[
+      {id:1, dateIncurred:'2025-05-12', amount:1200, provider:'Summit Dental',     description:'Crown',         category:'Dental',    funding:'OOP', receiptLink:'', reimbursedAmount:0,    reimbursedDate:'',           status:'open',        qualified:true},
+      {id:2, dateIncurred:'2025-07-03', amount:800,  provider:'LensCrafters',       description:'Glasses',       category:'Vision',    funding:'OOP', receiptLink:'', reimbursedAmount:800,  reimbursedDate:'2026-01-15', status:'reimbursed',  qualified:true},
+      {id:3, dateIncurred:'2026-03-22', amount:2500, provider:'St Joseph Hospital', description:'Outpatient',    category:'Procedure', funding:'OOP', receiptLink:'', reimbursedAmount:1000, reimbursedDate:'2026-06-01', status:'partial',     qualified:true},
+      {id:4, dateIncurred:'2026-04-09', amount:300,  provider:'CVS Pharmacy',       description:'Prescription',  category:'Rx',        funding:'HSA', receiptLink:'', reimbursedAmount:0,    reimbursedDate:'',           status:'paid_direct', qualified:true},
+      {id:5, dateIncurred:'2024-11-02', amount:500,  provider:'Old Clinic',         description:'Pre-HSA visit', category:'Office',    funding:'OOP', receiptLink:'', reimbursedAmount:0,    reimbursedDate:'',           status:'open',        qualified:false}
+    ]
+  };
+}
+
+function renderHsa(d){
+  if(!d) return;
+  var rows = d.rows || [];
+
+  // -- Hero metrics (all positive amounts; no pos/neg color needed) --
+  var reimbHtml, reimbSub;
+  if(d.reimbursableNow == null){
+    reimbHtml = '<span style="color:var(--faint)">&mdash;</span>';
+    reimbSub  = 'enter HSA balance in the sheet';
+  } else {
+    reimbHtml = fmt(d.reimbursableNow);
+    reimbSub  = d.balanceAsOf ? ('as of '+esc(d.balanceAsOf)) : 'capped by HSA balance';
+  }
+  $('hsa-metrics').innerHTML =
+    '<div class="metric"><div class="mlabel">Unreimbursed pool</div><div class="mval">'+fmt(d.unreimbursed)+'</div><div class="msub">tax-free withdrawal headroom</div></div>'+
+    '<div class="metric"><div class="mlabel">Reimbursable now</div><div class="mval">'+reimbHtml+'</div><div class="msub">'+reimbSub+'</div></div>'+
+    '<div class="metric"><div class="mlabel">Total substantiated</div><div class="mval">'+fmt(d.totalSubstantiated)+'</div><div class="msub">lifetime qualified spend</div></div>';
+
+  // -- Notices (symbol-prefixed; meaning never carried by color alone) --
+  var notes = '';
+  if(!d.established){
+    notes += '<div class="hsa-note warn">\u26A0 No HSA establishment date set (Config: hsa_established). Every receipt is treated as qualified until you set it.</div>';
+  }
+  if(d.strandedEntitlement != null && d.strandedEntitlement > 0){
+    notes += '<div class="hsa-note">\u26A0 '+fmt(d.strandedEntitlement)+' of accrued entitlement exceeds the current HSA balance &mdash; claimable once the account grows.</div>';
+  }
+  $('hsa-note-area').innerHTML = notes;
+
+  // -- Ledger --
+  if(!rows.length){
+    $('hsa-content').innerHTML = '<div class="tbl-empty">No receipts yet &mdash; add rows to the HSA Receipts sheet (one expense per row).</div>';
+    return;
+  }
+
+  var shown = hsaShowOpenOnly
+    ? rows.filter(function(r){ return r.qualified && r.funding==='OOP' && (r.status==='open'||r.status==='partial'); })
+    : rows;
+  shown = shown.slice().sort(function(a,b){ return (b.dateIncurred||'').localeCompare(a.dateIncurred||''); });
+
+  var body = shown.map(function(r){
+    var st = r.qualified ? (HSA_STATUS[r.status]||HSA_STATUS.open) : HSA_STATUS.unqualified;
+    var statusCell = '<span class="hsa-status"><span class="hsa-glyph">'+st.g+'</span>'+st.t+'</span>';
+    var remaining  = Math.round((r.amount - r.reimbursedAmount)*100)/100;
+    var reimbCell  = (r.funding==='HSA')
+      ? '<span style="color:var(--faint)">n/a</span>'
+      : fmt(r.reimbursedAmount,2)+((r.reimbursedAmount>0 && r.reimbursedDate) ? '<span style="color:var(--faint);font-size:11px"> '+esc(r.reimbursedDate)+'</span>' : '');
+    var linkCell = r.receiptLink
+      ? '<a class="hsa-link" href="'+esc(r.receiptLink)+'" target="_blank" rel="noopener noreferrer">view</a>'
+      : '<span style="color:var(--faint)">&mdash;</span>';
+    var canReimburse = r.qualified && r.funding==='OOP' && remaining > 0.005;
+    var actionCell = canReimburse
+      ? '<button class="hsa-reimburse-btn" data-action="reimburseHsa" data-id="'+esc(String(r.id))+'">Reimburse</button>'
+      : '';
+    var descBit = r.description ? '<span style="color:var(--muted);font-size:12px"> &middot; '+esc(r.description)+'</span>' : '';
+    return '<tr>'+
+      '<td>'+statusCell+'</td>'+
+      '<td class="dt">'+esc(r.dateIncurred||'')+'</td>'+
+      '<td class="co r">'+fmt(r.amount,2)+'</td>'+
+      '<td class="dc">'+esc(r.provider||'')+descBit+'</td>'+
+      '<td>'+esc(r.category||'')+'</td>'+
+      '<td class="c">'+(r.funding==='HSA'?'HSA card':'Out of pocket')+'</td>'+
+      '<td class="co r">'+reimbCell+'</td>'+
+      '<td class="c">'+linkCell+'</td>'+
+      '<td class="r">'+actionCell+'</td>'+
+    '</tr>';
+  }).join('');
+
+  var filterBtn = '<button class="hsa-filter-btn" data-action="toggleHsaOpen">'+(hsaShowOpenOnly?'Show all':'Show only open')+'</button>';
+
+  $('hsa-content').innerHTML =
+    filterBtn+
+    '<div class="tbl-wrap"><table class="tbl"><thead><tr>'+
+    '<th>Status</th><th>Incurred</th><th class="r">Amount</th><th>Provider</th><th>Category</th><th class="c">Funding</th><th class="r">Reimbursed</th><th class="c">Receipt</th><th></th>'+
+    '</tr></thead><tbody>'+body+'</tbody></table></div>';
+}
+
+function toggleHsaOpen(){ hsaShowOpenOnly = !hsaShowOpenOnly; if(hsaData) renderHsa(hsaData); }
+
+function showHsaModal(id){
+  if(!SCRIPT_URL){ showSetup(); return; }
+  if(!hsaData) return;
+  var row = null, list = hsaData.rows || [];
+  for(var i=0;i<list.length;i++){ if(String(list[i].id)===String(id)){ row=list[i]; break; } }
+  if(!row) return;
+  hsaReimburseId = String(id);
+  $('hsa-modal-title').textContent = 'Reimburse: ' + (row.provider || ('receipt '+id));
+  $('hsa-modal-sub').textContent   = 'Expense ' + fmt(row.amount,2) + ' incurred ' + (row.dateIncurred||'') +
+    (row.reimbursedAmount>0 ? (' \u00b7 already reimbursed ' + fmt(row.reimbursedAmount,2)) : '');
+  $('hsa-modal-err').textContent   = '';
+  $('hsa-submit-btn').disabled     = false;
+  $('hsa-submit-btn').textContent  = 'Record reimbursement';
+  $('hsa-amount').value = row.amount.toFixed(2);   // absolute total; full = reimburse in full
+  $('hsa-date').value   = localToday();
+  teleportModal('hsa-modal-backdrop');
+  $('hsa-modal-backdrop').style.display = 'flex';
+  setTimeout(function(){ $('hsa-amount').focus(); $('hsa-amount').select(); }, 50);
+}
+
+function hideHsaModal(){ $('hsa-modal-backdrop').style.display='none'; hsaReimburseId=''; }
+
+async function submitHsaReimburse(){
+  var amount = parseFloat($('hsa-amount').value);
+  var date   = $('hsa-date').value;
+  if(isNaN(amount) || amount < 0){ $('hsa-modal-err').textContent='Enter a valid amount (0 or more).'; return; }
+  if(!date){ $('hsa-modal-err').textContent='Select a reimbursement date.'; return; }
+  if(!hsaReimburseId){ $('hsa-modal-err').textContent='No receipt selected.'; return; }
+  $('hsa-modal-err').textContent='';
+  $('hsa-submit-btn').disabled=true; $('hsa-submit-btn').textContent='Recording\u2026';
+  if(isDemo || !SCRIPT_URL){ hideHsaModal(); showBanner('Demo mode \u2014 reimbursement not saved','ok'); return; }
+  var id = hsaReimburseId;
+  try {
+    await apiPost(SCRIPT_URL, {
+      action:'reimburseReceipt', idemKey:genIdemKey('hsa'),
+      id:id, reimbursedAmount:amount, reimbursedDate:date
+    });
+    hideHsaModal();
+    showBanner('Reimbursement recorded: '+fmt(amount,2),'ok');
+    // Optimistic local row update so the table reflects it immediately; the
+    // authoritative refetch below corrects the hero totals.
+    if(hsaData && hsaData.rows){
+      for(var i=0;i<hsaData.rows.length;i++){
+        if(String(hsaData.rows[i].id)===String(id)){
+          var r=hsaData.rows[i];
+          r.reimbursedAmount=amount; r.reimbursedDate=(amount>0?date:'');
+          r.status=(amount<=0)?'open':(amount<r.amount?'partial':'reimbursed');
+          break;
+        }
+      }
+      renderHsa(hsaData);
+    }
+    loadHsa(true);  // authoritative refetch (server cache invalidated)
+  } catch(e){
+    $('hsa-modal-err').textContent='Network error \u2014 refresh to check before trying again.';
+    $('hsa-submit-btn').disabled=false; $('hsa-submit-btn').textContent='Record reimbursement';
+  }
+}
+
 // ── tabs ──
 function showTab(id,btn){
   document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active');});
@@ -5144,6 +5380,7 @@ function showTab(id,btn){
   if(id==='loans')    loadLoans();
   if(id==='mortgage') loadMortgage();
   if(id==='networth') loadNetWorth();
+  if(id==='hsa')      loadHsa();
 }
 
 // ── DEMO DATA ──

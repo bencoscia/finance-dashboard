@@ -95,6 +95,7 @@ function dispatch(payload) {
     else if (action === 'mortgage')        return getMortgageData();
     else if (action === 'cardTxns')        return getTransactionsByCard(payload.pm, payload.limit);
     else if (action === 'config')          return getConfig();
+    else if (action === 'hsa')             return getHsa();
     // Write actions
     else if (action === 'updateTransaction')  { var r = updateTransaction(payload);  if (payload.month) invalidateMonthCache(payload.month); invalidateCardBalanceCache(); return r; }
     else if (action === 'addTransaction')     { var r = _withIdem(payload, function(){ return addTransaction(payload); });     if (payload.month) invalidateMonthCache(payload.month); invalidateCardBalanceCache(); return r; }
@@ -114,6 +115,7 @@ function dispatch(payload) {
     else if (action === 'addVariableEntry')   { var r = _withIdem(payload, function(){ return addVariableEntry(payload); });   if (payload.month) invalidateMonthCache(payload.month); invalidateCardBalanceCache(); return r; }
     else if (action === 'updateVariableEntry') { invalidateCardBalanceCache(); return updateVariableEntry(payload); }
     else if (action === 'deleteVariableEntry') { invalidateCardBalanceCache(); return deleteVariableEntry(payload); }
+    else if (action === 'reimburseReceipt')   return _withIdem(payload, function(){ return reimburseReceipt(payload); }); // invalidates HSA cache internally
     else return { error: 'Unknown action: ' + action };
   } catch(err) {
     return { error: err.message };
@@ -140,6 +142,7 @@ function doGet(e) {
     else if (action === 'mortgage')        data = getMortgageData();
     else if (action === 'cardTxns')        data = getTransactionsByCard(e.parameter.pm, e.parameter.limit);
     else if (action === 'config')          data = getConfig();
+    else if (action === 'hsa')             data = getHsa();
     else data = { error: 'Unknown action: ' + action };
   } catch(err) {
     data = { error: err.message };
@@ -173,6 +176,7 @@ function doPost(e) {
     else if (p.action === 'makeCheckingEntry')  data = _withIdem(p, function(){ return makeCheckingEntry(p); });
     else if (p.action === 'updateVariableEntry') data = updateVariableEntry(p);
     else if (p.action === 'deleteVariableEntry') data = deleteVariableEntry(p);
+    else if (p.action === 'reimburseReceipt')   data = _withIdem(p, function(){ return reimburseReceipt(p); }); // invalidates HSA cache internally
     else data = { error: 'Unknown POST action: ' + p.action };
     // Invalidate caches for the affected month and card balances
     if (p.month) invalidateMonthCache(p.month);
@@ -1073,6 +1077,7 @@ function _configDefaults() {
     projectionTarget:     1000000,
     seedMonth:            SEED_MONTH_CONFIG,
     quarterlyExpenses:    QUARTERLY_EXPENSES,
+    hsaEstablished:       null,
   };
 }
 
@@ -1121,6 +1126,7 @@ function _applyRawConfig(out, raw) {
   if ('daycare_fsa_annual' in raw)     out.daycareFsaAnnual     = _cfgNum(raw['daycare_fsa_annual'], out.daycareFsaAnnual);
   if ('projection_target' in raw)      out.projectionTarget     = _cfgNum(raw['projection_target'], out.projectionTarget);
   if ('quarterly_expenses' in raw)     out.quarterlyExpenses    = _parseQuarterly(raw['quarterly_expenses'], out.quarterlyExpenses);
+  if ('hsa_established' in raw)         out.hsaEstablished       = _cfgDateStr(raw['hsa_established'], out.hsaEstablished);
   if ('seed_month' in raw) {
     var sm = raw['seed_month'];
     if (sm instanceof Date && !isNaN(sm.getTime()))
@@ -2722,3 +2728,201 @@ function saveNetWorthSnapshot(p) {
   return { ok: true, netWorth: Math.round(netWorth * 100) / 100, row: lastRow + 1 };
 }
 
+
+// ============================================================
+// HSA RECEIPTS -- reimbursement-entitlement ledger
+// The 'HSA Receipts' sheet holds one row per qualified medical expense. An
+// out-of-pocket (funding=OOP) expense that has not been reimbursed is a
+// tax-free withdrawal claim on the HSA; the receipt is its substantiation.
+// Two jobs: total the outstanding claims (the unreimbursed pool) and make each
+// claim reimbursable EXACTLY once (idempotency + the reimburse guards).
+// Sheet layout (see INDEX section 8): B1 = current HSA balance (manual, blank
+// if unknown), B2 = balance as-of date, header row 3, data rows 4+. Columns
+// A..K: id, date_incurred, amount, provider, description, category, funding,
+// receipt_link, reimbursed_amount, reimbursed_date, notes.
+// ============================================================
+var HSA_SHEET         = 'HSA Receipts';
+var HSA_DATA_ROW      = 4;          // 1-indexed first data row (headers on row 3)
+var HSA_CACHE_VERSION = 'hsa_v1';   // bump on getHsa response-shape change
+var HSA_CACHE_KEY     = HSA_CACHE_VERSION + '_data';
+
+function _hsaR2(x) { var f = parseFloat(x); return isNaN(f) ? 0 : Math.round(f * 100) / 100; }
+
+function _hsaDateStr(v) {
+  if (v instanceof Date && !isNaN(v.getTime()))
+    return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  var s = String(v == null ? '' : v).trim();
+  return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : '';
+}
+
+// Pure rollup -- no sheet access, so testHsa() can call it with a fixture.
+// rows: [{ id, dateIncurred, amount, provider, description, category, funding,
+//          receiptLink, reimbursedAmount, reimbursedDate }]
+// established: 'YYYY-MM-DD' or null (gate OFF when null -- cannot disqualify what
+//   we cannot compare; the response flags established:null so the UI warns).
+// hsaBalance: number or null (dependent metrics null when balance unknown).
+function _hsaRollups(rows, established, hsaBalance) {
+  var unreimbursed = 0, totalSubstantiated = 0;
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r       = rows[i];
+    var amount  = _hsaR2(r.amount);
+    var reimb   = _hsaR2(r.reimbursedAmount);
+    var funding = (String(r.funding || 'OOP').toUpperCase() === 'HSA') ? 'HSA' : 'OOP';
+    var qualified = true;
+    if (established && r.dateIncurred) qualified = (String(r.dateIncurred) >= String(established));
+    var status;
+    if (funding === 'HSA')      status = 'paid_direct';
+    else if (reimb <= 0)        status = 'open';
+    else if (reimb < amount)    status = 'partial';
+    else                        status = 'reimbursed';
+    if (qualified) {
+      totalSubstantiated += amount;
+      if (funding === 'OOP') unreimbursed += (amount - reimb);
+    }
+    out.push({
+      id:               r.id,
+      dateIncurred:     r.dateIncurred || '',
+      amount:           amount,
+      provider:         r.provider || '',
+      description:      r.description || '',
+      category:         r.category || '',
+      funding:          funding,
+      receiptLink:      r.receiptLink || '',
+      reimbursedAmount: reimb,
+      reimbursedDate:   r.reimbursedDate || '',
+      status:           status,
+      qualified:        qualified
+    });
+  }
+  unreimbursed       = _hsaR2(unreimbursed);
+  totalSubstantiated = _hsaR2(totalSubstantiated);
+  var reimbursableNow = (hsaBalance == null) ? null : _hsaR2(Math.min(unreimbursed, hsaBalance));
+  var stranded        = (hsaBalance == null) ? null : _hsaR2(Math.max(unreimbursed - hsaBalance, 0));
+  return {
+    rows:                out,
+    unreimbursed:        unreimbursed,
+    totalSubstantiated:  totalSubstantiated,
+    reimbursableNow:     reimbursableNow,
+    strandedEntitlement: stranded
+  };
+}
+
+// Reimburse guards -- pure, returns an error string or null. Tested directly.
+// row must carry { amount (number), funding, qualified }.
+function _reimburseGuard(row, reimbursedAmount) {
+  if (!row) return 'Receipt not found.';
+  if (String(row.funding).toUpperCase() === 'HSA')
+    return 'This expense was paid with the HSA card; it is not reimbursable.';
+  if (!row.qualified)
+    return 'This expense predates the HSA establishment date and does not qualify.';
+  var a = parseFloat(reimbursedAmount);
+  if (isNaN(a) || a < 0) return 'Reimbursement amount must be zero or more.';
+  if (a > _hsaR2(row.amount) + 0.005) return 'Reimbursement exceeds the expense amount.';
+  return null;
+}
+
+// Read the HSA Receipts data rows (row 4+) into parsed objects. Empty table
+// (lastRow < 4) returns [] without ever calling getRange with 0 rows.
+function _hsaReadRows(sheet) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < HSA_DATA_ROW) return [];
+  var n      = lastRow - (HSA_DATA_ROW - 1);
+  var values = sheet.getRange(HSA_DATA_ROW, 1, n, 11).getValues();
+  var rows   = [];
+  for (var i = 0; i < values.length; i++) {
+    var v  = values[i];
+    var id = v[0];
+    if ((id === '' || id == null) && (v[2] === '' || v[2] == null)) continue; // blank spacer
+    rows.push({
+      id:               (typeof id === 'number') ? id : String(id),
+      dateIncurred:     _hsaDateStr(v[1]),
+      amount:           v[2],
+      provider:         v[3],
+      description:      v[4],
+      category:         v[5],
+      funding:          v[6],
+      receiptLink:      (v[7] == null) ? '' : String(v[7]),
+      reimbursedAmount: v[8],
+      reimbursedDate:   _hsaDateStr(v[9])
+    });
+  }
+  return rows;
+}
+
+// -- GET: HSA receipts + rollups -------------------------------
+function getHsa() {
+  var cache = CacheService.getScriptCache();
+  try { var hit = cache.get(HSA_CACHE_KEY); if (hit) return JSON.parse(hit); } catch (e) {}
+
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(HSA_SHEET);
+  if (!sheet) return { error: 'Sheet not found: ' + HSA_SHEET };
+
+  // B1 = balance (blank => unknown => null, NEVER 0); B2 = as-of date.
+  var b1          = sheet.getRange(1, 2).getValue();
+  var hsaBalance  = (b1 === '' || b1 == null || isNaN(parseFloat(b1))) ? null : _hsaR2(b1);
+  var balanceAsOf = _hsaDateStr(sheet.getRange(2, 2).getValue()) || null;
+
+  var established = cfg().hsaEstablished || null;
+  var roll = _hsaRollups(_hsaReadRows(sheet), established, hsaBalance);
+
+  var result = {
+    established:         established,
+    hsaBalance:         hsaBalance,
+    balanceAsOf:        balanceAsOf,
+    unreimbursed:       roll.unreimbursed,
+    reimbursableNow:    roll.reimbursableNow,
+    totalSubstantiated: roll.totalSubstantiated,
+    strandedEntitlement: roll.strandedEntitlement,
+    rows:               roll.rows
+  };
+  try { cache.put(HSA_CACHE_KEY, JSON.stringify(result), 300); } catch (e) {}
+  return result;
+}
+
+function invalidateHsaCache() {
+  try { CacheService.getScriptCache().remove(HSA_CACHE_KEY); } catch (e) {}
+}
+
+// -- POST: reimburse a receipt (absolute reimbursed_amount) ----
+// Sets reimbursed_amount to an ABSOLUTE value (idempotent-friendly: a retry
+// writes the same number). Locates the row BY id (linear scan), never by
+// position, and only updates cells in place -- so it cannot hit the stale-row
+// -index bug class. Wrapped in _withIdem in both routers.
+function reimburseReceipt(p) {
+  var id = (p.id == null) ? '' : String(p.id);
+  if (!id) return { error: 'Missing receipt id.' };
+
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(HSA_SHEET);
+  if (!sheet) return { error: 'Sheet not found: ' + HSA_SHEET };
+
+  invalidateSheet(HSA_SHEET);
+  var values = readSheet(sheet);
+  var rowNum = -1, amount = 0, funding = 'OOP', dateIncurred = '';
+  for (var i = HSA_DATA_ROW - 1; i < values.length; i++) {
+    if (String(values[i][0]) === id) {
+      rowNum       = i + 1;
+      amount       = _hsaR2(values[i][2]);
+      funding      = String(values[i][6] || 'OOP');
+      dateIncurred = _hsaDateStr(values[i][1]);
+      break;
+    }
+  }
+  if (rowNum < 0) return { error: 'Receipt not found: ' + id };
+
+  var established = cfg().hsaEstablished || null;
+  var qualified   = !(established && dateIncurred) || (String(dateIncurred) >= String(established));
+  var guard = _reimburseGuard({ amount: amount, funding: funding, qualified: qualified }, p.reimbursedAmount);
+  if (guard) return { error: guard };
+
+  var amt  = _hsaR2(p.reimbursedAmount);
+  var dStr = _hsaDateStr(p.reimbursedDate) || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  sheet.getRange(rowNum, 9).setValue(amt).setNumberFormat('$#,##0.00');
+  if (amt > 0) sheet.getRange(rowNum, 10).setValue(new Date(dStr + 'T12:00:00')).setNumberFormat('yyyy-mm-dd');
+  else         sheet.getRange(rowNum, 10).clearContent(); // un-reimburse -> clear the date
+  SpreadsheetApp.flush();
+  invalidateHsaCache();
+  return { ok: true, id: id, reimbursedAmount: amt, reimbursedDate: (amt > 0 ? dStr : '') };
+}

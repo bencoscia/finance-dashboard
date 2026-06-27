@@ -625,6 +625,73 @@ function testHelperFunctions() {
 // runTests() -- fast suite (~10s): transaction CRUD, config, helpers
 // runSlowTests() -- full suite (~30s): includes card balances + monthly data scans
 
+// HSA rollup math + reimburse guards. Pure -- no sheet, so it runs in the fast
+// suite. Fixture mirrors INDEX section 8 and the build-spec worked example.
+function testHsa() {
+  section('HSA receipts (rollups + reimburse guards)');
+
+  // A/B/C/D = qualified; E = pre-establishment (must be excluded + flagged).
+  var rows = [
+    { id:1, dateIncurred:'2023-02-10', amount:1200, funding:'OOP', reimbursedAmount:0 },
+    { id:2, dateIncurred:'2023-05-04', amount:800,  funding:'OOP', reimbursedAmount:800 },
+    { id:3, dateIncurred:'2024-03-22', amount:2500, funding:'OOP', reimbursedAmount:1000 },
+    { id:4, dateIncurred:'2024-07-09', amount:300,  funding:'HSA', reimbursedAmount:0 },
+    { id:5, dateIncurred:'2021-06-01', amount:500,  funding:'OOP', reimbursedAmount:0 }
+  ];
+  var est = '2022-01-01';
+
+  var r5 = _hsaRollups(rows, est, 5000);
+  assertEqual(r5.unreimbursed, 2700, 'unreimbursed pool = 1200 + 0 + 1500');
+  assertEqual(r5.totalSubstantiated, 4800, 'total substantiated = 1200+800+2500+300 (E excluded)');
+  assertEqual(r5.reimbursableNow, 2700, 'reimbursable now = min(2700, 5000)');
+  assertEqual(r5.strandedEntitlement, 0, 'no stranded entitlement when balance >= pool');
+
+  var r2 = _hsaRollups(rows, est, 2000);
+  assertEqual(r2.reimbursableNow, 2000, 'reimbursable now capped by balance (2000)');
+  assertEqual(r2.strandedEntitlement, 700, 'stranded entitlement = 2700 - 2000');
+
+  var rNull = _hsaRollups(rows, est, null);
+  assertEqual(rNull.reimbursableNow, null, 'reimbursable now null when balance unknown');
+  assertEqual(rNull.strandedEntitlement, null, 'stranded null when balance unknown');
+  assertEqual(rNull.unreimbursed, 2700, 'unreimbursed unchanged when balance blank (not 0)');
+  assertEqual(rNull.totalSubstantiated, 4800, 'total substantiated unchanged when balance blank');
+
+  // Per-row status / qualified flags
+  var byId = {};
+  for (var i = 0; i < r5.rows.length; i++) byId[r5.rows[i].id] = r5.rows[i];
+  assertEqual(byId[1].status, 'open',        'row 1 open');
+  assertEqual(byId[2].status, 'reimbursed',  'row 2 reimbursed');
+  assertEqual(byId[3].status, 'partial',     'row 3 partial');
+  assertEqual(byId[4].status, 'paid_direct', 'row 4 paid_direct (HSA card)');
+  assertEqual(byId[5].qualified, false,      'row 5 flagged unqualified (predates HSA)');
+  assertEqual(byId[1].qualified, true,       'row 1 qualified');
+
+  // Empty input: no exception, all zero, rows []
+  var rEmpty = _hsaRollups([], est, 5000);
+  assertEqual(rEmpty.unreimbursed, 0, 'empty: unreimbursed 0');
+  assertEqual(rEmpty.totalSubstantiated, 0, 'empty: total substantiated 0');
+  assertEqual(rEmpty.reimbursableNow, 0, 'empty: reimbursable now 0 (balance present)');
+  assertEqual(rEmpty.rows.length, 0, 'empty: no rows');
+
+  // Gate off when no establishment date: nothing disqualified
+  var rNoEst = _hsaRollups(rows, null, 5000);
+  assertEqual(rNoEst.unreimbursed, 3200, 'no establishment date -> E (500) now counts (gate off)');
+
+  // Reimburse guards
+  assertEqual(_reimburseGuard({ amount:1200, funding:'OOP', qualified:true }, 1200), null,
+    'guard allows valid full reimbursement');
+  assertEqual(_reimburseGuard({ amount:1200, funding:'OOP', qualified:true }, 600), null,
+    'guard allows valid partial reimbursement');
+  assert(_reimburseGuard({ amount:300, funding:'HSA', qualified:true }, 300) !== null,
+    'guard rejects funding=HSA (already HSA-paid)');
+  assert(_reimburseGuard({ amount:500, funding:'OOP', qualified:false }, 500) !== null,
+    'guard rejects pre-establishment row');
+  assert(_reimburseGuard({ amount:1200, funding:'OOP', qualified:true }, 1500) !== null,
+    'guard rejects over-amount reimbursement');
+  assert(_reimburseGuard({ amount:1200, funding:'OOP', qualified:true }, -5) !== null,
+    'guard rejects negative amount');
+}
+
 function testMortgageSingleSource() {
   section('mortgage single source (net worth == ledger, not B8)');
 
@@ -704,6 +771,7 @@ function _runTestSuite(includeSlow) {
     testHelperFunctions();
     testIdempotency();
     testConfigParsing();
+    testHsa();
     testMonthCacheTiers();
 
     if (includeSlow) {
