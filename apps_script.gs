@@ -2097,8 +2097,15 @@ function updateLoanBalance(p) {
 // The schedule is a FULL amortization to payoff; rows with N=TRUE are logged
 // actuals, the remainder is the sheet's own forward projection. We read it as
 // the source of truth rather than re-deriving the schedule. Read-only.
-function getMortgageData() {
-  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+// Single source of truth for the mortgage's CURRENT principal balance.
+// Reads the Loans!M:W amortization block and returns the parsed ledger plus the
+// "current" row = the last row flagged paid (N===TRUE), else the last row.
+// BOTH getMortgageData (mortgage tab) and _computeNetWorth (net-worth liability)
+// consume this, so the two views can never disagree. See INDEX: B8 and the ledger
+// were previously two hand-maintained sources ~one month's principal apart; this
+// collapses them to one definition.
+function readMortgageLedger(ss) {
+  ss = ss || SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName('Loans');
   if (!sheet) return { error: 'Loans sheet not found' };
   // Bounded read (A1:W{<=500}) -- the schedule ends well before row 500 and
@@ -2140,34 +2147,62 @@ function getMortgageData() {
   }
   if (!ledger.length) return { error: 'No mortgage rows found in Loans!M:W' };
 
-  var pa = ss.getSheetByName('Physical Assets');
-  var b8 = pa ? num(pa.getRange(8, 2).getValue()) : null;   // net-worth mortgage source
+  // "current" = last logged-actual month; before any payment is logged, the first row.
+  var curIdx = (lastPaidIdx >= 0) ? lastPaidIdx : ledger.length - 1;
+  return {
+    origRate:    origRate,
+    valuation:   valuation,
+    purchase:    purchase,
+    ledger:      ledger,
+    refiRate:    refiRate,
+    refiAtIdx:   refiAtIdx,
+    lastPaidIdx: lastPaidIdx,
+    curIdx:      curIdx,
+    curBalance:  ledger[curIdx].balance,   // <-- the ONE mortgage-balance definition
+    costInitial:   r2(at(9, 23)),    // W9  initial projected total P&I
+    costProjected: r2(at(10, 23)),   // W10 current projected total P&I
+    costSavings:   r2(at(11, 23))    // W11 saved vs original via extra principal
+  };
+}
 
-  var payoff  = ledger[ledger.length - 1];
-  var cur     = (lastPaidIdx >= 0) ? ledger[lastPaidIdx] : ledger[ledger.length - 1];
-  var effRate = (refiRate != null) ? refiRate : origRate;
+function getMortgageData() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var m  = readMortgageLedger(ss);
+  if (m.error) return m;
+  function r2(x){ var f = parseFloat(x); return isNaN(f) ? null : Math.round(f * 100) / 100; }
+
+  // B8 is now LEGACY: a hand-typed cell that net worth no longer reads. We still
+  // surface it so the tab can flag if it has drifted from the schedule (a manual
+  // cross-check), but it is NOT a source of truth.
+  var pa = ss.getSheetByName('Physical Assets');
+  var b8 = pa ? r2(pa.getRange(8, 2).getValue()) : null;
+
+  var payoff  = m.ledger[m.ledger.length - 1];
+  var cur     = m.ledger[m.curIdx];
+  var effRate = (m.refiRate != null) ? m.refiRate : m.origRate;
 
   return {
-    origRate:      origRate != null ? Math.round(origRate * 10000) / 100 : null, // %
-    refiRate:      refiRate != null ? Math.round(refiRate * 10000) / 100 : null, // %
-    rate:          effRate  != null ? Math.round(effRate  * 10000) / 100 : null, // % in effect
-    valuation:     r2(valuation),
-    purchasePrice: r2(purchase),
+    origRate:      m.origRate != null ? Math.round(m.origRate * 10000) / 100 : null, // %
+    refiRate:      m.refiRate != null ? Math.round(m.refiRate * 10000) / 100 : null, // %
+    rate:          effRate    != null ? Math.round(effRate    * 10000) / 100 : null, // % in effect
+    valuation:     r2(m.valuation),
+    purchasePrice: r2(m.purchase),
     currentBalance: cur.balance,
     currentDate:    cur.date,
-    equity:        (valuation != null) ? Math.round((valuation - cur.balance) * 100) / 100 : null,
+    equity:        (m.valuation != null) ? Math.round((m.valuation - cur.balance) * 100) / 100 : null,
     equityPct:     cur.equityPct,
     payment:       cur.payment,
     principalAndInterest: (cur.interest != null && cur.principal != null) ? Math.round((cur.interest + cur.principal) * 100) / 100 : null,
     escrow:        cur.escrow,
     payoffDate:    payoff.date,
-    refiAtIdx:     refiAtIdx,
-    lastPaidIdx:   lastPaidIdx,
-    costInitial:   r2(at(9, 23)),    // W9  initial projected total P&I
-    costProjected: r2(at(10, 23)),   // W10 current projected total P&I
-    costSavings:   r2(at(11, 23)),   // W11 saved vs original via extra principal
-    physicalAssetsBalance: r2(b8),   // for the net-worth reconciliation note
-    ledger: ledger
+    refiAtIdx:     m.refiAtIdx,
+    lastPaidIdx:   m.lastPaidIdx,
+    costInitial:   m.costInitial,    // W9
+    costProjected: m.costProjected,  // W10
+    costSavings:   m.costSavings,    // W11
+    physicalAssetsBalance: b8,       // legacy B8 -- informational cross-check only
+    mortgageSource: 'ledger',        // net worth derives from this same ledger now
+    ledger: m.ledger
   };
 }
 
@@ -2514,10 +2549,23 @@ function _computeNetWorth() {
 
   // -- Liabilities --
   var mortgage = 0, studentLoans = 0;
-  // Mortgage: Physical Assets!B8 (index 7, col B = index 1)
-  if (paSheet) {
-    var paVals2 = readSheet(paSheet);
-    if (paVals2.length > 7 && typeof paVals2[7][1] === 'number') mortgage = paVals2[7][1];
+  // Mortgage: the current principal balance is the SINGLE source of truth, held in
+  // the Loans ledger (last row flagged paid) and read via readMortgageLedger(). The
+  // mortgage tab reads the same value, so the two views can never disagree. We no
+  // longer read the hand-typed Physical Assets!B8 (see INDEX: mortgage reconciliation).
+  var mort = readMortgageLedger(ss);
+  if (!mort.error && typeof mort.curBalance === 'number') {
+    mortgage = mort.curBalance;
+  } else {
+    // Degrade gracefully, never silently: a failed ledger read must NOT book $0 of
+    // mortgage debt (that overstates net worth by the full balance, and _nwLooksValid
+    // does not check liabilities so it would cache the bad result). Fall back to the
+    // legacy B8 cell and log loudly.
+    if (paSheet) {
+      var paVals2 = readSheet(paSheet);
+      if (paVals2.length > 7 && typeof paVals2[7][1] === 'number') mortgage = paVals2[7][1];
+    }
+    Logger.log('netWorth: mortgage ledger unavailable (' + (mort.error || 'no curBalance') + '); fell back to Physical Assets!B8 = ' + mortgage);
   }
   // Student loans: Loans!D26 (index 25, col D = index 3)
   var loansSheet = ss.getSheetByName('Loans');
@@ -2631,7 +2679,7 @@ function _computeNetWorth() {
     snapshots:       snapshots,
     projections:     projections,
     snapshotExists:  !!nwSheet,
-    codeVersion:     'nw-2026-06-10-a',
+    codeVersion:     'nw-2026-06-16-mortgage-ledger',
   };
 }
 
