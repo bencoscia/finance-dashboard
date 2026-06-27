@@ -64,6 +64,7 @@ Google Sheet  ◄──►  apps_script.gs (Web App: doGet reads / doPost writes
 - **HSA double-reimbursement (cardinal risk).** Paying out a receipt twice is an over-withdrawal the IRS can claw back. Two layers: `reimburseReceipt` is `_withIdem`-wrapped **and** writes `reimbursed_amount` as an **absolute** value (a retry writes the same number, never adds), plus a server `_reimburseGuard` rejecting `> amount`, negative, `funding=HSA`, and pre-establishment rows. The UI "Reimburse to total ($)" field is the absolute total, not an increment — keep it so.
 - **HSA establishment gate.** Only expenses on/after `Config!hsa_established` qualify; earlier rows are flagged ⚠ and excluded from every total. **Blank `hsa_established` → gate OFF** (nothing disqualified) and the tab shows a ⚠ banner — set it or totals overstate.
 - **HSA balance is `B1`, blank ≠ 0.** `HSA Receipts!B1` (manual) is the only balance source; **blank → `null` → renders "—", never `$0`**, and `reimbursableNow`/`strandedEntitlement` stay `null` (not computed against 0). HSA is **not** in net worth yet (§9). Receipts store a **Drive link**, never an embedded image.
+- **`cfg()` cache is shape-versioned (`CFG_CACHE_KEY`, 5-min TTL) — bump it on every Config-shape change, not just `getNetWorth`'s.** Adding `hsaEstablished` without bumping `cfg_v1`→`cfg_v2` meant a config cached moments before the redeploy kept serving the old shape (missing the field) for up to 5 min — surfaced as "No HSA establishment date set" even with the sheet row correct. Same root cause as the documented `nw_v1`→`nw_v3` incident (§ bug class 2), now also true of `cfg()`. `testConfigParsing` has a regression assert for `hsa_established`'s round-trip, but it can't catch a forgotten version bump — that's a manual checklist item.
 
 ---
 
@@ -72,18 +73,20 @@ Google Sheet  ◄──►  apps_script.gs (Web App: doGet reads / doPost writes
 **Read actions (15)** — registered in both chains, served by `doGet`:
 `all · quick · monthly · networth · transactions · fixed · variableEntries · accounts · cardTotals · cardBalances · cardTxns · config · loans · mortgage · hsa`
 
-**Write actions (19)** — `doPost` (★ = `_withIdem`-wrapped):
-`addTransaction★ · updateTransaction · deleteTransaction · splitTransaction · setFixedPaid · updateFixedCost · updateFixedName · updateLoanBalance★ · makeCardPayment★ · voidLastPayment · setSeedBalance · addVariableEntry★ · updateVariableEntry · deleteVariableEntry · makeCheckingEntry★ · saveNetWorthSnapshot · logCreditSnapshot · addMonth · reimburseReceipt★`
+**Write actions (20)** — `doPost` (★ = `_withIdem`-wrapped):
+`addTransaction★ · updateTransaction · deleteTransaction · splitTransaction · setFixedPaid · updateFixedCost · updateFixedName · updateLoanBalance★ · makeCardPayment★ · voidLastPayment · setSeedBalance · addVariableEntry★ · updateVariableEntry · deleteVariableEntry · makeCheckingEntry★ · saveNetWorthSnapshot · logCreditSnapshot · addMonth · reimburseReceipt★ · addHsaReceipt★`
 
 **Sheets touched:** `Loans`, `Physical Assets`, `Credit`, `Discover Savings`, `Portfolio Management`, `Net Worth`, `Card Payments`, `Card Trackers`, `Config`, `HSA Receipts`, `Template`, and the monthly sheets (`"<Month> YYYY"`).
 
-**Key helpers:** `readSheet(name|sheet)` (cached per-request 2-D values) · `_withIdem(payload, fn)` (idempotency keys in CacheService, 6 h) · `cfg()` (reads `Config`, 5-min cache, per-key fallback to hardcoded defaults) · cache invalidation per month/card/net-worth.
+**Key helpers:** `readSheet(name|sheet)` (cached per-request 2-D values) · `_withIdem(payload, fn)` (idempotency keys in CacheService, 6 h) · `cfg()` (reads `Config`, 5-min cache under shape-versioned `CFG_CACHE_KEY` — bump on any shape change, see §4 trap) · cache invalidation per month/card/net-worth/HSA.
 
 ---
 
 ## 6. Client reference (`index.html`)
 
 **Tabs (9):** `thisweek` (landing; driven by `all`/`quick` + Quick Add) · `accounts` · `txns` · `fixed` (Recurring expenses) · `budget` (merged Monthly+Breakdown) · `networth` · `loans` (**label: "Student Loans"**, id stays `loans`) · `mortgage` · `hsa`.
+
+**Quick Add (6 types):** `txn · groceries · gas · payment · checking · hsa`. Global trigger (`+ Add`, header) defaults to `txn`; the HSA tab's own `+ Add receipt` button opens the same modal preset to `hsa` (`showQuickAdd(e)` reads `data-qa-type` off the clicked element, falling back to `txn`). The `hsa` type is the only one not gated by `qaCurMonth()` — it writes to `HSA Receipts`, not a monthly sheet — and is the only type with an explicit demo-mode guard (the other 5 currently lack one — pre-existing gap, not yet fixed).
 
 **Loaders:** `loadAccounts · loadFixed · loadLoans · loadMortgage · loadNetWorth · loadTxns · loadHsa · loadSaved` (+ initial `all` fetch). Tab lazy-load is wired in `showTab(id)` (`if(id==='x') loadX();`).
 
@@ -121,7 +124,7 @@ Google Sheet  ◄──►  apps_script.gs (Web App: doGet reads / doPost writes
 - **Monthly sheets `"<Month> YYYY"`.** Per-month transactions/fixed/variable; the hot path for `getMonthlyData` (cached: CacheService + durable PropertiesService tier; recompute only changed months).
 - **`Config`.** `key | value | notes`; read by `cfg()`. Holds `BUDGET`, `DC_AMOUNT`, `DC_CLOSED_MONDAYS`, `QUARTERLY_EXPENSES`, `PROJECTION_TARGET`, `SEED_MONTH_CONFIG` (each with a hardcoded fallback), and `hsa_established` (HSA qualifying-date gate; **no fallback — blank disables the gate**, see §4).
 - **`Net Worth`.** Snapshots written by `saveNetWorthSnapshot`.
-- **`HSA Receipts` — reimbursement-entitlement ledger.** Metadata: **`B1` = current HSA balance (manual; blank→`null`, never 0), `B2` = balance as-of date.** Headers on **row 3**, data **rows 4+**. Cols A–K: A `id` (stable positive int, never reused — `reimburseReceipt` locates rows by id, not position), B `date_incurred`, C `amount`, D `provider`, E `description`, F `category`, G `funding` (`OOP`|`HSA`), H `receipt_link` (Drive URL), I `reimbursed_amount` (**absolute**; written by `reimburseReceipt`), J `reimbursed_date`, K `notes`. Read by `getHsa` → `{established, hsaBalance, balanceAsOf, unreimbursed, reimbursableNow, totalSubstantiated, strandedEntitlement, rows[]}`. Pure helpers `_hsaRollups` / `_reimburseGuard` are unit-tested in `testHsa`. **No edit/delete endpoints — correct rows directly in the Sheet.**
+- **`HSA Receipts` — reimbursement-entitlement ledger.** Metadata: **`B1` = current HSA balance (manual; blank→`null`, never 0), `B2` = balance as-of date.** Headers on **row 3**, data **rows 4+**. Cols A–K: A `id` (stable positive int, never reused — `reimburseReceipt` locates rows by id, not position), B `date_incurred`, C `amount`, D `provider`, E `description`, F `category`, G `funding` (`OOP`|`HSA`), H `receipt_link` (Drive URL), I `reimbursed_amount` (**absolute**; written by `reimburseReceipt`), J `reimbursed_date`, K `notes`. Read by `getHsa` → `{established, hsaBalance, balanceAsOf, unreimbursed, reimbursableNow, totalSubstantiated, strandedEntitlement, rows[]}`. Written by `addHsaReceipt` (plain append — no formulas below the data block, so no `insertCells`/SUM-repair needed; **id = max existing id + 1, computed and written inside a `LockService.getScriptLock()` so two near-simultaneous adds can't collide on the same id**) and `reimburseReceipt`. Pure helpers `_hsaRollups` / `_reimburseGuard` are unit-tested in `testHsa`; `addHsaReceipt` has a scratch-sheet integration test (`testAddHsaReceipt`, sheet `_TestScratchHsa_` — never the live sheet). **No edit/delete endpoints — correct rows directly in the Sheet.**
 
 ---
 

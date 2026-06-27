@@ -965,6 +965,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
         <div class="metric"><div class="mlabel">Total substantiated</div><div class="mval sk" style="height:26px;width:120px"> </div></div>
       </div>
       <div id="hsa-note-area"></div>
+      <div style="margin-bottom:10px"><button class="hsa-filter-btn" data-action="showQuickAdd" data-qa-type="hsa">+ Add receipt</button></div>
       <div id="hsa-content"><div class="tbl-empty">Loading&hellip;</div></div>
     </div>
 
@@ -1120,6 +1121,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
       <button class="qa-seg-btn" data-action="qaSetType" data-qa-type="gas">Gas</button>
       <button class="qa-seg-btn" data-action="qaSetType" data-qa-type="payment">Payment</button>
       <button class="qa-seg-btn" data-action="qaSetType" data-qa-type="checking">Deposit</button>
+      <button class="qa-seg-btn" data-action="qaSetType" data-qa-type="hsa">HSA receipt</button>
     </div>
     <div id="qa-fields"></div>
     <div class="pay-modal-err" id="qa-err"></div>
@@ -1678,8 +1680,10 @@ function gotoNetWorth(){ var b=document.querySelector('.tab-btn[data-tab="networ
 // ── QUICK ADD ─────────────────────────────────────────────────
 var qaType='txn';
 
-function showQuickAdd(){
-  qaType='txn'; qaRenderSeg(); qaRenderFields();
+function showQuickAdd(e){
+  var el = e && e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+  qaType = (el && el.dataset.qaType) || 'txn';
+  qaRenderSeg(); qaRenderFields();
   $('qa-err').textContent='';
   $('qa-modal-backdrop').style.display='flex';
 }
@@ -1722,6 +1726,15 @@ function qaRenderFields(){
       field('Date','<input type="date" id="qa-date" value="'+today+'">')+
       field('Description','<input type="text" id="qa-desc" value="Paycheck">')+
       field('Amount ($)','<input type="number" id="qa-amt" step="0.01" placeholder="0.00">');
+  } else if(qaType==='hsa'){
+    f.innerHTML=
+      field('Date incurred','<input type="date" id="qa-date" value="'+today+'">')+
+      field('Amount ($)','<input type="number" id="qa-amt" step="0.01" min="0.01" placeholder="0.00">')+
+      field('Provider','<input type="text" id="qa-hsa-provider" placeholder="e.g. Summit Dental">')+
+      field('Description','<input type="text" id="qa-desc" placeholder="e.g. Crown">')+
+      field('Category','<input type="text" id="qa-hsa-category" placeholder="e.g. Dental">')+
+      field('Funding','<select id="qa-hsa-funding" class="msel" style="width:100%"><option value="OOP">Out of pocket (reimbursable)</option><option value="HSA">Paid with HSA card</option></select>')+
+      field('Receipt link (optional)','<input type="url" id="qa-hsa-link" placeholder="https://drive.google.com/...">');
   } else {
     var cardSel='<select id="qa-card" class="msel" style="width:100%">'+
       CARD_MAP.map(function(c){return '<option value="'+esc(c.sheetKey)+'">'+esc(c.name)+'</option>';}).join('')+'</select>';
@@ -1739,7 +1752,7 @@ async function submitQuickAdd(){
   var amt=amtEl?parseFloat(amtEl.value):NaN;
   $('qa-err').textContent='';
   if(isNaN(amt)){ $('qa-err').textContent='Enter an amount.'; return; }
-  if(!month){ $('qa-err').textContent='No month loaded yet — refresh first.'; return; }
+  if(!month && qaType!=='hsa'){ $('qa-err').textContent='No month loaded yet — refresh first.'; return; }
   btn.disabled=true; btn.textContent='Saving…';
   try{
     if(qaType==='txn'){
@@ -1763,6 +1776,17 @@ async function submitQuickAdd(){
         amount:isDep?Math.abs(amt):-Math.abs(amt),
         date:$('qa-date').value});
       quickRefresh(); refreshCardBalances();
+    } else if(qaType==='hsa'){
+      if(amt<=0){ $('qa-err').textContent='Enter a receipt amount greater than zero.'; return; }
+      if(isDemo || !SCRIPT_URL){ hideQuickAdd(); showBanner('Demo mode — receipt not saved','ok'); return; }
+      await apiPost(SCRIPT_URL,{action:'addHsaReceipt', idemKey:genIdemKey('hsaAdd'),
+        dateIncurred:$('qa-date').value, amount:amt,
+        provider:$('qa-hsa-provider').value.trim(),
+        description:$('qa-desc').value.trim(),
+        category:$('qa-hsa-category').value.trim(),
+        funding:$('qa-hsa-funding').value,
+        receiptLink:$('qa-hsa-link').value.trim()});
+      loadHsa(true); // authoritative refetch -- separate sheet, not part of quickRefresh/card balances
     } else {
       var key=$('qa-card').value;
       await apiPost(SCRIPT_URL,{action:'makeCardPayment', idemKey:genIdemKey('pay'), month:month,
@@ -5265,7 +5289,7 @@ function renderHsa(d){
 
   // -- Ledger --
   if(!rows.length){
-    $('hsa-content').innerHTML = '<div class="tbl-empty">No receipts yet &mdash; add rows to the HSA Receipts sheet (one expense per row).</div>';
+    $('hsa-content').innerHTML = '<div class="tbl-empty">No receipts yet &mdash; use "+ Add receipt" above, or add rows directly in the HSA Receipts sheet.</div>';
     return;
   }
 

@@ -116,6 +116,7 @@ function dispatch(payload) {
     else if (action === 'updateVariableEntry') { invalidateCardBalanceCache(); return updateVariableEntry(payload); }
     else if (action === 'deleteVariableEntry') { invalidateCardBalanceCache(); return deleteVariableEntry(payload); }
     else if (action === 'reimburseReceipt')   return _withIdem(payload, function(){ return reimburseReceipt(payload); }); // invalidates HSA cache internally
+    else if (action === 'addHsaReceipt')      return _withIdem(payload, function(){ return addHsaReceipt(payload); });   // invalidates HSA cache internally
     else return { error: 'Unknown action: ' + action };
   } catch(err) {
     return { error: err.message };
@@ -177,6 +178,7 @@ function doPost(e) {
     else if (p.action === 'updateVariableEntry') data = updateVariableEntry(p);
     else if (p.action === 'deleteVariableEntry') data = deleteVariableEntry(p);
     else if (p.action === 'reimburseReceipt')   data = _withIdem(p, function(){ return reimburseReceipt(p); }); // invalidates HSA cache internally
+    else if (p.action === 'addHsaReceipt')      data = _withIdem(p, function(){ return addHsaReceipt(p); });   // invalidates HSA cache internally
     else data = { error: 'Unknown POST action: ' + p.action };
     // Invalidate caches for the affected month and card balances
     if (p.month) invalidateMonthCache(p.month);
@@ -1038,7 +1040,7 @@ function addTransaction(p) {
 // Parsed result is cached 5 minutes (edits take effect within that).
 // Run setupConfigSheet() in migrate.gs once to create the sheet.
 var CONFIG_SHEET  = 'Config';
-var CFG_CACHE_KEY = 'cfg_v1';
+var CFG_CACHE_KEY = 'cfg_v2'; // v2: added hsaEstablished -- bump on every shape change (lesson: stale-shape cache, see INDEX trap)
 var _cfgMemo = null;
 
 function cfg() {
@@ -2925,4 +2927,59 @@ function reimburseReceipt(p) {
   SpreadsheetApp.flush();
   invalidateHsaCache();
   return { ok: true, id: id, reimbursedAmount: amt, reimbursedDate: (amt > 0 ? dStr : '') };
+}
+
+// -- POST: add a new receipt row -------------------------------
+// Plain append -- HSA Receipts has no formulas or sections below the data
+// block (verified against the live sheet), so this is a single setValues
+// call, not the insertCells/SUM-repair dance the monthly sheets need.
+// LockService guards id assignment: two near-simultaneous adds (e.g. both
+// household members logging a receipt at once) must never compute the same
+// "next id" -- a duplicate id would corrupt the by-id lookup reimburseReceipt
+// depends on. Wrapped in _withIdem in both routers for retry-safety.
+function addHsaReceipt(p, sheetNameOverride) {
+  var amount = parseFloat(p.amount);
+  if (isNaN(amount) || amount <= 0) return { error: 'Amount must be a positive number.' };
+  var dateStr = String(p.dateIncurred || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return { error: 'Invalid or missing date incurred.' };
+  var funding = (String(p.funding || 'OOP').toUpperCase() === 'HSA') ? 'HSA' : 'OOP';
+  var receiptLink = String(p.receiptLink || '').trim();
+  if (receiptLink && !/^https?:\/\//i.test(receiptLink))
+    return { error: 'Receipt link must start with http:// or https://' };
+
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(sheetNameOverride || HSA_SHEET);
+  if (!sheet) return { error: 'Sheet not found: ' + (sheetNameOverride || HSA_SHEET) };
+
+  var lock = LockService.getScriptLock();
+  var gotLock = false;
+  try { gotLock = lock.tryLock(5000); } catch (e) {}
+  if (!gotLock) return { error: 'Could not acquire lock -- please try again.' };
+
+  try {
+    invalidateSheet(sheetNameOverride || HSA_SHEET);
+    var values = readSheet(sheet);
+    var maxId = 0;
+    for (var i = HSA_DATA_ROW - 1; i < values.length; i++) {
+      var n = parseInt(values[i][0], 10);
+      if (!isNaN(n) && n > maxId) maxId = n;
+    }
+    var newId = maxId + 1;
+    var insertRow = Math.max(sheet.getLastRow() + 1, HSA_DATA_ROW);
+    var row = [
+      newId, new Date(dateStr + 'T12:00:00'), amount,
+      String(p.provider || '').trim(), String(p.description || '').trim(),
+      String(p.category || '').trim(), funding, receiptLink, '', '',
+      String(p.notes || '').trim()
+    ];
+    sheet.getRange(insertRow, 1, 1, row.length).setValues([row]);
+    sheet.getRange(insertRow, 1).setNumberFormat('0');
+    sheet.getRange(insertRow, 2).setNumberFormat('yyyy-mm-dd');
+    sheet.getRange(insertRow, 3).setNumberFormat('$#,##0.00');
+    SpreadsheetApp.flush();
+    invalidateHsaCache();
+    return { ok: true, id: newId, row: insertRow };
+  } finally {
+    lock.releaseLock();
+  }
 }

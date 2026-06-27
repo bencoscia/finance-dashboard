@@ -13,6 +13,7 @@
 // ============================================================
 
 var TEST_SHEET_NAME = '_TestScratch_';
+var HSA_TEST_SHEET_NAME = '_TestScratchHsa_'; // separate from TEST_SHEET_NAME -- different column layout (HSA Receipts schema), shared scratch sheet already has a fixed transaction layout other tests depend on throughout the run
 var _testPass = 0;
 var _testFail = 0;
 var _testLog  = [];
@@ -91,6 +92,27 @@ function createScratchSheet() {
   sheet.getRange(rows.length + 3, 2).setValue('Recurring Fixed Expenses');
   sheet.getRange(rows.length + 4, 2).setValue('Total Expenses');
   sheet.getRange(rows.length + 4, 3).setValue(927.54);
+  return sheet;
+}
+
+// Mirrors the live HSA Receipts layout: B1/B2 balance metadata (left blank --
+// addHsaReceipt doesn't touch them), headers row 3, data rows 4+. Cleared and
+// re-created each run so id-assignment tests start from a known empty state.
+function createHsaScratchSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(HSA_TEST_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(HSA_TEST_SHEET_NAME);
+    sheet.hideSheet();
+  } else {
+    sheet.clearContents();
+  }
+  sheet.getRange(1, 1).setValue('Account balance');
+  sheet.getRange(2, 1).setValue('Balance as of');
+  sheet.getRange(3, 1, 1, 11).setValues([[
+    'id','date_incurred','amount','provider','description',
+    'category','funding','receipt_link','reimbursed_amount','reimbursed_date','notes'
+  ]]);
   return sheet;
 }
 
@@ -557,6 +579,18 @@ function testConfigParsing() {
   assertEqual(out.budget, 14000, 'Raw budget override applies');
   assertEqual(out.daycareAmount, 2500, 'Raw daycare override applies');
   assertEqual(out.projectionTarget, 1000000, 'Untouched keys keep defaults');
+
+  // Regression: hsa_established must round-trip through the same path as
+  // every other Config key (this is what broke -- a stale CFG_CACHE_KEY
+  // served pre-HSA-shape config and showed "no establishment date" even
+  // with the sheet row present; see INDEX trap on cfg() cache versioning).
+  var out2 = _configDefaults();
+  assertEqual(out2.hsaEstablished, null, 'hsaEstablished defaults to null');
+  _applyRawConfig(out2, { 'hsa_established': new Date(2025, 3, 17, 12) });
+  assertEqual(out2.hsaEstablished, '2025-04-17', 'hsa_established Date applies via _cfgDateStr');
+  var out3 = _configDefaults();
+  _applyRawConfig(out3, { 'hsa_established': '2025-04-17' });
+  assertEqual(out3.hsaEstablished, '2025-04-17', 'hsa_established ISO string applies');
 }
 
 function testIdempotency() {
@@ -692,6 +726,45 @@ function testHsa() {
     'guard rejects negative amount');
 }
 
+function testAddHsaReceipt() {
+  section('addHsaReceipt (scratch sheet -- never touches live HSA Receipts)');
+  createHsaScratchSheet();
+  _resetCaches();
+
+  var r1 = addHsaReceipt({
+    dateIncurred:'2026-05-01', amount:120.5, provider:'Test Clinic',
+    description:'Checkup', category:'Office', funding:'OOP'
+  }, HSA_TEST_SHEET_NAME);
+  assert(r1.ok, 'first add returns ok');
+  assertEqual(r1.id, 1, 'first receipt gets id 1');
+
+  var r2 = addHsaReceipt({
+    dateIncurred:'2026-05-02', amount:50, provider:'Pharmacy', funding:'HSA'
+  }, HSA_TEST_SHEET_NAME);
+  assert(r2.ok, 'second add returns ok');
+  assertEqual(r2.id, 2, 'second receipt gets id 2 (max+1, ids never reused)');
+
+  // Validation guards -- each must reject WITHOUT writing a row
+  assert(addHsaReceipt({ dateIncurred:'2026-05-01', amount:-5 }, HSA_TEST_SHEET_NAME).error,
+    'rejects non-positive amount');
+  assert(addHsaReceipt({ dateIncurred:'2026-05-01', amount:0 }, HSA_TEST_SHEET_NAME).error,
+    'rejects zero amount');
+  assert(addHsaReceipt({ dateIncurred:'not-a-date', amount:10 }, HSA_TEST_SHEET_NAME).error,
+    'rejects malformed date');
+  assert(addHsaReceipt({ dateIncurred:'', amount:10 }, HSA_TEST_SHEET_NAME).error,
+    'rejects missing date');
+  assert(addHsaReceipt({ dateIncurred:'2026-05-01', amount:10, receiptLink:'javascript:alert(1)' }, HSA_TEST_SHEET_NAME).error,
+    'rejects non-http(s) receipt link');
+
+  _resetCaches();
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(HSA_TEST_SHEET_NAME);
+  var rows  = _hsaReadRows(sheet);
+  assertEqual(rows.length, 2, 'exactly 2 rows present -- failed validations wrote nothing');
+  assertEqual(rows[0].id, 1, 'row 1 id correct on the sheet');
+  assertEqual(rows[1].funding, 'HSA', 'row 2 funding correct on the sheet');
+  assertApprox(rows[0].amount, 120.5, 'row 1 amount correct on the sheet');
+}
+
 function testMortgageSingleSource() {
   section('mortgage single source (net worth == ledger, not B8)');
 
@@ -772,6 +845,7 @@ function _runTestSuite(includeSlow) {
     testIdempotency();
     testConfigParsing();
     testHsa();
+    testAddHsaReceipt();
     testMonthCacheTiers();
 
     if (includeSlow) {
