@@ -118,6 +118,7 @@ function dispatch(payload) {
     else if (action === 'reimburseReceipt')   return _withIdem(payload, function(){ return reimburseReceipt(payload); }); // invalidates HSA cache internally
     else if (action === 'addHsaReceipt')      return _withIdem(payload, function(){ return addHsaReceipt(payload); });   // invalidates HSA cache internally
     else if (action === 'scanHsaFolder')      return scanHsaFolder(); // idempotent via fileId dedup, not _withIdem
+    else if (action === 'updateHsaReceipt')   return _withIdem(payload, function(){ return updateHsaReceipt(payload); }); // invalidates HSA cache internally
     else return { error: 'Unknown action: ' + action };
   } catch(err) {
     return { error: err.message };
@@ -181,6 +182,7 @@ function doPost(e) {
     else if (p.action === 'reimburseReceipt')   data = _withIdem(p, function(){ return reimburseReceipt(p); }); // invalidates HSA cache internally
     else if (p.action === 'addHsaReceipt')      data = _withIdem(p, function(){ return addHsaReceipt(p); });   // invalidates HSA cache internally
     else if (p.action === 'scanHsaFolder')      data = scanHsaFolder(); // idempotent via fileId dedup, not _withIdem
+    else if (p.action === 'updateHsaReceipt')   data = _withIdem(p, function(){ return updateHsaReceipt(p); }); // invalidates HSA cache internally
     else data = { error: 'Unknown POST action: ' + p.action };
     // Invalidate caches for the affected month and card balances
     if (p.month) invalidateMonthCache(p.month);
@@ -2749,7 +2751,7 @@ function saveNetWorthSnapshot(p) {
 // ============================================================
 var HSA_SHEET         = 'HSA Receipts';
 var HSA_DATA_ROW      = 4;          // 1-indexed first data row (headers on row 3)
-var HSA_CACHE_VERSION = 'hsa_v1';   // bump on getHsa response-shape change
+var HSA_CACHE_VERSION = 'hsa_v2';   // v2: rows gained needsReview -- bump on getHsa response-shape change
 var HSA_CACHE_KEY     = HSA_CACHE_VERSION + '_data';
 
 function _hsaR2(x) { var f = parseFloat(x); return isNaN(f) ? 0 : Math.round(f * 100) / 100; }
@@ -2771,18 +2773,22 @@ function _hsaRollups(rows, established, hsaBalance) {
   var unreimbursed = 0, totalSubstantiated = 0;
   var out = [];
   for (var i = 0; i < rows.length; i++) {
-    var r       = rows[i];
-    var amount  = _hsaR2(r.amount);
-    var reimb   = _hsaR2(r.reimbursedAmount);
-    var funding = (String(r.funding || 'OOP').toUpperCase() === 'HSA') ? 'HSA' : 'OOP';
+    var r        = rows[i];
+    var amount   = _hsaR2(r.amount);
+    var reimb    = _hsaR2(r.reimbursedAmount);
+    var funding  = (String(r.funding || 'OOP').toUpperCase() === 'HSA') ? 'HSA' : 'OOP';
+    var needsRev = !!r.needsReview;
     var qualified = true;
     if (established && r.dateIncurred) qualified = (String(r.dateIncurred) >= String(established));
     var status;
-    if (funding === 'HSA')      status = 'paid_direct';
+    if (needsRev)               status = 'needs_review';   // unverified import -- excluded from totals
+    else if (funding === 'HSA') status = 'paid_direct';
     else if (reimb <= 0)        status = 'open';
     else if (reimb < amount)    status = 'partial';
     else                        status = 'reimbursed';
-    if (qualified) {
+    // A draft (needs_review) is not yet trustworthy data, so it does not count
+    // toward any total until you confirm it via the edit modal.
+    if (qualified && !needsRev) {
       totalSubstantiated += amount;
       if (funding === 'OOP') unreimbursed += (amount - reimb);
     }
@@ -2798,7 +2804,8 @@ function _hsaRollups(rows, established, hsaBalance) {
       reimbursedAmount: reimb,
       reimbursedDate:   r.reimbursedDate || '',
       status:           status,
-      qualified:        qualified
+      qualified:        qualified,
+      needsReview:      needsRev
     });
   }
   unreimbursed       = _hsaR2(unreimbursed);
@@ -2834,7 +2841,7 @@ function _hsaReadRows(sheet) {
   var lastRow = sheet.getLastRow();
   if (lastRow < HSA_DATA_ROW) return [];
   var n      = lastRow - (HSA_DATA_ROW - 1);
-  var values = sheet.getRange(HSA_DATA_ROW, 1, n, 11).getValues();
+  var values = sheet.getRange(HSA_DATA_ROW, 1, n, 13).getValues(); // A..M (M = needs_review)
   var rows   = [];
   for (var i = 0; i < values.length; i++) {
     var v  = values[i];
@@ -2850,7 +2857,8 @@ function _hsaReadRows(sheet) {
       funding:          v[6],
       receiptLink:      (v[7] == null) ? '' : String(v[7]),
       reimbursedAmount: v[8],
-      reimbursedDate:   _hsaDateStr(v[9])
+      reimbursedDate:   _hsaDateStr(v[9]),
+      needsReview:      (v[12] === true || String(v[12]).toUpperCase() === 'TRUE')
     });
   }
   return rows;
@@ -2942,10 +2950,15 @@ function reimburseReceipt(p) {
 // "next id" -- a duplicate id would corrupt the by-id lookup reimburseReceipt
 // depends on. Wrapped in _withIdem in both routers for retry-safety.
 function addHsaReceipt(p, sheetNameOverride) {
+  var draft = !!p.needsReview; // best-effort import from a malformed filename
   var amount = parseFloat(p.amount);
-  if (isNaN(amount) || amount <= 0) return { error: 'Amount must be a positive number.' };
+  if (draft) { if (isNaN(amount) || amount < 0) amount = 0; }            // draft tolerates missing amount
+  else       { if (isNaN(amount) || amount <= 0) return { error: 'Amount must be a positive number.' }; }
   var dateStr = String(p.dateIncurred || '').trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return { error: 'Invalid or missing date incurred.' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    if (draft) dateStr = '';                                            // draft tolerates missing date
+    else return { error: 'Invalid or missing date incurred.' };
+  }
   var funding = (String(p.funding || 'OOP').toUpperCase() === 'HSA') ? 'HSA' : 'OOP';
   var receiptLink = String(p.receiptLink || '').trim();
   if (receiptLink && !/^https?:\/\//i.test(receiptLink))
@@ -2975,18 +2988,18 @@ function addHsaReceipt(p, sheetNameOverride) {
     // avoid re-importing a file. Written in the same setValues as the id so it
     // lands atomically under the lock.
     var row = [
-      newId, new Date(dateStr + 'T12:00:00'), amount,
+      newId, (dateStr ? new Date(dateStr + 'T12:00:00') : ''), amount,
       String(p.provider || '').trim(), String(p.description || '').trim(),
       String(p.category || '').trim(), funding, receiptLink, '', '',
-      String(p.notes || '').trim(), String(p.sourceFileId || '')
+      String(p.notes || '').trim(), String(p.sourceFileId || ''), (draft ? 'TRUE' : '')
     ];
     sheet.getRange(insertRow, 1, 1, row.length).setValues([row]);
     sheet.getRange(insertRow, 1).setNumberFormat('0');
-    sheet.getRange(insertRow, 2).setNumberFormat('yyyy-mm-dd');
+    if (dateStr) sheet.getRange(insertRow, 2).setNumberFormat('yyyy-mm-dd');
     sheet.getRange(insertRow, 3).setNumberFormat('$#,##0.00');
     SpreadsheetApp.flush();
     invalidateHsaCache();
-    return { ok: true, id: newId, row: insertRow };
+    return { ok: true, id: newId, row: insertRow, needsReview: draft };
   } finally {
     lock.releaseLock();
   }
@@ -3009,6 +3022,85 @@ function _parseReceiptName(fname) {
   var amount = parseFloat(amtStr);
   if (isNaN(amount) || amount <= 0) return { error: 'bad amount' };
   return { date: date, provider: provider, amount: amount };
+}
+
+// True only for a calendar-valid YYYY-MM-DD (rejects 2026-13-99 etc.).
+function _isRealDate(s) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s));
+  if (!m) return false;
+  var y = +m[1], mo = +m[2], d = +m[3];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  var dt = new Date(y, mo - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d;
+}
+
+// Best-effort field extraction for a filename that FAILED strict parsing.
+// Tolerates '~' or '_' delimiters; pulls a valid date and a positive amount
+// from whatever chunks it can, the rest becomes the provider. Used by the scan
+// to import a "slightly wrong" name as an editable draft rather than skipping
+// it. Returns {date, amount, provider} with empties where nothing was found;
+// the caller skips only when BOTH date and amount are empty (likely not a
+// receipt at all). Pure -- unit-tested.
+function _bestEffortReceipt(fname) {
+  var base  = String(fname || '').replace(/\.pdf$/i, '');
+  var parts = base.split(/[~_]/);
+  var date = '', amount = 0, prov = [];
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i].trim();
+    if (!p) continue;
+    if (!date && _isRealDate(p)) { date = p; continue; }
+    if (!amount && /^\$?[\d,]+(\.\d{1,2})?$/.test(p)) {
+      var n = parseFloat(p.replace(/[$,]/g, ''));
+      if (!isNaN(n) && n > 0) { amount = n; continue; }
+    }
+    prov.push(p);
+  }
+  return { date: date, amount: amount, provider: prov.join(' ').trim() };
+}
+
+// -- POST: edit an existing receipt (and clear needs_review) ----------------
+// The general correction path -- fixes a malformed-import draft OR any row with
+// a wrong field, in the dashboard rather than the Sheet. Locates by id (never
+// position). Validates strictly (a correction must be valid), writes the
+// editable fields, and clears col M so the row starts counting toward totals.
+// Reimbursed amount/date are NOT editable here -- that stays on reimburseReceipt
+// so its guards/idempotency remain the single path that moves money.
+function updateHsaReceipt(p, sheetNameOverride) {
+  var id = (p.id == null) ? '' : String(p.id);
+  if (!id) return { error: 'Missing receipt id.' };
+  var amount = parseFloat(p.amount);
+  if (isNaN(amount) || amount <= 0) return { error: 'Amount must be a positive number.' };
+  var dateStr = String(p.dateIncurred || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return { error: 'Invalid or missing date incurred.' };
+  var funding = (String(p.funding || 'OOP').toUpperCase() === 'HSA') ? 'HSA' : 'OOP';
+  var receiptLink = String(p.receiptLink || '').trim();
+  if (receiptLink && !/^https?:\/\//i.test(receiptLink))
+    return { error: 'Receipt link must start with http:// or https://' };
+
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(sheetNameOverride || HSA_SHEET);
+  if (!sheet) return { error: 'Sheet not found: ' + (sheetNameOverride || HSA_SHEET) };
+
+  invalidateSheet(sheetNameOverride || HSA_SHEET);
+  var values = readSheet(sheet);
+  var rowNum = -1;
+  for (var i = HSA_DATA_ROW - 1; i < values.length; i++) {
+    if (String(values[i][0]) === id) { rowNum = i + 1; break; }
+  }
+  if (rowNum < 0) return { error: 'Receipt not found: ' + id };
+
+  // Cols B..H = date, amount, provider, description, category, funding, link
+  sheet.getRange(rowNum, 2).setValue(new Date(dateStr + 'T12:00:00')).setNumberFormat('yyyy-mm-dd');
+  sheet.getRange(rowNum, 3).setValue(_hsaR2(amount)).setNumberFormat('$#,##0.00');
+  sheet.getRange(rowNum, 4).setValue(String(p.provider || '').trim());
+  sheet.getRange(rowNum, 5).setValue(String(p.description || '').trim());
+  sheet.getRange(rowNum, 6).setValue(String(p.category || '').trim());
+  sheet.getRange(rowNum, 7).setValue(funding);
+  sheet.getRange(rowNum, 8).setValue(receiptLink);
+  sheet.getRange(rowNum, 13).setValue(''); // clear needs_review -- row is now confirmed
+  SpreadsheetApp.flush();
+  invalidateHsaCache();
+  return { ok: true, id: id, row: rowNum };
 }
 
 // -- POST / trigger: import new receipt PDFs from the Drive folder ----------
@@ -3056,24 +3148,36 @@ function scanHsaFolder() {
       if (seen[theId]) continue; // already imported -- silent (not noise)
 
       var parsed = _parseReceiptName(fname);
-      if (parsed.error) { skipped.push({ name: fname, reason: parsed.error }); continue; }
+      var addArgs;
+      if (parsed.error) {
+        // Slightly-wrong name: salvage what we can and import as a draft for
+        // in-dashboard editing, rather than dropping it. Skip only when there's
+        // nothing receipt-like (no date AND no amount) -- likely not a receipt.
+        var be = _bestEffortReceipt(fname);
+        if (!be.date && !be.amount) { skipped.push({ name: fname, reason: parsed.error + ' (no date or amount found)' }); continue; }
+        addArgs = {
+          dateIncurred: be.date, amount: be.amount, provider: be.provider,
+          funding: 'OOP', receiptLink: file.getUrl(), sourceFileId: theId,
+          needsReview: true, notes: 'Imported from "' + fname + '" -- needs review'
+        };
+      } else {
+        addArgs = {
+          dateIncurred: parsed.date, amount: parsed.amount, provider: parsed.provider,
+          funding: 'OOP', receiptLink: file.getUrl(), sourceFileId: theId
+        };
+      }
 
-      var res = addHsaReceipt({
-        dateIncurred: parsed.date,
-        amount:       parsed.amount,
-        provider:     parsed.provider,
-        funding:      'OOP',
-        receiptLink:  file.getUrl(),
-        sourceFileId: theId
-      });
+      var res = addHsaReceipt(addArgs);
       if (res.error) { skipped.push({ name: fname, reason: res.error }); continue; }
 
       seen[theId] = true;
-      created.push({ name: fname, id: res.id });
+      created.push({ name: fname, id: res.id, needsReview: !!res.needsReview });
     }
 
     invalidateHsaCache();
-    return { ok: true, created: created, createdCount: created.length, skipped: skipped, skippedCount: skipped.length };
+    var draftCount = 0;
+    for (var k = 0; k < created.length; k++) if (created[k].needsReview) draftCount++;
+    return { ok: true, created: created, createdCount: created.length, draftCount: draftCount, skipped: skipped, skippedCount: skipped.length };
   } finally {
     lock.releaseLock();
   }

@@ -276,6 +276,20 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .hsa-reimburse-btn:hover{background:var(--surface2)}
 .hsa-filter-btn{font-family:var(--mono);font-size:11px;padding:5px 11px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer;margin-bottom:10px}
 .hsa-filter-btn:hover{background:var(--surface2)}
+.hsa-proj-sub{font-size:12px;color:var(--muted);margin:2px 0 14px;line-height:1.5}
+.hsa-proj-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px 14px;margin-bottom:14px}
+.hsa-proj-grid label{display:flex;flex-direction:column;font-size:11px;color:var(--muted);font-family:var(--mono);gap:4px}
+.hsa-proj-grid input{font-family:var(--mono);font-size:14px;padding:7px 8px;border:1px solid var(--border2);border-radius:var(--r);background:var(--surface2);color:var(--text);outline:none}
+.hsa-proj-foot{font-size:11px;color:var(--faint);margin-top:10px;line-height:1.5}
+.hsa-proj-grp{font-family:var(--mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:6px 0 8px;border-bottom:1px solid var(--border);padding-bottom:4px}
+.hc-src{font-size:10px;color:var(--c1);font-weight:600}
+.hsa-eng-hd{font-family:var(--display);font-size:15px;color:var(--text);margin:0 0 8px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.hsa-eng-tag{font-family:var(--mono);font-size:10px;letter-spacing:.03em;color:var(--muted);border:1px solid var(--border2);border-radius:var(--r);padding:1px 6px;text-transform:uppercase}
+.hsa-proj-headline{display:flex;flex-wrap:wrap;gap:18px;margin-bottom:4px}
+.hsa-proj-headline .h-item{font-family:var(--mono)}
+.hsa-proj-headline .h-lbl{font-size:11px;color:var(--muted);display:block}
+.hsa-proj-headline .h-val{font-size:19px;color:var(--text)}
+@media (max-width:768px){.hsa-proj-grid{grid-template-columns:repeat(2,1fr)}}
 .fx-table{width:100%;border-collapse:collapse;font-size:13px;background:var(--surface);border-radius:var(--rl);overflow:hidden;border:1px solid var(--border);box-shadow:var(--shadow)}
 .fx-table tr{border-bottom:1px solid var(--border);transition:background .1s}
 .fx-table tr:last-child{border-bottom:none}
@@ -967,6 +981,36 @@ tr:hover .racts,tr.editing .racts{opacity:1}
       <div id="hsa-note-area"></div>
       <div style="margin-bottom:10px"><button class="hsa-filter-btn" data-action="showQuickAdd" data-qa-type="hsa">+ Add receipt</button> <button class="hsa-filter-btn" data-action="scanHsaReceipts">Scan folder for new receipts</button></div>
       <div id="hsa-content"><div class="tbl-empty">Loading&hellip;</div></div>
+
+      <!-- Tax-advantage projection (two engines) -->
+      <div class="chart-card" id="hsa-proj-card" style="margin-top:22px">
+        <div class="chart-title">What your HSA is worth &mdash; two engines</div>
+        <div class="hsa-proj-sub">Your HSA pays off two ways. <b>Engine 1</b> is the tax you avoid every year by paying medical bills with pre-tax, pre-FICA dollars instead of from your paycheck &mdash; certain, market-independent. <b>Engine 2</b> is the small receipts you <i>keep</i> (don't reimburse): those dollars stay invested and compound tax-free, which is where the HSA pulls ahead of an IRA or a taxable account. Spend &amp; hoard rates auto-fill from your ledger's trailing 12 months once it has data; override anything. Nominal dollars.</div>
+        <div class="hsa-proj-grp">Your activity</div>
+        <div class="hsa-proj-grid">
+          <label>Medical $/yr paid via HSA <span class="hc-src" id="hc-src-spend"></span><input type="number" id="hc-spend" step="100" min="0"></label>
+          <label>Receipts hoarded $/yr <span class="hc-src" id="hc-src-hoard"></span><input type="number" id="hc-hoard" step="50" min="0"></label>
+          <label>Years contributing<input type="number" id="hc-nc" step="1" min="1" max="60"></label>
+          <label>Horizon (years)<input type="number" id="hc-t" step="1" min="1" max="60"></label>
+        </div>
+        <div class="hsa-proj-grp">Market &amp; taxes</div>
+        <div class="hsa-proj-grid">
+          <label>Return (%/yr)<input type="number" id="hc-return" step="0.1"></label>
+          <label>Dividend yield (%)<input type="number" id="hc-div" step="0.1"></label>
+          <label>Current marginal rate (%)<input type="number" id="hc-tc" step="0.5"></label>
+          <label>Retirement marginal rate (%)<input type="number" id="hc-tr" step="0.5"></label>
+          <label>Cap-gains / qual-div rate (%)<input type="number" id="hc-tg" step="0.5"></label>
+          <label>FICA on contribution (%)<input type="number" id="hc-fica" step="0.05"></label>
+        </div>
+
+        <div class="hsa-eng-hd">Engine 1 &middot; recurring tax avoided <span class="hsa-eng-tag">certain &middot; not market-dependent</span></div>
+        <div id="hsa-e1-summary"></div>
+
+        <div class="hsa-eng-hd" style="margin-top:18px">Engine 2 &middot; the hoard, compounding <span class="hsa-eng-tag">market-dependent</span></div>
+        <div id="hsa-e2-summary"></div>
+        <div style="position:relative;height:300px;margin-top:12px"><canvas id="c-hsa-proj"></canvas></div>
+        <div class="hsa-proj-foot" id="hsa-proj-foot"></div>
+      </div>
     </div>
 
   </main>
@@ -1107,6 +1151,26 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     <div class="pay-modal-btns">
       <button class="btn-primary" id="hsa-submit-btn" data-action="submitHsaReimburse">Record reimbursement</button>
       <button class="btn-cancel" data-action="hideHsaModal">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- HSA EDIT MODAL -->
+<div id="hsa-edit-backdrop" class="pay-modal-backdrop" style="display:none" data-dismiss="hideHsaEditModal">
+  <div class="pay-modal">
+    <h3 id="hsa-edit-title">Edit receipt</h3>
+    <div class="pay-modal-sub" id="hsa-edit-sub"></div>
+    <div class="pay-field"><label>Date incurred</label><input type="date" id="hsa-edit-date"></div>
+    <div class="pay-field"><label>Amount ($)</label><input type="number" id="hsa-edit-amount" step="0.01" min="0.01" placeholder="0.00"></div>
+    <div class="pay-field"><label>Provider</label><input type="text" id="hsa-edit-provider" placeholder="e.g. Summit Dental"></div>
+    <div class="pay-field"><label>Description</label><input type="text" id="hsa-edit-desc" placeholder="e.g. Crown"></div>
+    <div class="pay-field"><label>Category</label><input type="text" id="hsa-edit-category" placeholder="e.g. Dental"></div>
+    <div class="pay-field"><label>Funding</label><select id="hsa-edit-funding" class="msel" style="width:100%"><option value="OOP">Out of pocket (reimbursable)</option><option value="HSA">Paid with HSA card</option></select></div>
+    <div class="pay-field"><label>Receipt link (optional)</label><input type="url" id="hsa-edit-link" placeholder="https://drive.google.com/..."></div>
+    <div class="pay-modal-err" id="hsa-edit-err"></div>
+    <div class="pay-modal-btns">
+      <button class="btn-primary" id="hsa-edit-submit-btn" data-action="submitHsaEdit">Save changes</button>
+      <button class="btn-cancel" data-action="hideHsaEditModal">Cancel</button>
     </div>
   </div>
 </div>
@@ -1266,6 +1330,9 @@ function initEventListeners(){
     'logCreditSnapshot':  logCreditSnapshot,
     'toggleDcSchedule':   toggleDcSchedule,
     'reimburseHsa':       function(e){ var el=e.target.closest('[data-action]'); showHsaModal(el.dataset.id); },
+    'editHsa':            function(e){ var el=e.target.closest('[data-action]'); showHsaEditModal(el.dataset.id); },
+    'submitHsaEdit':      submitHsaEdit,
+    'hideHsaEditModal':   hideHsaEditModal,
     'scanHsaReceipts':    scanHsaReceipts,
     'submitHsaReimburse': submitHsaReimburse,
     'hideHsaModal':       hideHsaModal,
@@ -5215,6 +5282,7 @@ function replaceTr(tbodyId,i,newTr){
 // over-amount. Status is shown by GLYPH + WORD (never hue alone) -- protan-safe.
 var hsaData = null;
 var hsaReimburseId = '';
+var hsaEditId = '';
 var hsaShowOpenOnly = false;
 var hsaScanReport = null; // {created, skipped[]} from the last folder scan; shown until next scan
 
@@ -5223,6 +5291,7 @@ var HSA_STATUS = {
   partial:     { g:'\u25D1', t:'Partial' },     // half-filled circle
   reimbursed:  { g:'\u25CF', t:'Reimbursed' },  // filled circle
   paid_direct: { g:'\u25C6', t:'Paid direct' }, // diamond
+  needs_review:{ g:'\u270E', t:'Needs review' }, // pencil -- malformed import, edit to confirm
   unqualified: { g:'\u26A0', t:'Predates HSA' } // warning sign
 };
 
@@ -5289,7 +5358,8 @@ function renderHsa(d){
   }
   if(hsaScanReport){
     if(hsaScanReport.createdCount){
-      notes += '<div class="hsa-note">\u2713 Folder scan imported '+hsaScanReport.createdCount+' new receipt'+(hsaScanReport.createdCount===1?'':'s')+'.</div>';
+      notes += '<div class="hsa-note">\u2713 Folder scan imported '+hsaScanReport.createdCount+' new receipt'+(hsaScanReport.createdCount===1?'':'s')+
+        (hsaScanReport.draftCount ? ' \u2014 '+hsaScanReport.draftCount+' need review (\u270E, edit to confirm; excluded from totals until then)' : '')+'.</div>';
     }
     if(hsaScanReport.skipped && hsaScanReport.skipped.length){
       notes += '<div class="hsa-note warn">\u26A0 Folder scan skipped '+hsaScanReport.skipped.length+' file'+(hsaScanReport.skipped.length===1?'':'s')+' (rename to <code>DATE~provider~amount.pdf</code> and rescan): '+
@@ -5307,10 +5377,15 @@ function renderHsa(d){
   var shown = hsaShowOpenOnly
     ? rows.filter(function(r){ return r.qualified && r.funding==='OOP' && (r.status==='open'||r.status==='partial'); })
     : rows;
-  shown = shown.slice().sort(function(a,b){ return (b.dateIncurred||'').localeCompare(a.dateIncurred||''); });
+  // needs_review drafts float to the top (they need action); otherwise newest first
+  shown = shown.slice().sort(function(a,b){
+    if(!!a.needsReview !== !!b.needsReview) return a.needsReview ? -1 : 1;
+    return (b.dateIncurred||'').localeCompare(a.dateIncurred||'');
+  });
 
   var body = shown.map(function(r){
-    var st = r.qualified ? (HSA_STATUS[r.status]||HSA_STATUS.open) : HSA_STATUS.unqualified;
+    var st = r.needsReview ? HSA_STATUS.needs_review
+           : (r.qualified ? (HSA_STATUS[r.status]||HSA_STATUS.open) : HSA_STATUS.unqualified);
     var statusCell = '<span class="hsa-status"><span class="hsa-glyph">'+st.g+'</span>'+st.t+'</span>';
     var remaining  = Math.round((r.amount - r.reimbursedAmount)*100)/100;
     var reimbCell  = (r.funding==='HSA')
@@ -5319,10 +5394,13 @@ function renderHsa(d){
     var linkCell = r.receiptLink
       ? '<a class="hsa-link" href="'+esc(r.receiptLink)+'" target="_blank" rel="noopener noreferrer">view</a>'
       : '<span style="color:var(--faint)">&mdash;</span>';
-    var canReimburse = r.qualified && r.funding==='OOP' && remaining > 0.005;
-    var actionCell = canReimburse
-      ? '<button class="hsa-reimburse-btn" data-action="reimburseHsa" data-id="'+esc(String(r.id))+'">Reimburse</button>'
+    // Reimburse only for confirmed, qualified, out-of-pocket rows with a remainder
+    var canReimburse = !r.needsReview && r.qualified && r.funding==='OOP' && remaining > 0.005;
+    var editBtn = '<button class="hsa-reimburse-btn" data-action="editHsa" data-id="'+esc(String(r.id))+'">Edit</button>';
+    var reimburseBtn = canReimburse
+      ? ' <button class="hsa-reimburse-btn" data-action="reimburseHsa" data-id="'+esc(String(r.id))+'">Reimburse</button>'
       : '';
+    var actionCell = editBtn + reimburseBtn;
     var descBit = r.description ? '<span style="color:var(--muted);font-size:12px"> &middot; '+esc(r.description)+'</span>' : '';
     return '<tr>'+
       '<td>'+statusCell+'</td>'+
@@ -5333,7 +5411,7 @@ function renderHsa(d){
       '<td class="c">'+(r.funding==='HSA'?'HSA card':'Out of pocket')+'</td>'+
       '<td class="co r">'+reimbCell+'</td>'+
       '<td class="c">'+linkCell+'</td>'+
-      '<td class="r">'+actionCell+'</td>'+
+      '<td class="r" style="white-space:nowrap">'+actionCell+'</td>'+
     '</tr>';
   }).join('');
 
@@ -5344,9 +5422,225 @@ function renderHsa(d){
     '<div class="tbl-wrap"><table class="tbl"><thead><tr>'+
     '<th>Status</th><th>Incurred</th><th class="r">Amount</th><th>Provider</th><th>Category</th><th class="c">Funding</th><th class="r">Reimbursed</th><th class="c">Receipt</th><th></th>'+
     '</tr></thead><tbody>'+body+'</tbody></table></div>';
+
+  // ledger data just landed -> let the projection pull fresh TTM spend/hoard
+  if(hsaCalcReady){ hsaCalcApplyTtm(); renderHsaProj(); }
 }
 
 function toggleHsaOpen(){ hsaShowOpenOnly = !hsaShowOpenOnly; if(hsaData) renderHsa(hsaData); }
+
+function showHsaEditModal(id){
+  if(!SCRIPT_URL){ showSetup(); return; }
+  if(!hsaData) return;
+  var row=null, list=hsaData.rows||[];
+  for(var i=0;i<list.length;i++){ if(String(list[i].id)===String(id)){ row=list[i]; break; } }
+  if(!row) return;
+  hsaEditId = String(id);
+  $('hsa-edit-title').textContent = row.needsReview ? 'Confirm imported receipt' : 'Edit receipt';
+  $('hsa-edit-sub').textContent   = row.needsReview ? 'Imported from a malformed filename \u2014 fill in / fix the fields, then save to start counting it.' : ('Receipt '+id);
+  $('hsa-edit-date').value     = row.dateIncurred || '';
+  $('hsa-edit-amount').value   = row.amount ? Number(row.amount).toFixed(2) : '';
+  $('hsa-edit-provider').value = row.provider || '';
+  $('hsa-edit-desc').value     = row.description || '';
+  $('hsa-edit-category').value = row.category || '';
+  $('hsa-edit-funding').value  = (row.funding==='HSA') ? 'HSA' : 'OOP';
+  $('hsa-edit-link').value     = row.receiptLink || '';
+  $('hsa-edit-err').textContent = '';
+  $('hsa-edit-submit-btn').disabled = false;
+  $('hsa-edit-submit-btn').textContent = 'Save changes';
+  teleportModal('hsa-edit-backdrop');
+  $('hsa-edit-backdrop').style.display = 'flex';
+  setTimeout(function(){ $('hsa-edit-amount').focus(); }, 50);
+}
+
+function hideHsaEditModal(){ $('hsa-edit-backdrop').style.display='none'; hsaEditId=''; }
+
+async function submitHsaEdit(){
+  var amount = parseFloat($('hsa-edit-amount').value);
+  var date   = $('hsa-edit-date').value;
+  if(isNaN(amount) || amount <= 0){ $('hsa-edit-err').textContent='Enter an amount greater than zero.'; return; }
+  if(!date){ $('hsa-edit-err').textContent='Select the date incurred.'; return; }
+  if(!hsaEditId){ $('hsa-edit-err').textContent='No receipt selected.'; return; }
+  var link = $('hsa-edit-link').value.trim();
+  if(link && !/^https?:\/\//i.test(link)){ $('hsa-edit-err').textContent='Receipt link must start with http:// or https://'; return; }
+  $('hsa-edit-err').textContent='';
+  $('hsa-edit-submit-btn').disabled=true; $('hsa-edit-submit-btn').textContent='Saving\u2026';
+  if(isDemo || !SCRIPT_URL){ hideHsaEditModal(); showBanner('Demo mode \u2014 edit not saved','ok'); return; }
+  var id = hsaEditId;
+  try {
+    await apiPost(SCRIPT_URL, {
+      action:'updateHsaReceipt', idemKey:genIdemKey('hsaEdit'),
+      id:id, dateIncurred:date, amount:amount,
+      provider:$('hsa-edit-provider').value.trim(),
+      description:$('hsa-edit-desc').value.trim(),
+      category:$('hsa-edit-category').value.trim(),
+      funding:$('hsa-edit-funding').value,
+      receiptLink:link
+    });
+    hideHsaEditModal();
+    showBanner('Receipt updated','ok');
+    loadHsa(true); // authoritative refetch -- totals recompute now the draft is confirmed
+  } catch(e){
+    $('hsa-edit-err').textContent='Network error \u2014 refresh to check before retrying.';
+    $('hsa-edit-submit-btn').disabled=false; $('hsa-edit-submit-btn').textContent='Save changes';
+  }
+}
+
+// ── HSA two-engine value projection ───────────────────────────
+// Engine 1 (recurring, market-independent): tax avoided each year by paying
+//   medical SPEND with pre-tax/pre-FICA HSA dollars vs an after-tax paycheck
+//   = spend * (tc + f). Realized annually, no compounding.
+// Engine 2 (the hoard, compounding): small OOP receipts you KEEP (rate H/yr)
+//   stay invested and grow tax-free; compared to the same pre-tax dollars in a
+//   Traditional IRA (post-FICA, taxed out) or taxable (post-both, drag + LTCG).
+//   Spend (S) and hoard (H) are disjoint slices of the contribution -> no
+//   double counting of the contribution-side break.
+var cHsaProj = null;
+var hsaCalcReady = false;
+// fields with manual defaults; spend/hoard auto-fill from the ledger TTM if present
+var HSA_CALC_DEFAULTS = { spend:3300, hoard:500, nc:20, t:30, ret:7, div:1.8, tc:30, tr:22, tg:18, fica:7.65 };
+var HSA_CALC_FIELDS   = { spend:'hc-spend', hoard:'hc-hoard', nc:'hc-nc', t:'hc-t', ret:'hc-return', div:'hc-div', tc:'hc-tc', tr:'hc-tr', tg:'hc-tg', fica:'hc-fica' };
+
+// Trailing-12-month spend & hoard read straight from the ledger rows.
+// routed spend = HSA-card payments + reimbursements actually taken (money that
+//   flowed through the HSA for medical). hoard = unreimbursed OOP qualified
+//   amounts incurred in the window (receipts you're keeping). Returns null for
+//   a field when there are no qualifying rows, so we fall back to the default.
+function hsaTtm(){
+  if(!hsaData || !hsaData.rows || !hsaData.rows.length) return { spend:null, hoard:null };
+  var now = new Date(), cutoff = new Date(now.getTime() - 365*24*3600*1000);
+  var spend = 0, hoard = 0, n = 0;
+  hsaData.rows.forEach(function(r){
+    if(r.needsReview) return;                 // unconfirmed drafts don't count
+    var d = r.dateIncurred ? new Date(r.dateIncurred + 'T12:00:00') : null;
+    if(!d || isNaN(d) || d < cutoff) return;
+    n++;
+    var amt = +r.amount || 0, reimb = +r.reimbursedAmount || 0;
+    if(r.funding === 'HSA'){ spend += amt; }   // paid directly with the card
+    else if(r.qualified){                      // out of pocket, qualified
+      spend += reimb;                          // the part pulled back = routed spend
+      hoard += Math.max(amt - reimb, 0);       // the part kept = hoard
+    }
+  });
+  return { spend: n ? Math.round(spend) : null, hoard: n ? Math.round(hoard) : null };
+}
+
+function hsaCalcInit(){
+  if(!$('hc-spend')) return;
+  if(hsaCalcReady){ hsaCalcApplyTtm(); renderHsaProj(); return; }
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem('hsa_calc_v2') || '{}') || {}; } catch(e){ saved = {}; }
+  Object.keys(HSA_CALC_FIELDS).forEach(function(k){
+    var el = $(HSA_CALC_FIELDS[k]); if(!el) return;
+    el.value = (saved[k] != null && saved[k] !== '') ? saved[k] : HSA_CALC_DEFAULTS[k];
+    el.addEventListener('input', onHsaCalcChange);
+  });
+  hsaCalcReady = true;
+  hsaCalcApplyTtm();
+  renderHsaProj();
+}
+
+// Prefill spend/hoard from the ledger TTM unless the user has overridden them
+// (a saved value present in localStorage means they typed something -- respect it).
+function hsaCalcApplyTtm(){
+  var ttm = hsaTtm();
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem('hsa_calc_v2') || '{}') || {}; } catch(e){}
+  [['spend','hc-src-spend'],['hoard','hc-src-hoard']].forEach(function(pair){
+    var k = pair[0], v = ttm[k], src = $(pair[1]);
+    if(v != null && (saved[k] == null || saved[k] === '')){
+      $(HSA_CALC_FIELDS[k]).value = v;
+      if(src) src.textContent = '(TTM)';
+    } else if(src){
+      src.textContent = (saved[k] != null && saved[k] !== '') ? '(yours)' : '';
+    }
+  });
+}
+
+function readHsaCalc(){
+  var g = {};
+  Object.keys(HSA_CALC_FIELDS).forEach(function(k){
+    var el = $(HSA_CALC_FIELDS[k]);
+    var v = el ? parseFloat(el.value) : NaN;
+    g[k] = isNaN(v) ? HSA_CALC_DEFAULTS[k] : v;
+  });
+  return g;
+}
+
+function onHsaCalcChange(){
+  try { localStorage.setItem('hsa_calc_v2', JSON.stringify(readHsaCalc())); } catch(e){}
+  renderHsaProj();
+}
+
+// Pure two-engine model -- mirrors the verified offline check.
+function hsaProjCompute(g){
+  var S=Math.max(g.spend,0), H=Math.max(g.hoard,0);
+  var Nc=Math.max(1,Math.round(g.nc)), T=Math.max(Nc,Math.round(g.t));
+  var r=g.ret/100, dy=g.div/100, tc=g.tc/100, tr=g.tr/100, tg=g.tg/100, f=g.fica/100, gr=1+r;
+  // Engine 1
+  var e1Yr = S*(tc+f), e1Cum = e1Yr*Nc;
+  // Engine 2: hoard H/yr for Nc years, grows to horizon T
+  var hsaBal=0, iraBal=0, taxV=0, taxB=0, hoarded=0, yr=[], sH=[], sI=[], sX=[];
+  for(var y=1;y<=T;y++){
+    if(y<=Nc){ hsaBal+=H; iraBal+=H*(1-f); var add=Math.max(H*(1-f-tc),0); taxV+=add; taxB+=add; hoarded+=H; }
+    hsaBal*=gr; iraBal*=gr;
+    var price=taxV*(r-dy), div=taxV*dy, reinv=div-(div*tg);
+    taxV=taxV+price+reinv; taxB+=reinv;
+    var ltcg=Math.max(taxV-taxB,0)*tg;
+    yr.push(y); sH.push(hsaBal); sI.push(iraBal*(1-tr)); sX.push(taxV-ltcg);
+  }
+  return { e1Yr:e1Yr, e1Cum:e1Cum, hoarded:hoarded, Nc:Nc, T:T,
+    yr:yr, hsa:sH, ira:sI, tax:sX,
+    fHsa:sH[T-1], fIra:sI[T-1], fTax:sX[T-1] };
+}
+
+function renderHsaProj(){
+  if(!$('c-hsa-proj')) return;
+  var R = hsaProjCompute(readHsaCalc());
+  var t = chartTheme();
+
+  $('hsa-e1-summary').innerHTML =
+    '<div class="hsa-proj-headline">'+
+      '<div class="h-item"><span class="h-lbl">Tax avoided / year</span><span class="h-val">'+fmt(R.e1Yr)+'</span></div>'+
+      '<div class="h-item"><span class="h-lbl">Over '+R.Nc+' yrs (nominal)</span><span class="h-val">'+fmt(R.e1Cum)+'</span></div>'+
+    '</div>'+
+    '<div class="hsa-proj-foot">You keep this whether markets boom or bust &mdash; it\u2019s income + payroll tax you never pay because the dollars go in pre-tax. Independent of the hoard below.</div>';
+
+  $('hsa-e2-summary').innerHTML =
+    '<div class="hsa-proj-headline">'+
+      '<div class="h-item"><span class="h-lbl">HSA (kept, tax-free)</span><span class="h-val">'+fmt(R.fHsa)+'</span></div>'+
+      '<div class="h-item"><span class="h-lbl">Same in an IRA</span><span class="h-val">'+fmt(R.fIra)+'</span></div>'+
+      '<div class="h-item"><span class="h-lbl">Same in taxable</span><span class="h-val">'+fmt(R.fTax)+'</span></div>'+
+      '<div class="h-item"><span class="h-lbl">HSA edge at year '+R.T+'</span><span class="h-val">+'+fmt(R.fHsa-R.fIra)+' vs IRA &middot; +'+fmt(R.fHsa-R.fTax)+' vs taxable</span></div>'+
+    '</div>';
+
+  $('hsa-proj-foot').innerHTML =
+    'Engine 2 grows '+fmt(R.hoarded)+' of hoarded receipts ('+fmt(readHsaCalc().hoard)+'/yr for '+R.Nc+' yrs) to year '+R.T+'. '+
+    'HSA holds tax-free (you keep the receipts); IRA gets the same dollars after FICA, taxed at the retirement rate out; taxable is after FICA + income tax with dividend drag yearly and cap-gains at sale. '+
+    'Hoard more, or stretch the horizon, and the green line pulls further ahead \u2014 that\u2019s the engine that grows as you bank more receipts. Nominal dollars.';
+
+  var ds = [
+    { label:'HSA \u2014 kept (tax-free)', data:R.hsa, borderColor:t.green, borderWidth:2.5, borderDash:[],    pointRadius:0, fill:false, tension:0.1 },
+    { label:'Same in an IRA',          data:R.ira, borderColor:t.c2,    borderWidth:2,   borderDash:[7,4], pointRadius:0, fill:false, tension:0.1 },
+    { label:'Same in taxable',         data:R.tax, borderColor:t.terra, borderWidth:2,   borderDash:[2,3], pointRadius:0, fill:false, tension:0.1 }
+  ];
+  if(cHsaProj){ cHsaProj.destroy(); cHsaProj=null; }
+  cHsaProj = new Chart($('c-hsa-proj'), {
+    type:'line',
+    data:{ labels:R.yr.map(function(y){ return 'Y'+y; }), datasets:ds },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{ display:true, labels:{ color:t.tick, font:{size:11}, boxWidth:24 } },
+        tooltip:{ callbacks:{ label:function(ctx){ return ctx.dataset.label+': '+fmt(ctx.parsed.y); } } }
+      },
+      scales:{
+        x:{ ticks:{ color:t.tick, font:{size:10}, maxTicksLimit:12 }, grid:{ display:false }, border:{ display:false } },
+        y:{ ticks:{ color:t.tick, font:{size:10}, callback:function(v){ return '$'+Math.round(v/1000)+'k'; } }, grid:{ color:t.grid }, border:{ display:false } }
+      }
+    }
+  });
+}
 
 async function scanHsaReceipts(){
   if(isDemo || !SCRIPT_URL){ showBanner('Demo mode \u2014 folder scan unavailable','ok'); return; }
@@ -5356,6 +5650,7 @@ async function scanHsaReceipts(){
     if(!res || res.error){ showBanner('Scan failed: '+((res&&res.error)?res.error:'no response'),'err'); return; }
     hsaScanReport = res; // surfaced as a persistent note by renderHsa
     var msg = 'Imported '+res.createdCount+' receipt'+(res.createdCount===1?'':'s');
+    if(res.draftCount) msg += ' ('+res.draftCount+' need review)';
     if(res.skippedCount) msg += ', skipped '+res.skippedCount+' (see notes)';
     showBanner(msg, res.skippedCount ? 'err' : 'ok');
     loadHsa(true); // authoritative refetch -- re-renders with the new rows + scan report
@@ -5431,7 +5726,7 @@ function showTab(id,btn){
   if(id==='loans')    loadLoans();
   if(id==='mortgage') loadMortgage();
   if(id==='networth') loadNetWorth();
-  if(id==='hsa')      loadHsa();
+  if(id==='hsa'){ loadHsa(); hsaCalcInit(); }
 }
 
 // ── DEMO DATA ──

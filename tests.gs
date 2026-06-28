@@ -724,6 +724,16 @@ function testHsa() {
     'guard rejects over-amount reimbursement');
   assert(_reimburseGuard({ amount:1200, funding:'OOP', qualified:true }, -5) !== null,
     'guard rejects negative amount');
+
+  // needs_review drafts are excluded from totals until confirmed
+  var draftRows = [
+    { id:1, dateIncurred:'2024-01-01', amount:1000, funding:'OOP', reimbursedAmount:0 },
+    { id:2, dateIncurred:'2024-02-01', amount:500,  funding:'OOP', reimbursedAmount:0, needsReview:true }
+  ];
+  var rd = _hsaRollups(draftRows, '2022-01-01', 5000);
+  assertEqual(rd.unreimbursed, 1000, 'draft row excluded from unreimbursed pool');
+  assertEqual(rd.totalSubstantiated, 1000, 'draft row excluded from total substantiated');
+  assertEqual(rd.rows[1].status, 'needs_review', 'draft row gets needs_review status');
 }
 
 function testAddHsaReceipt() {
@@ -801,6 +811,80 @@ function testParseReceiptName() {
   assert(_parseReceiptName('2026-06-27~X~abc.pdf').error,  'rejects non-numeric amount');
   assert(_parseReceiptName('2026-06-27~X~0.pdf').error,    'rejects zero amount');
   assert(_parseReceiptName('2026-06-27~X~-5.pdf').error,   'rejects negative amount');
+}
+
+function testBestEffortReceipt() {
+  section('_bestEffortReceipt + _isRealDate (malformed-name salvage)');
+
+  // _isRealDate
+  assert(_isRealDate('2026-06-27'),  'valid date accepted');
+  assert(!_isRealDate('2026-13-01'), 'month 13 rejected');
+  assert(!_isRealDate('2026-02-29'), 'Feb 29 in non-leap year rejected');
+  assert(_isRealDate('2024-02-29'),  'Feb 29 in leap year accepted');
+  assert(!_isRealDate('2026-6-7'),   'non-zero-padded rejected');
+
+  // Old underscore-delimited name (pre-convention) salvages cleanly
+  var a = _bestEffortReceipt('2026-06-27_Summit_1200.pdf');
+  assertEqual(a.date, '2026-06-27', 'underscore name: date salvaged');
+  assertApprox(a.amount, 1200, 'underscore name: amount salvaged');
+  assertEqual(a.provider, 'Summit', 'underscore name: provider salvaged');
+
+  // Out-of-order fields still resolve by type
+  var b = _bestEffortReceipt('CVS~2026-03-01~$45.99.pdf');
+  assertEqual(b.date, '2026-03-01', 'out-of-order: date found');
+  assertApprox(b.amount, 45.99, 'out-of-order: amount found ($ stripped)');
+  assertEqual(b.provider, 'CVS', 'out-of-order: provider is the leftover');
+
+  // Invalid date is NOT salvaged (left blank for review), amount still found
+  var c = _bestEffortReceipt('2026-13-99~Clinic~50.pdf');
+  assertEqual(c.date, '', 'invalid date left blank');
+  assertApprox(c.amount, 50, 'amount still found alongside bad date');
+
+  // Nothing receipt-like -> empty (caller will skip)
+  var d = _bestEffortReceipt('random scan.pdf');
+  assertEqual(d.date, '', 'no date in junk name');
+  assertEqual(d.amount, 0, 'no amount in junk name');
+}
+
+function testUpdateHsaReceipt() {
+  section('updateHsaReceipt (edit + clear needs_review; scratch sheet only)');
+  createHsaScratchSheet();
+  _resetCaches();
+
+  // Seed a draft (needs_review) row, as the folder scan would for a bad name
+  var d = addHsaReceipt({
+    dateIncurred:'', amount:0, provider:'Imported', funding:'OOP',
+    needsReview:true, notes:'from bad-name.pdf'
+  }, HSA_TEST_SHEET_NAME);
+  assert(d.ok, 'draft import returns ok');
+  assert(d.needsReview, 'draft flagged needsReview');
+
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(HSA_TEST_SHEET_NAME);
+  _resetCaches();
+  var before = _hsaReadRows(sheet);
+  assertEqual(before[0].needsReview, true, 'draft row reads back as needs_review');
+
+  // Validation rejects bad input (no write)
+  assert(updateHsaReceipt({ id:d.id, amount:-1, dateIncurred:'2026-01-01' }, HSA_TEST_SHEET_NAME).error,
+    'rejects non-positive amount');
+  assert(updateHsaReceipt({ id:d.id, amount:10, dateIncurred:'bad' }, HSA_TEST_SHEET_NAME).error,
+    'rejects malformed date');
+  assert(updateHsaReceipt({ id:'999999', amount:10, dateIncurred:'2026-01-01' }, HSA_TEST_SHEET_NAME).error,
+    'rejects unknown id');
+
+  // Valid edit fills the fields and clears needs_review
+  var u = updateHsaReceipt({
+    id:d.id, dateIncurred:'2026-03-15', amount:212.40,
+    provider:'Summit Dental', description:'Crown', category:'Dental', funding:'OOP'
+  }, HSA_TEST_SHEET_NAME);
+  assert(u.ok, 'valid edit returns ok');
+
+  _resetCaches();
+  var after = _hsaReadRows(sheet);
+  assertEqual(after[0].needsReview, false, 'needs_review cleared after edit');
+  assertEqual(after[0].dateIncurred, '2026-03-15', 'date updated');
+  assertApprox(after[0].amount, 212.40, 'amount updated');
+  assertEqual(after[0].provider, 'Summit Dental', 'provider updated');
 }
 
 function testMortgageSingleSource() {
@@ -885,6 +969,8 @@ function _runTestSuite(includeSlow) {
     testHsa();
     testAddHsaReceipt();
     testParseReceiptName();
+    testBestEffortReceipt();
+    testUpdateHsaReceipt();
     testMonthCacheTiers();
 
     if (includeSlow) {
