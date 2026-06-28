@@ -965,7 +965,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
         <div class="metric"><div class="mlabel">Total substantiated</div><div class="mval sk" style="height:26px;width:120px"> </div></div>
       </div>
       <div id="hsa-note-area"></div>
-      <div style="margin-bottom:10px"><button class="hsa-filter-btn" data-action="showQuickAdd" data-qa-type="hsa">+ Add receipt</button></div>
+      <div style="margin-bottom:10px"><button class="hsa-filter-btn" data-action="showQuickAdd" data-qa-type="hsa">+ Add receipt</button> <button class="hsa-filter-btn" data-action="scanHsaReceipts">Scan folder for new receipts</button></div>
       <div id="hsa-content"><div class="tbl-empty">Loading&hellip;</div></div>
     </div>
 
@@ -1266,6 +1266,7 @@ function initEventListeners(){
     'logCreditSnapshot':  logCreditSnapshot,
     'toggleDcSchedule':   toggleDcSchedule,
     'reimburseHsa':       function(e){ var el=e.target.closest('[data-action]'); showHsaModal(el.dataset.id); },
+    'scanHsaReceipts':    scanHsaReceipts,
     'submitHsaReimburse': submitHsaReimburse,
     'hideHsaModal':       hideHsaModal,
     'toggleHsaOpen':      toggleHsaOpen,
@@ -5215,6 +5216,7 @@ function replaceTr(tbodyId,i,newTr){
 var hsaData = null;
 var hsaReimburseId = '';
 var hsaShowOpenOnly = false;
+var hsaScanReport = null; // {created, skipped[]} from the last folder scan; shown until next scan
 
 var HSA_STATUS = {
   open:        { g:'\u25CB', t:'Open' },        // hollow circle
@@ -5285,6 +5287,15 @@ function renderHsa(d){
   if(d.strandedEntitlement != null && d.strandedEntitlement > 0){
     notes += '<div class="hsa-note">\u26A0 '+fmt(d.strandedEntitlement)+' of accrued entitlement exceeds the current HSA balance &mdash; claimable once the account grows.</div>';
   }
+  if(hsaScanReport){
+    if(hsaScanReport.createdCount){
+      notes += '<div class="hsa-note">\u2713 Folder scan imported '+hsaScanReport.createdCount+' new receipt'+(hsaScanReport.createdCount===1?'':'s')+'.</div>';
+    }
+    if(hsaScanReport.skipped && hsaScanReport.skipped.length){
+      notes += '<div class="hsa-note warn">\u26A0 Folder scan skipped '+hsaScanReport.skipped.length+' file'+(hsaScanReport.skipped.length===1?'':'s')+' (rename to <code>DATE~provider~amount.pdf</code> and rescan): '+
+        hsaScanReport.skipped.map(function(s){ return esc(s.name)+' &mdash; '+esc(s.reason); }).join('; ')+'</div>';
+    }
+  }
   $('hsa-note-area').innerHTML = notes;
 
   // -- Ledger --
@@ -5336,6 +5347,22 @@ function renderHsa(d){
 }
 
 function toggleHsaOpen(){ hsaShowOpenOnly = !hsaShowOpenOnly; if(hsaData) renderHsa(hsaData); }
+
+async function scanHsaReceipts(){
+  if(isDemo || !SCRIPT_URL){ showBanner('Demo mode \u2014 folder scan unavailable','ok'); return; }
+  showBanner('Scanning folder\u2026','loading');
+  try {
+    var res = await apiPost(SCRIPT_URL, { action:'scanHsaFolder' });
+    if(!res || res.error){ showBanner('Scan failed: '+((res&&res.error)?res.error:'no response'),'err'); return; }
+    hsaScanReport = res; // surfaced as a persistent note by renderHsa
+    var msg = 'Imported '+res.createdCount+' receipt'+(res.createdCount===1?'':'s');
+    if(res.skippedCount) msg += ', skipped '+res.skippedCount+' (see notes)';
+    showBanner(msg, res.skippedCount ? 'err' : 'ok');
+    loadHsa(true); // authoritative refetch -- re-renders with the new rows + scan report
+  } catch(e){
+    showBanner('Scan error \u2014 refresh to check before retrying.','err');
+  }
+}
 
 function showHsaModal(id){
   if(!SCRIPT_URL){ showSetup(); return; }

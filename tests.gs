@@ -763,6 +763,44 @@ function testAddHsaReceipt() {
   assertEqual(rows[0].id, 1, 'row 1 id correct on the sheet');
   assertEqual(rows[1].funding, 'HSA', 'row 2 funding correct on the sheet');
   assertApprox(rows[0].amount, 120.5, 'row 1 amount correct on the sheet');
+
+  // sourceFileId lands in col L (12) -- the folder-scan dedup key
+  var r3 = addHsaReceipt({
+    dateIncurred:'2026-05-03', amount:75, provider:'Drive Scan', funding:'OOP',
+    sourceFileId:'drive-file-abc123'
+  }, HSA_TEST_SHEET_NAME);
+  assert(r3.ok, 'add with sourceFileId returns ok');
+  assertEqual(sheet.getRange(r3.row, 12).getValue(), 'drive-file-abc123', 'source_file_id written to col L');
+}
+
+function testParseReceiptName() {
+  section('_parseReceiptName (filename -> fields)');
+
+  var a = _parseReceiptName('2026-06-27~Summit Dental~1200.pdf');
+  assert(!a.error, 'valid name parses');
+  assertEqual(a.date, '2026-06-27', 'date parsed');
+  assertEqual(a.provider, 'Summit Dental', 'provider with space parsed');
+  assertApprox(a.amount, 1200, 'amount parsed');
+
+  var b = _parseReceiptName('2026-06-27~Summit_Dental~1200.50.pdf');
+  assertEqual(b.provider, 'Summit_Dental', 'provider with underscore allowed (delimiter is ~)');
+  assertApprox(b.amount, 1200.50, 'decimal amount parsed');
+
+  var c = _parseReceiptName('2026-06-27~CVS~$1,200.00.pdf');
+  assertApprox(c.amount, 1200, 'currency symbols/commas stripped from amount');
+
+  var d = _parseReceiptName('2026-06-27~Walgreens~10.PDF');
+  assert(!d.error, 'uppercase .PDF extension accepted');
+
+  // Strict rejections -- each must skip, never guess
+  assert(_parseReceiptName('2026-6-27~X~10.pdf').error,    'rejects non-zero-padded date');
+  assert(_parseReceiptName('06-27-2026~X~10.pdf').error,   'rejects wrong date order');
+  assert(_parseReceiptName('2026-06-27~X.pdf').error,      'rejects too few fields');
+  assert(_parseReceiptName('2026-06-27~A~B~10.pdf').error, 'rejects too many fields');
+  assert(_parseReceiptName('2026-06-27~~10.pdf').error,    'rejects empty provider');
+  assert(_parseReceiptName('2026-06-27~X~abc.pdf').error,  'rejects non-numeric amount');
+  assert(_parseReceiptName('2026-06-27~X~0.pdf').error,    'rejects zero amount');
+  assert(_parseReceiptName('2026-06-27~X~-5.pdf').error,   'rejects negative amount');
 }
 
 function testMortgageSingleSource() {
@@ -846,6 +884,7 @@ function _runTestSuite(includeSlow) {
     testConfigParsing();
     testHsa();
     testAddHsaReceipt();
+    testParseReceiptName();
     testMonthCacheTiers();
 
     if (includeSlow) {

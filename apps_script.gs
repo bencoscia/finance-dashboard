@@ -117,6 +117,7 @@ function dispatch(payload) {
     else if (action === 'deleteVariableEntry') { invalidateCardBalanceCache(); return deleteVariableEntry(payload); }
     else if (action === 'reimburseReceipt')   return _withIdem(payload, function(){ return reimburseReceipt(payload); }); // invalidates HSA cache internally
     else if (action === 'addHsaReceipt')      return _withIdem(payload, function(){ return addHsaReceipt(payload); });   // invalidates HSA cache internally
+    else if (action === 'scanHsaFolder')      return scanHsaFolder(); // idempotent via fileId dedup, not _withIdem
     else return { error: 'Unknown action: ' + action };
   } catch(err) {
     return { error: err.message };
@@ -179,6 +180,7 @@ function doPost(e) {
     else if (p.action === 'deleteVariableEntry') data = deleteVariableEntry(p);
     else if (p.action === 'reimburseReceipt')   data = _withIdem(p, function(){ return reimburseReceipt(p); }); // invalidates HSA cache internally
     else if (p.action === 'addHsaReceipt')      data = _withIdem(p, function(){ return addHsaReceipt(p); });   // invalidates HSA cache internally
+    else if (p.action === 'scanHsaFolder')      data = scanHsaFolder(); // idempotent via fileId dedup, not _withIdem
     else data = { error: 'Unknown POST action: ' + p.action };
     // Invalidate caches for the affected month and card balances
     if (p.month) invalidateMonthCache(p.month);
@@ -1040,7 +1042,7 @@ function addTransaction(p) {
 // Parsed result is cached 5 minutes (edits take effect within that).
 // Run setupConfigSheet() in migrate.gs once to create the sheet.
 var CONFIG_SHEET  = 'Config';
-var CFG_CACHE_KEY = 'cfg_v2'; // v2: added hsaEstablished -- bump on every shape change (lesson: stale-shape cache, see INDEX trap)
+var CFG_CACHE_KEY = 'cfg_v3'; // v3: added hsaReceiptFolder (v2 added hsaEstablished) -- bump on every shape change (lesson: stale-shape cache, see INDEX trap)
 var _cfgMemo = null;
 
 function cfg() {
@@ -1080,6 +1082,7 @@ function _configDefaults() {
     seedMonth:            SEED_MONTH_CONFIG,
     quarterlyExpenses:    QUARTERLY_EXPENSES,
     hsaEstablished:       null,
+    hsaReceiptFolder:     null,
   };
 }
 
@@ -1129,6 +1132,7 @@ function _applyRawConfig(out, raw) {
   if ('projection_target' in raw)      out.projectionTarget     = _cfgNum(raw['projection_target'], out.projectionTarget);
   if ('quarterly_expenses' in raw)     out.quarterlyExpenses    = _parseQuarterly(raw['quarterly_expenses'], out.quarterlyExpenses);
   if ('hsa_established' in raw)         out.hsaEstablished       = _cfgDateStr(raw['hsa_established'], out.hsaEstablished);
+  if ('hsa_receipt_folder' in raw)      out.hsaReceiptFolder     = String(raw['hsa_receipt_folder'] || '').trim() || null;
   if ('seed_month' in raw) {
     var sm = raw['seed_month'];
     if (sm instanceof Date && !isNaN(sm.getTime()))
@@ -2966,11 +2970,15 @@ function addHsaReceipt(p, sheetNameOverride) {
     }
     var newId = maxId + 1;
     var insertRow = Math.max(sheet.getLastRow() + 1, HSA_DATA_ROW);
+    // Col L (12) = source_file_id: the Drive fileId when created by the folder
+    // scan, blank for manual adds. This is the dedup key scanHsaFolder reads to
+    // avoid re-importing a file. Written in the same setValues as the id so it
+    // lands atomically under the lock.
     var row = [
       newId, new Date(dateStr + 'T12:00:00'), amount,
       String(p.provider || '').trim(), String(p.description || '').trim(),
       String(p.category || '').trim(), funding, receiptLink, '', '',
-      String(p.notes || '').trim()
+      String(p.notes || '').trim(), String(p.sourceFileId || '')
     ];
     sheet.getRange(insertRow, 1, 1, row.length).setValues([row]);
     sheet.getRange(insertRow, 1).setNumberFormat('0');
@@ -2979,6 +2987,93 @@ function addHsaReceipt(p, sheetNameOverride) {
     SpreadsheetApp.flush();
     invalidateHsaCache();
     return { ok: true, id: newId, row: insertRow };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Parse a receipt filename of the form  DATE~provider~amount.pdf  into fields.
+// Pure -- unit-tested by testParseReceiptName. Delimiter is '~' (NOT '_' or
+// '-') so provider may contain spaces, underscores, and hyphens. Strict:
+// returns { error } on anything that doesn't match exactly, so the scan SKIPS
+// (and reports) a malformed name rather than guessing a wrong date/amount.
+function _parseReceiptName(fname) {
+  var base = String(fname || '').replace(/\.pdf$/i, '');
+  var parts = base.split('~');
+  if (parts.length !== 3) return { error: 'name must be DATE~provider~amount.pdf' };
+  var date     = parts[0].trim();
+  var provider = parts[1].trim();
+  var amtStr   = parts[2].trim().replace(/[$,]/g, '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { error: 'bad date (need YYYY-MM-DD)' };
+  if (!provider) return { error: 'missing provider' };
+  var amount = parseFloat(amtStr);
+  if (isNaN(amount) || amount <= 0) return { error: 'bad amount' };
+  return { date: date, provider: provider, amount: amount };
+}
+
+// -- POST / trigger: import new receipt PDFs from the Drive folder ----------
+// Takes no args so a future time-based trigger can call it directly. Idempotent
+// by construction: each created row stores its Drive fileId in col L, and a file
+// whose id is already present is skipped -- so re-running (button re-click,
+// retry, or hourly trigger) never double-imports. A script lock serializes
+// scans so two concurrent runs can't both see the same file as "new". Strict
+// filename parsing: unmatched names are skipped and returned in `skipped` with a
+// reason (fail loud, never guess). Auto-created rows default funding=OOP (the
+// safe default -- the receipt shows up as a reimbursable claim, not silently
+// dropped); category/description stay blank for you to fill in.
+function scanHsaFolder() {
+  var folderId = cfg().hsaReceiptFolder;
+  if (!folderId) return { error: 'Set hsa_receipt_folder in Config (the Drive folder ID).' };
+
+  var folder;
+  try { folder = DriveApp.getFolderById(folderId); }
+  catch (e) { return { error: 'Cannot open Drive folder (check the ID and that the script can access it): ' + e.message }; }
+
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(HSA_SHEET);
+  if (!sheet) return { error: 'Sheet not found: ' + HSA_SHEET };
+
+  var lock = LockService.getScriptLock();
+  var gotLock = false;
+  try { gotLock = lock.tryLock(20000); } catch (e) {}
+  if (!gotLock) return { error: 'A scan is already running -- try again in a moment.' };
+
+  try {
+    invalidateSheet(HSA_SHEET);
+    var values = readSheet(sheet);
+    var seen = {};
+    for (var i = HSA_DATA_ROW - 1; i < values.length; i++) {
+      var fid = values[i][11]; // col L
+      if (fid) seen[String(fid)] = true;
+    }
+
+    var created = [], skipped = [];
+    var it = folder.getFilesByType('application/pdf');
+    while (it.hasNext()) {
+      var file  = it.next();
+      var theId = file.getId();
+      var fname = file.getName();
+      if (seen[theId]) continue; // already imported -- silent (not noise)
+
+      var parsed = _parseReceiptName(fname);
+      if (parsed.error) { skipped.push({ name: fname, reason: parsed.error }); continue; }
+
+      var res = addHsaReceipt({
+        dateIncurred: parsed.date,
+        amount:       parsed.amount,
+        provider:     parsed.provider,
+        funding:      'OOP',
+        receiptLink:  file.getUrl(),
+        sourceFileId: theId
+      });
+      if (res.error) { skipped.push({ name: fname, reason: res.error }); continue; }
+
+      seen[theId] = true;
+      created.push({ name: fname, id: res.id });
+    }
+
+    invalidateHsaCache();
+    return { ok: true, created: created, createdCount: created.length, skipped: skipped, skippedCount: skipped.length };
   } finally {
     lock.releaseLock();
   }
