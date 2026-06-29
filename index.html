@@ -5365,6 +5365,12 @@ function renderHsaPlanYear(d){
       '<div class="py-big">'+(d.hsaBalance==null?'&mdash;':fmt(d.hsaBalance))+'</div>'+
       '<div class="py-sub">'+(d.balanceAsOf?('Fidelity, as of '+esc(d.balanceAsOf)):'from the sheet (B1)')+'</div>'+
       '<div class="py-hint">Add an "HSA Contributions" sheet to compute a reconciled balance from logged activity.</div></div>';
+  } else if(p.contribRows===0){
+    // Sheet exists but no readable amounts -> don't show a garbage balance.
+    balCard = '<div class="py-card"><div class="py-lbl">Balance</div>'+
+      '<div class="py-big">'+(d.hsaBalance==null?'&mdash;':fmt(d.hsaBalance))+'</div>'+
+      '<div class="py-sub">'+(d.balanceAsOf?('Fidelity, as of '+esc(d.balanceAsOf)):'from the sheet (B1)')+'</div>'+
+      '<div class="py-recon"><span class="warn">\u26A0 HSA Contributions sheet found, but read 0 amounts \u2014 check that the <b>amount</b> column is numeric and headed "amount".</span></div></div>';
   } else {
     var recon;
     if(p.drift==null){

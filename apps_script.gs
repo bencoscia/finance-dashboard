@@ -2762,7 +2762,7 @@ var HSA_SHEET         = 'HSA Receipts';
 var HSA_CONTRIB_SHEET = 'HSA Contributions'; // date | amount | type(employee|employer|interest) | notes; header row 1, data row 2+
 var HSA_CONTRIB_DATA_ROW = 2;
 var HSA_DATA_ROW      = 4;          // 1-indexed first data row (headers on row 3)
-var HSA_CACHE_VERSION = 'hsa_v3';   // v3: added planYear (v2 added needsReview) -- bump on getHsa response-shape change
+var HSA_CACHE_VERSION = 'hsa_v4';   // v4: planYear gained contribRows (v3 planYear, v2 needsReview) -- bump on getHsa response-shape change
 var HSA_CACHE_KEY     = HSA_CACHE_VERSION + '_data';
 
 function _hsaR2(x) { var f = parseFloat(x); return isNaN(f) ? 0 : Math.round(f * 100) / 100; }
@@ -2882,17 +2882,29 @@ function _hsaReadContributions(ss) {
   var sheet = ss.getSheetByName(HSA_CONTRIB_SHEET);
   if (!sheet) return null; // null => sheet not present (distinct from empty)
   var lastRow = sheet.getLastRow();
-  if (lastRow < HSA_CONTRIB_DATA_ROW) return [];
-  var n   = lastRow - (HSA_CONTRIB_DATA_ROW - 1);
-  var v   = sheet.getRange(HSA_CONTRIB_DATA_ROW, 1, n, 3).getValues(); // A:date B:amount C:type
+  if (lastRow < 1) return [];
+  var lastCol = Math.max(sheet.getLastColumn(), 3);
+  var all = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+
+  // Locate columns by header NAME (robust to reordering); fall back to fixed
+  // positions date|amount|type if no header row is present.
+  var hdr = [];
+  for (var h = 0; h < all[0].length; h++) hdr.push(String(all[0][h] || '').trim().toLowerCase());
+  var ai = hdr.indexOf('amount'), di = hdr.indexOf('date'), ti = hdr.indexOf('type');
+  var hasHeader = (ai >= 0 || di >= 0);
+  if (ai < 0) ai = 1;
+  if (di < 0) di = 0;
+  if (ti < 0) ti = 2;
+
   var out = [];
-  for (var i = 0; i < v.length; i++) {
-    var amt = parseFloat(v[i][1]);
-    if (isNaN(amt) || amt === 0) continue; // skip blank/zero spacer rows
+  for (var i = (hasHeader ? 1 : 0); i < all.length; i++) {
+    // Strip $/commas/spaces so text-formatted amounts still parse.
+    var amt = parseFloat(String(all[i][ai]).replace(/[$,\s]/g, ''));
+    if (isNaN(amt) || amt === 0) continue; // blank/zero/unparseable spacer rows
     out.push({
-      date:   _hsaDateStr(v[i][0]),
+      date:   _hsaDateStr(all[i][di]),
       amount: _hsaR2(amt),
-      type:   String(v[i][2] || 'employee').trim().toLowerCase()
+      type:   String(all[i][ti] || 'employee').trim().toLowerCase()
     });
   }
   return out;
@@ -2970,7 +2982,8 @@ function _hsaPlanYear(rolled, contribs, hsaBalance, deductible, contribLimit, re
     balanceInflows:      hasContrib ? inflows : null,
     balanceOutflows:     totalOut,
     drift:               drift,
-    contribLogged:       hasContrib
+    contribLogged:       hasContrib,
+    contribRows:         hasContrib ? contribs.length : 0
   };
 }
 
