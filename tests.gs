@@ -754,7 +754,7 @@ function testHsaPlanYear() {
     { date:'2026-02-01', amount:2925.01, type:'employee' },
     { date:'2026-04-23', amount:2000.00, type:'employer' }
   ];
-  var p = _hsaPlanYear(rolled, contribs, 2052.65, 3300, 8750, 1, '2026-07-07');
+  var p = _hsaPlanYear(rolled, contribs, 2052.65, null, 3300, 8750, 1, '2026-07-07');
 
   assertEqual(p.planYearStart, '2026-01-01', 'calendar plan year starts Jan 1');
   // deductible: 2026 qualified incurred = 3201.71 (card) + 200 (OOP) = 3401.71; flagged 20.48 excluded
@@ -764,19 +764,30 @@ function testHsaPlanYear() {
   // contributions toward limit: employee+employer this calendar year = 2925.01 + 2000 = 4925.01
   assertApprox(p.contribYtd, 4925.01, 'contrib YTD = employee+employer this calendar year');
   assertApprox(p.contribRoom, 3824.99, 'contrib room = limit - YTD');
-  // balance: inflows 8928.74 - outflows (card 6858.52 + reimb 50) = 2020.22
+  // No B2 -> all-time reconstruction: inflows 8928.74 - outflows (card 6858.52 + reimb 50) = 2020.22
   assertApprox(p.balanceOutflows, 6908.52, 'outflows = all card spend + reimbursements');
-  assertApprox(p.computedBalance, 2020.22, 'computed balance = inflows - outflows');
+  assertApprox(p.computedBalance, 2020.22, 'no B2 -> computed balance = all-time inflows - outflows');
   assertApprox(p.drift, 32.43, 'drift vs B1 surfaces unlogged interest');
 
+  // Date-aware reconciliation: B1 as of 2026-04-01. Split by that date:
+  //   inThru = 4003.73 + 2925.01 = 6928.74 ; outThru = 3636.33 + 3201.71 = 6838.04
+  //   computedThruB2 = 90.70 ; B1 = 123.13 -> drift 32.43 (interest).
+  //   After 4/1: in = 2000 (employer 4/23) ; out = 20.48 (draft card) + 50 (reimb) = 70.48.
+  //   estimated now = 123.13 + 2000 - 70.48 = 2052.65.
+  var pa = _hsaPlanYear(rolled, contribs, 123.13, '2026-04-01', 3300, 8750, 1, '2026-07-07');
+  assertApprox(pa.drift, 32.43, 'date-aware: drift is interest-only, not stale-anchor activity');
+  assertApprox(pa.inflowsSince, 2000, 'inflows since B2 = contributions dated after B2');
+  assertApprox(pa.outflowsSince, 70.48, 'outflows since B2 = card + reimbursement after B2');
+  assertApprox(pa.computedBalance, 2052.65, 'displayed balance projects B1 forward by since-B2 activity');
+
   // No contributions sheet -> balance/contrib gauges null, deductible still works
-  var p2 = _hsaPlanYear(rolled, null, 2052.65, 3300, 8750, 1, '2026-07-07');
+  var p2 = _hsaPlanYear(rolled, null, 2052.65, null, 3300, 8750, 1, '2026-07-07');
   assertEqual(p2.computedBalance, null, 'no contrib sheet -> computed balance null');
   assertEqual(p2.contribYtd, null, 'no contrib sheet -> contrib YTD null');
   assertApprox(p2.deductibleYtd, 3401.71, 'deductible still computes without contributions');
 
   // Mid-year plan reset (e.g. month 7): on 2026-07-07 the plan year just started
-  var p3 = _hsaPlanYear(rolled, contribs, 2052.65, 3300, 8750, 7, '2026-07-07');
+  var p3 = _hsaPlanYear(rolled, contribs, 2052.65, null, 3300, 8750, 7, '2026-07-07');
   assertEqual(p3.planYearStart, '2026-07-01', 'mid-year reset month resolves plan-year start');
   assertEqual(p3.deductibleYtd, 0, 'fresh plan year -> deductible YTD resets to 0');
 }

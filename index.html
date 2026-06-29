@@ -5339,7 +5339,8 @@ function demoHsa(){
     planYear:{ planYearStart:'2026-01-01', planYearLabel:'2026', deductibleResetMonth:1,
       deductible:3300, deductibleYtd:3201.71, deductibleRemaining:98.29, deductiblePct:97,
       contribYtd:4925.01, contribLimit:8750, contribRoom:3824.99,
-      computedBalance:2070.22, balanceInflows:8928.74, balanceOutflows:6858.52, drift:32.43, contribLogged:true },
+      computedBalance:1687.82, balanceInflows:8928.74, balanceOutflows:6858.52,
+      inflowsSince:0, outflowsSince:312.18, drift:32.43, contribLogged:true, contribRows:31 },
     rows:[
       {id:1, dateIncurred:'2025-05-12', amount:1200, provider:'Summit Dental',     description:'Crown',         category:'Dental',    funding:'OOP', receiptLink:'', reimbursedAmount:0,    reimbursedDate:'',           status:'open',        qualified:true},
       {id:2, dateIncurred:'2025-07-03', amount:800,  provider:'LensCrafters',       description:'Glasses',       category:'Vision',    funding:'OOP', receiptLink:'', reimbursedAmount:800,  reimbursedDate:'2026-01-15', status:'reimbursed',  qualified:true},
@@ -5380,14 +5381,20 @@ function renderHsaPlanYear(d){
       var ok = Math.abs(p.drift) <= tol;
       var sign = p.drift>=0?'+':'\u2212';
       recon = '<div class="py-recon">'+
-        (ok ? '<span class="ok">\u2713 reconciles with Fidelity \u2014 drift '+sign+fmt(Math.abs(p.drift))+' (\u2248 unlogged interest)</span>'
+        (ok ? '<span class="ok">\u2713 reconciles to B1'+(d.balanceAsOf?(' (through '+esc(d.balanceAsOf)+')'):'')+' \u2014 drift '+sign+fmt(Math.abs(p.drift))+' (\u2248 unlogged interest)</span>'
             : '<span class="warn">\u26A0 drift '+sign+fmt(Math.abs(p.drift))+' \u2014 activity may be unlogged; re-import to check</span>')+
         '</div>';
     }
-    balCard = '<div class="py-card"><div class="py-lbl">Balance (computed)</div>'+
+    var since = '';
+    if((p.inflowsSince||0) > 0.005 || (p.outflowsSince||0) > 0.005){
+      since = ' Since then: '+(p.inflowsSince?('+'+fmt(p.inflowsSince)+' in'):'')+
+        ((p.inflowsSince&&p.outflowsSince)?', ':'')+
+        (p.outflowsSince?('\u2212'+fmt(p.outflowsSince)+' out'):'')+'.';
+    }
+    var blbl = (d.hsaBalance!=null && d.balanceAsOf && since) ? 'Balance (est. now)' : 'Balance (computed)';
+    balCard = '<div class="py-card"><div class="py-lbl">'+blbl+'</div>'+
       '<div class="py-big">'+fmt(p.computedBalance)+'</div>'+
-      '<div class="py-sub">'+fmt(p.balanceInflows)+' in \u2212 '+fmt(p.balanceOutflows)+' out, since inception. '+
-        'Fidelity (B1): '+(d.hsaBalance==null?'&mdash;':fmt(d.hsaBalance))+(d.balanceAsOf?(' as of '+esc(d.balanceAsOf)):'')+'.</div>'+
+      '<div class="py-sub">Fidelity (B1): '+(d.hsaBalance==null?'&mdash;':fmt(d.hsaBalance))+(d.balanceAsOf?(' as of '+esc(d.balanceAsOf)):'')+'.'+since+'</div>'+
       recon+'</div>';
   }
 

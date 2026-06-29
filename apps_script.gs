@@ -2762,7 +2762,7 @@ var HSA_SHEET         = 'HSA Receipts';
 var HSA_CONTRIB_SHEET = 'HSA Contributions'; // date | amount | type(employee|employer|interest) | notes; header row 1, data row 2+
 var HSA_CONTRIB_DATA_ROW = 2;
 var HSA_DATA_ROW      = 4;          // 1-indexed first data row (headers on row 3)
-var HSA_CACHE_VERSION = 'hsa_v4';   // v4: planYear gained contribRows (v3 planYear, v2 needsReview) -- bump on getHsa response-shape change
+var HSA_CACHE_VERSION = 'hsa_v5';   // v5: date-aware balance (inflowsSince/outflowsSince; computedBalance now projects B1 forward) -- bump on getHsa response-shape change
 var HSA_CACHE_KEY     = HSA_CACHE_VERSION + '_data';
 
 function _hsaR2(x) { var f = parseFloat(x); return isNaN(f) ? 0 : Math.round(f * 100) / 100; }
@@ -2914,16 +2914,18 @@ function _hsaReadContributions(ss) {
 //   rolled:   _hsaRollups output rows (have dateIncurred, amount, funding,
 //             reimbursedAmount, qualified, needsReview).
 //   contribs: [{date, amount, type}] or null (sheet absent).
-//   hsaBalance: B1 number or null.
+//   hsaBalance: B1 number or null.  balanceAsOf: B2 'YYYY-MM-DD' or null.
 //   cfg fields: deductible (num|null), contribLimit (num|null), resetMonth (1-12).
 //   nowStr: 'YYYY-MM-DD' today (injected for testability).
-// Balance is a RECONCILIATION reconstruction (inflows - outflows), compared to
-// B1 (the Fidelity-authoritative anchor) via `drift`. Card spend leaves cash
+// Balance reconciliation is done AS OF the B1 anchor date (balanceAsOf): the
+// reconstruction through B2 is compared to B1 (drift should be ~unlogged
+// interest), and the displayed balance projects B1 forward by activity logged
+// since B2 -- so a stale B1 doesn't masquerade as drift. Card spend leaves cash
 // regardless of qualification, so ALL funding=HSA rows count as outflow (incl.
 // needs_review); the deductible total, by contrast, excludes unverified drafts.
 // Interest is an inflow (type='interest') but is NOT a contribution toward the
 // IRS limit, so the limit gauge counts employee+employer only.
-function _hsaPlanYear(rolled, contribs, hsaBalance, deductible, contribLimit, resetMonth, nowStr) {
+function _hsaPlanYear(rolled, contribs, hsaBalance, balanceAsOf, deductible, contribLimit, resetMonth, nowStr) {
   resetMonth = (resetMonth >= 1 && resetMonth <= 12) ? resetMonth : 1;
   var y = parseInt(nowStr.slice(0, 4), 10);
   var m = parseInt(nowStr.slice(5, 7), 10);
@@ -2941,31 +2943,48 @@ function _hsaPlanYear(rolled, contribs, hsaBalance, deductible, contribLimit, re
   }
   deductibleYtd = _hsaR2(deductibleYtd);
 
-  // Balance outflows: all card spend leaves cash + all reimbursements taken
-  var cardOut = 0, reimbOut = 0;
-  for (var j = 0; j < rolled.length; j++) {
-    var rr = rolled[j];
-    if (String(rr.funding).toUpperCase() === 'HSA') cardOut += _hsaR2(rr.amount);
-    reimbOut += _hsaR2(rr.reimbursedAmount);
-  }
-  var totalOut = _hsaR2(cardOut + reimbOut);
-
+  // --- Balance: reconcile AS OF B2, then project B1 forward to now ---
+  var asOf = balanceAsOf || null;
   var hasContrib = (contribs != null);
-  var inflows = 0, contribYtd = 0;
+
+  // Inflows split by whether they predate the B1 anchor date
+  var inThru = 0, inAfter = 0, contribYtd = 0;
   if (hasContrib) {
     for (var k = 0; k < contribs.length; k++) {
       var c = contribs[k];
-      inflows += c.amount;                                  // contributions + interest all add cash
-      var t = c.type;
-      if ((t === 'employee' || t === 'employer') && c.date && String(c.date) >= calYearStart)
-        contribYtd += c.amount;                             // interest does NOT count toward the limit
+      if (!asOf || (c.date && c.date <= asOf)) inThru += c.amount; else inAfter += c.amount;
+      if ((c.type === 'employee' || c.type === 'employer') && c.date && c.date >= calYearStart)
+        contribYtd += c.amount;                              // interest does NOT count toward the limit
     }
   }
-  inflows = _hsaR2(inflows);
+  // Outflows: card spend (dated at dateIncurred) + reimbursements (at reimbursedDate)
+  var outThru = 0, outAfter = 0;
+  for (var j = 0; j < rolled.length; j++) {
+    var rr = rolled[j];
+    if (String(rr.funding).toUpperCase() === 'HSA') {
+      var dd = rr.dateIncurred || '';
+      if (!asOf || (dd && dd <= asOf)) outThru += _hsaR2(rr.amount); else outAfter += _hsaR2(rr.amount);
+    }
+    var rb = _hsaR2(rr.reimbursedAmount);
+    if (rb > 0) {
+      var rdd = rr.reimbursedDate || rr.dateIncurred || '';
+      if (!asOf || (rdd && rdd <= asOf)) outThru += rb; else outAfter += rb;
+    }
+  }
+  inThru = _hsaR2(inThru); inAfter = _hsaR2(inAfter);
+  outThru = _hsaR2(outThru); outAfter = _hsaR2(outAfter);
   contribYtd = _hsaR2(contribYtd);
 
-  var computedBalance = hasContrib ? _hsaR2(inflows - totalOut) : null;
-  var drift = (computedBalance == null || hsaBalance == null) ? null : _hsaR2(hsaBalance - computedBalance);
+  var computedThruB2 = _hsaR2(inThru - outThru);          // reconstruction at the B1 date
+  // Displayed balance: project the authoritative B1 forward by since-B2 activity.
+  // No B1 -> show the from-scratch reconstruction. No B2 -> can't project, so
+  // also show the reconstruction (drift then compares against all-time).
+  var computedBalance;
+  if (!hasContrib) computedBalance = null;
+  else if (hsaBalance == null || !asOf) computedBalance = computedThruB2;
+  else computedBalance = _hsaR2(hsaBalance + inAfter - outAfter);
+  // Drift = anchor minus the as-of-B2 reconstruction (~unlogged interest); like-for-like dates.
+  var drift = (!hasContrib || hsaBalance == null) ? null : _hsaR2(hsaBalance - computedThruB2);
 
   return {
     planYearStart:       planYearStart,
@@ -2979,8 +2998,10 @@ function _hsaPlanYear(rolled, contribs, hsaBalance, deductible, contribLimit, re
     contribLimit:        (contribLimit == null) ? null : _hsaR2(contribLimit),
     contribRoom:         (!hasContrib || contribLimit == null) ? null : _hsaR2(Math.max(contribLimit - contribYtd, 0)),
     computedBalance:     computedBalance,
-    balanceInflows:      hasContrib ? inflows : null,
-    balanceOutflows:     totalOut,
+    balanceInflows:      hasContrib ? _hsaR2(inThru + inAfter) : null,
+    balanceOutflows:     _hsaR2(outThru + outAfter),
+    inflowsSince:        hasContrib ? inAfter : null,
+    outflowsSince:       outAfter,
     drift:               drift,
     contribLogged:       hasContrib,
     contribRows:         hasContrib ? contribs.length : 0
@@ -3007,7 +3028,7 @@ function getHsa() {
 
   var contribs = _hsaReadContributions(ss);
   var nowStr   = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
-  var plan = _hsaPlanYear(roll.rows, contribs, hsaBalance,
+  var plan = _hsaPlanYear(roll.rows, contribs, hsaBalance, balanceAsOf,
     c.hsaDeductible, c.hsaContribLimit, c.hsaDeductibleResetMonth, nowStr);
 
   var result = {
