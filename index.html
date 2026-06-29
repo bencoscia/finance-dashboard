@@ -281,6 +281,21 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .hsa-proj-grid label{display:flex;flex-direction:column;font-size:11px;color:var(--muted);font-family:var(--mono);gap:4px}
 .hsa-proj-grid input{font-family:var(--mono);font-size:14px;padding:7px 8px;border:1px solid var(--border2);border-radius:var(--r);background:var(--surface2);color:var(--text);outline:none}
 .hsa-proj-foot{font-size:11px;color:var(--faint);margin-top:10px;line-height:1.5}
+.py-wrap{display:grid;grid-template-columns:1.1fr 1fr 1fr;gap:14px;margin:4px 0 18px}
+.py-card{border:1px solid var(--border2);border-radius:var(--r);background:var(--surface);padding:12px 14px}
+.py-lbl{font-family:var(--mono);font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.py-big{font-family:var(--mono);font-size:24px;color:var(--text);line-height:1.1}
+.py-sub{font-size:11px;color:var(--muted);margin-top:6px;line-height:1.45}
+.py-bar{position:relative;height:12px;border-radius:6px;background:var(--surface2);border:1px solid var(--border2);overflow:hidden;margin:8px 0 6px}
+.py-fill{position:absolute;left:0;top:0;bottom:0;background:var(--blue);border-radius:6px 0 0 6px}
+.py-fill.over{background:repeating-linear-gradient(45deg,var(--blue),var(--blue) 5px,var(--c2) 5px,var(--c2) 10px)}
+.py-tick{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--text);opacity:.5}
+.py-stat{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;color:var(--text)}
+.py-recon{font-family:var(--mono);font-size:11px;margin-top:6px}
+.py-recon .ok{color:var(--muted)}
+.py-recon .warn{color:var(--text);font-weight:600}
+.py-hint{font-size:11px;color:var(--faint);font-style:italic;margin-top:6px}
+@media (max-width:768px){.py-wrap{grid-template-columns:1fr}}
 .hsa-proj-grp{font-family:var(--mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:6px 0 8px;border-bottom:1px solid var(--border);padding-bottom:4px}
 .hc-src{font-size:10px;color:var(--c1);font-weight:600}
 .hsa-eng-hd{font-family:var(--display);font-size:15px;color:var(--text);margin:0 0 8px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
@@ -979,6 +994,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
         <div class="metric"><div class="mlabel">Total substantiated</div><div class="mval sk" style="height:26px;width:120px"> </div></div>
       </div>
       <div id="hsa-note-area"></div>
+      <div id="hsa-planyear"></div>
       <div style="margin-bottom:10px"><button class="hsa-filter-btn" data-action="showQuickAdd" data-qa-type="hsa">+ Add receipt</button> <button class="hsa-filter-btn" data-action="scanHsaReceipts">Scan folder for new receipts</button></div>
       <div id="hsa-content"><div class="tbl-empty">Loading&hellip;</div></div>
 
@@ -5320,6 +5336,10 @@ function demoHsa(){
   return {
     established:'2025-04-17', hsaBalance:2000, balanceAsOf:'2026-06-01',
     unreimbursed:2700, reimbursableNow:2000, totalSubstantiated:4800, strandedEntitlement:700,
+    planYear:{ planYearStart:'2026-01-01', planYearLabel:'2026', deductibleResetMonth:1,
+      deductible:3300, deductibleYtd:3201.71, deductibleRemaining:98.29, deductiblePct:97,
+      contribYtd:4925.01, contribLimit:8750, contribRoom:3824.99,
+      computedBalance:2070.22, balanceInflows:8928.74, balanceOutflows:6858.52, drift:32.43, contribLogged:true },
     rows:[
       {id:1, dateIncurred:'2025-05-12', amount:1200, provider:'Summit Dental',     description:'Crown',         category:'Dental',    funding:'OOP', receiptLink:'', reimbursedAmount:0,    reimbursedDate:'',           status:'open',        qualified:true},
       {id:2, dateIncurred:'2025-07-03', amount:800,  provider:'LensCrafters',       description:'Glasses',       category:'Vision',    funding:'OOP', receiptLink:'', reimbursedAmount:800,  reimbursedDate:'2026-01-15', status:'reimbursed',  qualified:true},
@@ -5330,9 +5350,82 @@ function demoHsa(){
   };
 }
 
+// Plan-year panel: reconciled balance, deductible progress, contributions YTD.
+// Protan-safe throughout: bars separate by lightness + fill width + numbers;
+// reconciliation status uses glyph + word, never color alone.
+function renderHsaPlanYear(d){
+  var host = $('hsa-planyear'); if(!host) return;
+  var p = d && d.planYear;
+  if(!p){ host.innerHTML=''; return; }
+
+  // --- Balance card (computed reconstruction vs Fidelity B1 anchor) ---
+  var balCard;
+  if(!p.contribLogged){
+    balCard = '<div class="py-card"><div class="py-lbl">Balance</div>'+
+      '<div class="py-big">'+(d.hsaBalance==null?'&mdash;':fmt(d.hsaBalance))+'</div>'+
+      '<div class="py-sub">'+(d.balanceAsOf?('Fidelity, as of '+esc(d.balanceAsOf)):'from the sheet (B1)')+'</div>'+
+      '<div class="py-hint">Add an "HSA Contributions" sheet to compute a reconciled balance from logged activity.</div></div>';
+  } else {
+    var recon;
+    if(p.drift==null){
+      recon = '<div class="py-recon ok">Set the HSA balance (B1) in the sheet to reconcile.</div>';
+    } else {
+      var tol = Math.max(50, Math.abs(d.hsaBalance||0)*0.02);
+      var ok = Math.abs(p.drift) <= tol;
+      var sign = p.drift>=0?'+':'\u2212';
+      recon = '<div class="py-recon">'+
+        (ok ? '<span class="ok">\u2713 reconciles with Fidelity \u2014 drift '+sign+fmt(Math.abs(p.drift))+' (\u2248 unlogged interest)</span>'
+            : '<span class="warn">\u26A0 drift '+sign+fmt(Math.abs(p.drift))+' \u2014 activity may be unlogged; re-import to check</span>')+
+        '</div>';
+    }
+    balCard = '<div class="py-card"><div class="py-lbl">Balance (computed)</div>'+
+      '<div class="py-big">'+fmt(p.computedBalance)+'</div>'+
+      '<div class="py-sub">'+fmt(p.balanceInflows)+' in \u2212 '+fmt(p.balanceOutflows)+' out, since inception. '+
+        'Fidelity (B1): '+(d.hsaBalance==null?'&mdash;':fmt(d.hsaBalance))+(d.balanceAsOf?(' as of '+esc(d.balanceAsOf)):'')+'.</div>'+
+      recon+'</div>';
+  }
+
+  // --- progress bar helper (protan-safe) ---
+  function bar(label, ytd, total, pct, foot, room){
+    if(total==null){
+      return '<div class="py-card"><div class="py-lbl">'+label+'</div>'+
+        '<div class="py-big" style="color:var(--faint)">&mdash;</div>'+
+        '<div class="py-hint">'+foot+'</div></div>';
+    }
+    var w = Math.max(0, Math.min(pct==null?0:pct,100));
+    var over = (ytd>total+0.005);
+    var fill = '<div class="py-fill'+(over?' over':'')+'" style="width:'+w+'%"></div>'+
+               '<div class="py-tick" style="left:100%"></div>';
+    return '<div class="py-card"><div class="py-lbl">'+label+'</div>'+
+      '<div class="py-bar">'+fill+'</div>'+
+      '<div class="py-stat"><span>'+fmt(ytd)+' / '+fmt(total)+'</span><span>'+(pct==null?'':pct+'%')+'</span></div>'+
+      '<div class="py-sub">'+foot+'</div></div>';
+  }
+
+  var dedFoot, dedMet=(p.deductible!=null && p.deductibleRemaining===0);
+  if(p.deductible==null){
+    dedFoot = 'Set "hsa_deductible" in Config to track this.';
+  } else if(dedMet){
+    dedFoot = '\u2713 Deductible met for '+esc(p.planYearLabel)+'. Resets '+(p.deductibleResetMonth===1?'Jan 1':'plan-year start')+'.';
+  } else {
+    dedFoot = fmt(p.deductibleRemaining)+' to go \u00b7 '+esc(p.planYearLabel)+', resets '+(p.deductibleResetMonth===1?'Jan 1':'plan-year start')+'.';
+  }
+  var dedCard = bar('Deductible \u2014 '+esc(p.planYearLabel||''), p.deductibleYtd, p.deductible, p.deductiblePct, dedFoot);
+
+  var conFoot = (!p.contribLogged) ? 'Add an "HSA Contributions" sheet to track this.'
+    : (p.contribLimit==null ? 'Set "hsa_contrib_limit" in Config to track room to the max.'
+    : (fmt(p.contribRoom)+' room left to the annual max.'));
+  var conCard = bar('Contributions \u2014 '+(new Date().getFullYear()), p.contribLogged?p.contribYtd:null, p.contribLogged?p.contribLimit:null,
+    (p.contribLogged&&p.contribLimit)?Math.round(Math.min(p.contribYtd/p.contribLimit,1)*100):null, conFoot);
+
+  host.innerHTML = '<div class="py-wrap">'+balCard+dedCard+conCard+'</div>';
+}
+
 function renderHsa(d){
   if(!d) return;
   var rows = d.rows || [];
+
+  renderHsaPlanYear(d);
 
   // -- Hero metrics (all positive amounts; no pos/neg color needed) --
   var reimbHtml, reimbSub;

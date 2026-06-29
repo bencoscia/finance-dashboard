@@ -1044,7 +1044,7 @@ function addTransaction(p) {
 // Parsed result is cached 5 minutes (edits take effect within that).
 // Run setupConfigSheet() in migrate.gs once to create the sheet.
 var CONFIG_SHEET  = 'Config';
-var CFG_CACHE_KEY = 'cfg_v3'; // v3: added hsaReceiptFolder (v2 added hsaEstablished) -- bump on every shape change (lesson: stale-shape cache, see INDEX trap)
+var CFG_CACHE_KEY = 'cfg_v4'; // v4: added hsaDeductible/hsaContribLimit/hsaDeductibleResetMonth (v3 hsaReceiptFolder, v2 hsaEstablished) -- bump on every shape change (lesson: stale-shape cache, see INDEX trap)
 var _cfgMemo = null;
 
 function cfg() {
@@ -1085,6 +1085,9 @@ function _configDefaults() {
     quarterlyExpenses:    QUARTERLY_EXPENSES,
     hsaEstablished:       null,
     hsaReceiptFolder:     null,
+    hsaDeductible:        null,   // plan-year deductible $ (null -> tracker hidden)
+    hsaContribLimit:      null,   // annual HSA contribution limit $ (null -> gauge hidden)
+    hsaDeductibleResetMonth: 1,   // month the deductible resets (1 = Jan; calendar year)
   };
 }
 
@@ -1135,6 +1138,12 @@ function _applyRawConfig(out, raw) {
   if ('quarterly_expenses' in raw)     out.quarterlyExpenses    = _parseQuarterly(raw['quarterly_expenses'], out.quarterlyExpenses);
   if ('hsa_established' in raw)         out.hsaEstablished       = _cfgDateStr(raw['hsa_established'], out.hsaEstablished);
   if ('hsa_receipt_folder' in raw)      out.hsaReceiptFolder     = String(raw['hsa_receipt_folder'] || '').trim() || null;
+  if ('hsa_deductible' in raw)         out.hsaDeductible        = _cfgNum(raw['hsa_deductible'], out.hsaDeductible);
+  if ('hsa_contrib_limit' in raw)      out.hsaContribLimit      = _cfgNum(raw['hsa_contrib_limit'], out.hsaContribLimit);
+  if ('hsa_deductible_reset_month' in raw) {
+    var rm = parseInt(raw['hsa_deductible_reset_month'], 10);
+    if (rm >= 1 && rm <= 12) out.hsaDeductibleResetMonth = rm;
+  }
   if ('seed_month' in raw) {
     var sm = raw['seed_month'];
     if (sm instanceof Date && !isNaN(sm.getTime()))
@@ -2750,8 +2759,10 @@ function saveNetWorthSnapshot(p) {
 // receipt_link, reimbursed_amount, reimbursed_date, notes.
 // ============================================================
 var HSA_SHEET         = 'HSA Receipts';
+var HSA_CONTRIB_SHEET = 'HSA Contributions'; // date | amount | type(employee|employer|interest) | notes; header row 1, data row 2+
+var HSA_CONTRIB_DATA_ROW = 2;
 var HSA_DATA_ROW      = 4;          // 1-indexed first data row (headers on row 3)
-var HSA_CACHE_VERSION = 'hsa_v2';   // v2: rows gained needsReview -- bump on getHsa response-shape change
+var HSA_CACHE_VERSION = 'hsa_v3';   // v3: added planYear (v2 added needsReview) -- bump on getHsa response-shape change
 var HSA_CACHE_KEY     = HSA_CACHE_VERSION + '_data';
 
 function _hsaR2(x) { var f = parseFloat(x); return isNaN(f) ? 0 : Math.round(f * 100) / 100; }
@@ -2864,6 +2875,105 @@ function _hsaReadRows(sheet) {
   return rows;
 }
 
+// Reads the optional HSA Contributions sheet -> [{date, amount, type}].
+// Returns [] when the sheet is absent (plan-year balance/contrib gauges then
+// hide; the deductible tracker still works off receipts alone).
+function _hsaReadContributions(ss) {
+  var sheet = ss.getSheetByName(HSA_CONTRIB_SHEET);
+  if (!sheet) return null; // null => sheet not present (distinct from empty)
+  var lastRow = sheet.getLastRow();
+  if (lastRow < HSA_CONTRIB_DATA_ROW) return [];
+  var n   = lastRow - (HSA_CONTRIB_DATA_ROW - 1);
+  var v   = sheet.getRange(HSA_CONTRIB_DATA_ROW, 1, n, 3).getValues(); // A:date B:amount C:type
+  var out = [];
+  for (var i = 0; i < v.length; i++) {
+    var amt = parseFloat(v[i][1]);
+    if (isNaN(amt) || amt === 0) continue; // skip blank/zero spacer rows
+    out.push({
+      date:   _hsaDateStr(v[i][0]),
+      amount: _hsaR2(amt),
+      type:   String(v[i][2] || 'employee').trim().toLowerCase()
+    });
+  }
+  return out;
+}
+
+// Pure plan-year metrics -- no sheet access, so testHsaPlanYear() can fixture it.
+//   rolled:   _hsaRollups output rows (have dateIncurred, amount, funding,
+//             reimbursedAmount, qualified, needsReview).
+//   contribs: [{date, amount, type}] or null (sheet absent).
+//   hsaBalance: B1 number or null.
+//   cfg fields: deductible (num|null), contribLimit (num|null), resetMonth (1-12).
+//   nowStr: 'YYYY-MM-DD' today (injected for testability).
+// Balance is a RECONCILIATION reconstruction (inflows - outflows), compared to
+// B1 (the Fidelity-authoritative anchor) via `drift`. Card spend leaves cash
+// regardless of qualification, so ALL funding=HSA rows count as outflow (incl.
+// needs_review); the deductible total, by contrast, excludes unverified drafts.
+// Interest is an inflow (type='interest') but is NOT a contribution toward the
+// IRS limit, so the limit gauge counts employee+employer only.
+function _hsaPlanYear(rolled, contribs, hsaBalance, deductible, contribLimit, resetMonth, nowStr) {
+  resetMonth = (resetMonth >= 1 && resetMonth <= 12) ? resetMonth : 1;
+  var y = parseInt(nowStr.slice(0, 4), 10);
+  var m = parseInt(nowStr.slice(5, 7), 10);
+  function pad2(x) { return (x < 10 ? '0' : '') + x; }
+  var startYear = (m >= resetMonth) ? y : (y - 1);
+  var planYearStart = startYear + '-' + pad2(resetMonth) + '-01'; // deductible window
+  var calYearStart  = y + '-01-01';                               // contribution-limit window (always calendar)
+
+  // Deductible: qualified incurred expenses (any funding) this plan year, drafts excluded
+  var deductibleYtd = 0;
+  for (var i = 0; i < rolled.length; i++) {
+    var r = rolled[i];
+    if (r.needsReview || !r.qualified) continue;
+    if (r.dateIncurred && String(r.dateIncurred) >= planYearStart) deductibleYtd += _hsaR2(r.amount);
+  }
+  deductibleYtd = _hsaR2(deductibleYtd);
+
+  // Balance outflows: all card spend leaves cash + all reimbursements taken
+  var cardOut = 0, reimbOut = 0;
+  for (var j = 0; j < rolled.length; j++) {
+    var rr = rolled[j];
+    if (String(rr.funding).toUpperCase() === 'HSA') cardOut += _hsaR2(rr.amount);
+    reimbOut += _hsaR2(rr.reimbursedAmount);
+  }
+  var totalOut = _hsaR2(cardOut + reimbOut);
+
+  var hasContrib = (contribs != null);
+  var inflows = 0, contribYtd = 0;
+  if (hasContrib) {
+    for (var k = 0; k < contribs.length; k++) {
+      var c = contribs[k];
+      inflows += c.amount;                                  // contributions + interest all add cash
+      var t = c.type;
+      if ((t === 'employee' || t === 'employer') && c.date && String(c.date) >= calYearStart)
+        contribYtd += c.amount;                             // interest does NOT count toward the limit
+    }
+  }
+  inflows = _hsaR2(inflows);
+  contribYtd = _hsaR2(contribYtd);
+
+  var computedBalance = hasContrib ? _hsaR2(inflows - totalOut) : null;
+  var drift = (computedBalance == null || hsaBalance == null) ? null : _hsaR2(hsaBalance - computedBalance);
+
+  return {
+    planYearStart:       planYearStart,
+    planYearLabel:       (resetMonth === 1) ? String(startYear) : (planYearStart + ' \u2192 ' + (startYear + 1) + '-' + pad2(resetMonth) + '-01'),
+    deductibleResetMonth: resetMonth,
+    deductible:          (deductible == null) ? null : _hsaR2(deductible),
+    deductibleYtd:       deductibleYtd,
+    deductibleRemaining: (deductible == null) ? null : _hsaR2(Math.max(deductible - deductibleYtd, 0)),
+    deductiblePct:       (deductible == null || deductible <= 0) ? null : Math.round(Math.min(deductibleYtd / deductible, 1) * 100),
+    contribYtd:          hasContrib ? contribYtd : null,
+    contribLimit:        (contribLimit == null) ? null : _hsaR2(contribLimit),
+    contribRoom:         (!hasContrib || contribLimit == null) ? null : _hsaR2(Math.max(contribLimit - contribYtd, 0)),
+    computedBalance:     computedBalance,
+    balanceInflows:      hasContrib ? inflows : null,
+    balanceOutflows:     totalOut,
+    drift:               drift,
+    contribLogged:       hasContrib
+  };
+}
+
 // -- GET: HSA receipts + rollups -------------------------------
 function getHsa() {
   var cache = CacheService.getScriptCache();
@@ -2878,8 +2988,14 @@ function getHsa() {
   var hsaBalance  = (b1 === '' || b1 == null || isNaN(parseFloat(b1))) ? null : _hsaR2(b1);
   var balanceAsOf = _hsaDateStr(sheet.getRange(2, 2).getValue()) || null;
 
-  var established = cfg().hsaEstablished || null;
+  var c = cfg();
+  var established = c.hsaEstablished || null;
   var roll = _hsaRollups(_hsaReadRows(sheet), established, hsaBalance);
+
+  var contribs = _hsaReadContributions(ss);
+  var nowStr   = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  var plan = _hsaPlanYear(roll.rows, contribs, hsaBalance,
+    c.hsaDeductible, c.hsaContribLimit, c.hsaDeductibleResetMonth, nowStr);
 
   var result = {
     established:         established,
@@ -2889,6 +3005,7 @@ function getHsa() {
     reimbursableNow:    roll.reimbursableNow,
     totalSubstantiated: roll.totalSubstantiated,
     strandedEntitlement: roll.strandedEntitlement,
+    planYear:           plan,
     rows:               roll.rows
   };
   try { cache.put(HSA_CACHE_KEY, JSON.stringify(result), 300); } catch (e) {}

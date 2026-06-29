@@ -16,28 +16,34 @@ var TEST_SHEET_NAME = '_TestScratch_';
 var HSA_TEST_SHEET_NAME = '_TestScratchHsa_'; // separate from TEST_SHEET_NAME -- different column layout (HSA Receipts schema), shared scratch sheet already has a fixed transaction layout other tests depend on throughout the run
 var _testPass = 0;
 var _testFail = 0;
-var _testLog  = [];
+var _testLog   = [];   // FAILURE detail only -- passes are counted, never logged
+var _sections  = [];   // [{name, pass, fail}] -- one compact tally line each
+var _curSection = null;
+var _notes     = [];   // always-shown runner notes (benign warnings, diagnostics)
+
+// Output is deliberately failure-first and compact: Apps Script truncates a
+// single oversized log entry, so we never emit a PASS-per-assertion transcript.
+// Counts + failures + a section tally fit well under the cap.
 
 // -- Assertion helpers -----------------------------------------
 
+function _tag() { return '[' + (_curSection ? _curSection.name : '?') + '] '; }
+function _bump(ok) {
+  if (ok) { _testPass++; if (_curSection) _curSection.pass++; }
+  else    { _testFail++; if (_curSection) _curSection.fail++; }
+}
+function _note(msg) { _notes.push(msg); }
+
 function assert(condition, message) {
-  if (condition) {
-    _testPass++;
-    _testLog.push('  PASS ' + message);
-  } else {
-    _testFail++;
-    _testLog.push('  FAIL FAIL: ' + message);
-  }
+  _bump(!!condition);
+  if (!condition) _testLog.push('  FAIL ' + _tag() + message);
 }
 
 function assertEqual(actual, expected, message) {
   var ok = JSON.stringify(actual) === JSON.stringify(expected);
-  if (ok) {
-    _testPass++;
-    _testLog.push('  PASS ' + message);
-  } else {
-    _testFail++;
-    _testLog.push('  FAIL FAIL: ' + message);
+  _bump(ok);
+  if (!ok) {
+    _testLog.push('  FAIL ' + _tag() + message);
     _testLog.push('      expected: ' + JSON.stringify(expected));
     _testLog.push('      actual:   ' + JSON.stringify(actual));
   }
@@ -46,17 +52,13 @@ function assertEqual(actual, expected, message) {
 function assertApprox(actual, expected, message, tolerance) {
   tolerance = tolerance || 0.01;
   var ok = typeof actual === 'number' && Math.abs(actual - expected) <= tolerance;
-  if (ok) {
-    _testPass++;
-    _testLog.push('  PASS ' + message);
-  } else {
-    _testFail++;
-    _testLog.push('  FAIL FAIL: ' + message + ' (got ' + actual + ', expected ~' + expected + ')');
-  }
+  _bump(ok);
+  if (!ok) _testLog.push('  FAIL ' + _tag() + message + ' (got ' + actual + ', expected ~' + expected + ')');
 }
 
 function section(name) {
-  _testLog.push('\n-- ' + name + ' --');
+  _curSection = { name: name, pass: 0, fail: 0 };
+  _sections.push(_curSection);
 }
 
 // -- Scratch sheet helpers -------------------------------------
@@ -316,7 +318,7 @@ function testCardPayment() {
 
   var ct = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CARD_TRACKERS_SHEET);
   if (!ct) {
-    _testLog.push('  WARN Skipped -- Card Trackers sheet not found');
+    _note('testCardPayment skipped -- Card Trackers sheet not found');
     return;
   }
 
@@ -334,7 +336,7 @@ function testCardPayment() {
   }
 
   if (amexRow < 0) {
-    _testLog.push('  WARN Skipped -- AMEX not found in Card Trackers');
+    _note('testCardPayment skipped -- AMEX not found in Card Trackers');
     return;
   }
 
@@ -347,7 +349,7 @@ function testCardPayment() {
     date:     '2026-01-01',
     month:    testMonth,
   });
-  Logger.log('payResult: ' + JSON.stringify(payResult) + ' origBalance=' + origBalance);
+  _note('payResult: ' + JSON.stringify(payResult) + ' origBalance=' + origBalance);
 
   assert(payResult.ok, 'makeCardPayment returns ok');
   assertApprox(payResult.newBalance, origBalance - testAmount,
@@ -355,9 +357,9 @@ function testCardPayment() {
 
   // Void it
   var voidResult = voidLastPayment({ cardName: 'AMEX' });
-  Logger.log('voidResult: ' + JSON.stringify(voidResult));
+  _note('voidResult: ' + JSON.stringify(voidResult));
   if (!voidResult.ok) {
-    _testLog.push('  WARN voidLastPayment error: ' + voidResult.error);
+    _note('voidLastPayment error (balance manually restored): ' + voidResult.error);
     // Manually restore balance so test doesn't corrupt real data
     _adjustCardBalance('AMEX', testAmount);
   }
@@ -736,6 +738,49 @@ function testHsa() {
   assertEqual(rd.rows[1].status, 'needs_review', 'draft row gets needs_review status');
 }
 
+function testHsaPlanYear() {
+  section('_hsaPlanYear (deductible / contributions / balance reconciliation)');
+
+  // Rolled receipt rows: card spend (HSA) across two plan years + one OOP +
+  // one flagged draft (must NOT count toward the deductible, but DOES leave cash).
+  var rolled = [
+    { dateIncurred:'2025-08-01', amount:3636.33, funding:'HSA', reimbursedAmount:0,   qualified:true,  needsReview:false },
+    { dateIncurred:'2026-03-01', amount:3201.71, funding:'HSA', reimbursedAmount:0,   qualified:true,  needsReview:false },
+    { dateIncurred:'2026-04-10', amount:20.48,   funding:'HSA', reimbursedAmount:0,   qualified:true,  needsReview:true  }, // flagged: cash left, not counted
+    { dateIncurred:'2026-05-01', amount:200.00,  funding:'OOP', reimbursedAmount:50,  qualified:true,  needsReview:false }  // OOP counts toward deductible; $50 reimbursed = outflow
+  ];
+  var contribs = [
+    { date:'2025-09-01', amount:4003.73, type:'employee' },
+    { date:'2026-02-01', amount:2925.01, type:'employee' },
+    { date:'2026-04-23', amount:2000.00, type:'employer' }
+  ];
+  var p = _hsaPlanYear(rolled, contribs, 2052.65, 3300, 8750, 1, '2026-07-07');
+
+  assertEqual(p.planYearStart, '2026-01-01', 'calendar plan year starts Jan 1');
+  // deductible: 2026 qualified incurred = 3201.71 (card) + 200 (OOP) = 3401.71; flagged 20.48 excluded
+  assertApprox(p.deductibleYtd, 3401.71, 'deductible YTD sums qualified incurred (both fundings), excludes drafts');
+  assertEqual(p.deductibleRemaining, 0, 'deductible met -> remaining clamps to 0');
+  assertEqual(p.deductiblePct, 100, 'deductible pct clamps to 100');
+  // contributions toward limit: employee+employer this calendar year = 2925.01 + 2000 = 4925.01
+  assertApprox(p.contribYtd, 4925.01, 'contrib YTD = employee+employer this calendar year');
+  assertApprox(p.contribRoom, 3824.99, 'contrib room = limit - YTD');
+  // balance: inflows 8928.74 - outflows (card 6858.52 + reimb 50) = 2020.22
+  assertApprox(p.balanceOutflows, 6908.52, 'outflows = all card spend + reimbursements');
+  assertApprox(p.computedBalance, 2020.22, 'computed balance = inflows - outflows');
+  assertApprox(p.drift, 32.43, 'drift vs B1 surfaces unlogged interest');
+
+  // No contributions sheet -> balance/contrib gauges null, deductible still works
+  var p2 = _hsaPlanYear(rolled, null, 2052.65, 3300, 8750, 1, '2026-07-07');
+  assertEqual(p2.computedBalance, null, 'no contrib sheet -> computed balance null');
+  assertEqual(p2.contribYtd, null, 'no contrib sheet -> contrib YTD null');
+  assertApprox(p2.deductibleYtd, 3401.71, 'deductible still computes without contributions');
+
+  // Mid-year plan reset (e.g. month 7): on 2026-07-07 the plan year just started
+  var p3 = _hsaPlanYear(rolled, contribs, 2052.65, 3300, 8750, 7, '2026-07-07');
+  assertEqual(p3.planYearStart, '2026-07-01', 'mid-year reset month resolves plan-year start');
+  assertEqual(p3.deductibleYtd, 0, 'fresh plan year -> deductible YTD resets to 0');
+}
+
 function testAddHsaReceipt() {
   section('addHsaReceipt (scratch sheet -- never touches live HSA Receipts)');
   createHsaScratchSheet();
@@ -914,8 +959,7 @@ function testMortgageSingleSource() {
   // affect net worth. Log the current drift for visibility.
   if (mg.physicalAssetsBalance != null) {
     var drift = Math.round((mg.currentBalance - mg.physicalAssetsBalance) * 100) / 100;
-    _testLog.push('  note  B8 cross-check drift = ' + drift +
-      ' (informational; B8 is not used by net worth)');
+    _note('B8 cross-check drift = ' + drift + ' (informational; B8 is not used by net worth)');
   }
 }
 
@@ -930,12 +974,13 @@ function runSlowTests() {
 function _runTestSuite(includeSlow) {
   _testPass = 0;
   _testFail = 0;
-  _testLog  = [];
+  _testLog   = [];
+  _sections  = [];
+  _curSection = null;
+  _notes     = [];
   _resetCaches();
 
   var startMs = Date.now();
-  _testLog.push('Finance Dashboard Test Suite' + (includeSlow ? ' (full)' : ' (fast)'));
-  _testLog.push('============================');
 
   // Create scratch sheet for transaction tests
   createScratchSheet();
@@ -967,6 +1012,7 @@ function _runTestSuite(includeSlow) {
     testIdempotency();
     testConfigParsing();
     testHsa();
+    testHsaPlanYear();
     testAddHsaReceipt();
     testParseReceiptName();
     testBestEffortReceipt();
@@ -982,24 +1028,41 @@ function _runTestSuite(includeSlow) {
 
   } catch(e) {
     if (e.message && e.message.indexOf('typed column') >= 0) {
-      _testLog.push('\n  (Note: ignored Sheets typed-column formatting warning -- tests unaffected)');
+      _note('ignored Sheets typed-column formatting warning -- tests unaffected');
     } else {
-      _testLog.push('\nWARN Test runner threw: ' + e.message);
+      // A thrown runner is a real failure: count it so the verdict reflects it.
+      _testFail++;
+      _testLog.push('  FAIL [runner] threw: ' + (e && e.message ? e.message : e));
     }
   } finally {
     // Scratch sheet is intentionally kept for reuse on next run
     _resetCaches();
   }
 
-  // Summary
+  // -- Compact, failure-first output (single Logger.log; Apps Script truncates
+  //    oversized entries, so we never print a PASS-per-assertion transcript) --
   var elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
-  _testLog.push('\n============================');
-  _testLog.push('Results: ' + _testPass + ' passed, ' + _testFail + ' failed (' + elapsed + 's)');
-  if (_testFail === 0) {
-    _testLog.push('All tests passed PASS');
-  } else {
-    _testLog.push(_testFail + ' test(s) failed -- see FAIL lines above');
+  var L = [];
+  L.push('Finance Dashboard Test Suite' + (includeSlow ? ' (full)' : ' (fast)'));
+  L.push('Results: ' + _testPass + ' passed, ' + _testFail + ' failed (' + elapsed + 's)');
+  L.push(_testFail === 0 ? 'ALL PASSED' : (_testFail + ' FAILED -- detail below'));
+
+  if (_notes.length) {
+    L.push('');
+    L.push('Notes:');
+    for (var n = 0; n < _notes.length; n++) L.push('  - ' + _notes[n]);
+  }
+  if (_testFail > 0) {
+    L.push('');
+    L.push('FAILURES:');
+    for (var k = 0; k < _testLog.length; k++) L.push(_testLog[k]);
+  }
+  L.push('');
+  L.push('Sections (' + _sections.length + '):');
+  for (var i = 0; i < _sections.length; i++) {
+    var s = _sections[i];
+    L.push('  ' + (s.fail ? 'FAIL ' : 'ok   ') + s.name + ': ' + s.pass + '/' + (s.pass + s.fail));
   }
 
-  Logger.log(_testLog.join('\n'));
+  Logger.log(L.join('\n'));
 }
