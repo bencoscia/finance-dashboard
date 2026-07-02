@@ -105,12 +105,12 @@ function dispatch(payload) {
     else if (action === 'updateFixedCost')    { var r = updateFixedCost(payload);    if (payload.month) invalidateMonthCache(payload.month); return r; }
     else if (action === 'updateFixedName')    { var r = updateFixedName(payload);    if (payload.month) invalidateMonthCache(payload.month); return r; }
     else if (action === 'updateLoanBalance')  return _withIdem(payload, function(){ return updateLoanBalance(payload); }); // invalidates Loans + net worth internally
-    else if (action === 'logCreditSnapshot')  return logCreditSnapshot(payload);
-    else if (action === 'addMonth')           return addMonth(payload);
+    else if (action === 'logCreditSnapshot')  return _withIdem(payload, function(){ return logCreditSnapshot(payload); });
+    else if (action === 'addMonth')           return addMonth(payload); // naturally idempotent: errors if sheet exists
     else if (action === 'makeCardPayment')    { var r = _withIdem(payload, function(){ return makeCardPayment(payload); });    invalidateCardBalanceCache(); return r; }
-    else if (action === 'voidLastPayment')    { var r = voidLastPayment(payload);    invalidateCardBalanceCache(); return r; }
+    else if (action === 'voidLastPayment')    { var r = _withIdem(payload, function(){ return voidLastPayment(payload); });    invalidateCardBalanceCache(); return r; }
     else if (action === 'setSeedBalance')     { var r = setSeedBalance(payload);     invalidateCardBalanceCache(); return r; }
-    else if (action === 'saveNetWorthSnapshot') { invalidateNetWorthCache(); return saveNetWorthSnapshot(payload); }
+    else if (action === 'saveNetWorthSnapshot') { invalidateNetWorthCache(); return _withIdem(payload, function(){ return saveNetWorthSnapshot(payload); }); }
     else if (action === 'makeCheckingEntry')  { var r = _withIdem(payload, function(){ return makeCheckingEntry(payload); });  if (payload.month) invalidateMonthCache(payload.month); return r; }
     else if (action === 'addVariableEntry')   { var r = _withIdem(payload, function(){ return addVariableEntry(payload); });   if (payload.month) invalidateMonthCache(payload.month); invalidateCardBalanceCache(); return r; }
     else if (action === 'updateVariableEntry') { invalidateCardBalanceCache(); return updateVariableEntry(payload); }
@@ -168,12 +168,12 @@ function doPost(e) {
     else if (p.action === 'updateFixedCost')    data = updateFixedCost(p);
     else if (p.action === 'updateFixedName')    data = updateFixedName(p);
     else if (p.action === 'updateLoanBalance')  data = _withIdem(p, function(){ return updateLoanBalance(p); });
-    else if (p.action === 'logCreditSnapshot')  data = logCreditSnapshot(p);
-    else if (p.action === 'addMonth')           data = addMonth(p);
+    else if (p.action === 'logCreditSnapshot')  data = _withIdem(p, function(){ return logCreditSnapshot(p); });
+    else if (p.action === 'addMonth')           data = addMonth(p); // naturally idempotent: errors if sheet exists
     else if (p.action === 'makeCardPayment')    data = _withIdem(p, function(){ return makeCardPayment(p); });
-    else if (p.action === 'voidLastPayment')    data = voidLastPayment(p);
+    else if (p.action === 'voidLastPayment')    data = _withIdem(p, function(){ return voidLastPayment(p); });
     else if (p.action === 'setSeedBalance')     data = setSeedBalance(p);
-    else if (p.action === 'saveNetWorthSnapshot') { data = saveNetWorthSnapshot(p); invalidateNetWorthCache(); }
+    else if (p.action === 'saveNetWorthSnapshot') { data = _withIdem(p, function(){ return saveNetWorthSnapshot(p); }); invalidateNetWorthCache(); }
     else if (p.action === 'splitTransaction')   data = splitTransaction(p);
     else if (p.action === 'addVariableEntry')   data = _withIdem(p, function(){ return addVariableEntry(p); });
     else if (p.action === 'makeCheckingEntry')  data = _withIdem(p, function(){ return makeCheckingEntry(p); });

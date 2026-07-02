@@ -814,7 +814,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     <!-- TRANSACTIONS -->
     <div id="tab-txns" class="tab-panel">
       <div class="txn-bar">
-        <select class="msel" id="msel-txn" onchange="loadTxns(this.value)">
+        <select class="msel" id="msel-txn">
           <option value="">— select month —</option>
         </select>
         <button class="btn-add" id="add-btn" style="display:none" >+ Add entry</button>
@@ -823,7 +823,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
       <div class="card-strip" id="txn-card-strip" style="display:none"></div>
       <div id="tag-summary-panel"></div>
       <div class="txn-filter-bar" id="txn-filter-bar" style="display:none">
-        <input class="filter-input" id="txn-search" type="text" placeholder="Search description…" oninput="onSearchInput()">
+        <input class="filter-input" id="txn-search" type="text" placeholder="Search description…">
         <button class="filter-chip" id="fchip-disc" data-filter="disc">Discretionary</button>
         <button class="filter-chip" id="fchip-ben" data-filter="ben">Ben</button>
         <button class="filter-chip" id="fchip-jenna" data-filter="jenna">Jenna</button>
@@ -850,7 +850,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     <div id="tab-fixed" class="tab-panel">
       <div id="daycare-reminder"></div>
       <div class="fx-bar">
-        <select class="msel" id="msel-fx" onchange="loadFixed(this.value)">
+        <select class="msel" id="msel-fx">
           <option value="">— select month —</option>
         </select>
         <span class="txn-sum" id="fx-sum"></span>
@@ -1043,7 +1043,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     <button class="card-drawer-close" data-action="closeCardDrawer">×</button>
   </div>
   <div class="card-drawer-search">
-    <input type="text" id="cdr-search" placeholder="Search transactions…" oninput="filterCardDrawer()">
+    <input type="text" id="cdr-search" placeholder="Search transactions…">
   </div>
   <div class="card-drawer-body" id="cdr-body">
     <div class="card-drawer-loading">Loading…</div>
@@ -1065,7 +1065,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     </div>
     <div class="split-tax-bar">
       <label>Tax rate</label>
-      <input type="number" class="split-tax-input" id="split-tax-rate" value="8.00" step="0.01" min="0" max="100" oninput="updateAllSplitAmounts()" placeholder="8.00">
+      <input type="number" class="split-tax-input" id="split-tax-rate" value="8.00" step="0.01" min="0" max="100" placeholder="8.00">
       <label style="font-weight:400;color:var(--muted)">%</label>
       <span class="split-tax-hint">Taxed line = price × (1 + rate%)</span>
     </div>
@@ -1309,6 +1309,38 @@ function initEventListeners(){
   on('chk-modal-backdrop',  function(e){ if(e.target===this) hideChkModal(); });
   on('pay-modal-backdrop',  function(e){ if(e.target===this) hidePayModal(); });
   on('split-modal-backdrop',function(e){ if(e.target===this) hideSplitModal(); });
+
+  // Static input/select handlers — property assignments, never inline attributes
+  // (Invariant 2: zero on*= in markup; the escaping bug class stays extinct).
+  if($('msel-txn'))       $('msel-txn').onchange      = function(){ loadTxns(this.value); };
+  if($('msel-fx'))        $('msel-fx').onchange       = function(){ loadFixed(this.value); };
+  if($('txn-search'))     $('txn-search').oninput     = onSearchInput;
+  if($('cdr-search'))     $('cdr-search').oninput     = filterCardDrawer;
+  if($('split-tax-rate')) $('split-tax-rate').oninput = updateAllSplitAmounts;
+
+  // Split-modal delegation: rows and item-adder panels are created dynamically
+  // inside #split-rows. One input+change listener pair routes by data-field /
+  // data-sid instead of baking handlers into HTML strings.
+  var splitRows = $('split-rows');
+  if(splitRows){
+    var routeSplitInput = function(e){
+      var t = e.target;
+      var iaRow = t.closest('.item-adder-row');
+      if(iaRow){
+        // Item calculator: price or tax checkbox changed (name field is inert)
+        if(t.type === 'number' || t.type === 'checkbox') recalcItems(parseFloat(iaRow.dataset.sid));
+        return;
+      }
+      var row = t.closest('.split-row');
+      if(!row) return;
+      var sid = parseFloat(row.dataset.sid);
+      var f = t.dataset.field;
+      if(f === 'price' || f === 'taxed') updateRowAmount(sid);
+      else if(f === 'varroute')          onVarRouteChange(sid);
+    };
+    splitRows.addEventListener('input',  routeSplitInput);
+    splitRows.addEventListener('change', routeSplitInput);
+  }
 
   // Wire remaining elements via data-action attribute
   // This avoids needing to add IDs to every button
@@ -1837,6 +1869,9 @@ async function submitQuickAdd(){
   $('qa-err').textContent='';
   if(isNaN(amt)){ $('qa-err').textContent='Enter an amount.'; return; }
   if(!month && qaType!=='hsa'){ $('qa-err').textContent='No month loaded yet — refresh first.'; return; }
+  // Demo guard covers ALL entry types -- without it, an empty SCRIPT_URL
+  // surfaces as a cryptic fetch error instead of a clean banner.
+  if(isDemo || !SCRIPT_URL){ hideQuickAdd(); showBanner('Demo mode — nothing saved','ok'); return; }
   btn.disabled=true; btn.textContent='Saving…';
   try{
     if(qaType==='txn'){
@@ -1862,7 +1897,6 @@ async function submitQuickAdd(){
       quickRefresh(); refreshCardBalances();
     } else if(qaType==='hsa'){
       if(amt<=0){ $('qa-err').textContent='Enter a receipt amount greater than zero.'; return; }
-      if(isDemo || !SCRIPT_URL){ hideQuickAdd(); showBanner('Demo mode — receipt not saved','ok'); return; }
       await apiPost(SCRIPT_URL,{action:'addHsaReceipt', idemKey:genIdemKey('hsaAdd'),
         dateIncurred:$('qa-date').value, amount:amt,
         provider:$('qa-hsa-provider').value.trim(),
@@ -2207,6 +2241,7 @@ function renderSnapshotForm(nw, lastSnap){
 async function submitSnapshot(){
   var payload = {
     action:        'saveNetWorthSnapshot',
+    idemKey:       genIdemKey('nwsnap'),
     date:          $('snap-date').value,
     investments:   $('snap-investments').value,
     cash:          $('snap-cash').value,
@@ -2953,7 +2988,7 @@ function openTagPicker(i,e){
     return '<span class="tag-picker-item'+sel+'" data-tag="'+esc(tag)+'" data-row="'+i+'">'+esc(tag)+'</span>';
   }).join('');
   picker.innerHTML=
-    '<input class="tag-picker-search" type="text" placeholder="Search tags…" id="tag-picker-input" oninput="filterPickerList()">'+
+    '<input class="tag-picker-search" type="text" placeholder="Search tags…" id="tag-picker-input">'+
     '<div class="tag-picker-list" id="tag-picker-list">'+(listHtml||'<span style="color:var(--faint);font-size:11px">No tags yet</span>')+'</div>'+
     '<div class="tag-picker-new"><input type="text" id="tag-new-input" placeholder="New tag…"><button id="tag-new-btn">Add</button></div>';
   // Wire up events after insertion (avoids inline handler quoting issues)
@@ -2972,6 +3007,7 @@ function openTagPicker(i,e){
   if(newInp) newInp.onkeydown = function(ev){ if(ev.key==='Enter') createAndApplyTag(i, newInp.value); };
   // Search filter
   var searchInp = document.getElementById('tag-picker-input');
+  if(searchInp) searchInp.oninput = filterPickerList;
   if(searchInp) searchInp.onkeydown = function(ev){ if(ev.key==='Enter'){ var q=searchInp.value.trim(); if(q) createAndApplyTag(i,q); } };
   setTimeout(function(){ if(newInp) newInp.focus(); }, 30);
   setTimeout(function(){document.addEventListener('click',closePicker,{once:true});},10);
@@ -4164,13 +4200,12 @@ function addSplitRow(desc, price, taxed, pm, disc, ben, jenna){
   row.dataset.sid = id;
   row.innerHTML =
     '<input type="text"   data-field="desc"  value="'+esc(desc||'')+'"  placeholder="Description">'+
-    '<input type="number" data-field="price" value="'+(price||'')+'"  step="0.01" placeholder="0.00"'+
-      ' oninput="updateRowAmount('+id+')" onchange="updateRowAmount('+id+')">'+
+    '<input type="number" data-field="price" value="'+(price||'')+'"  step="0.01" placeholder="0.00">'+
     '<input type="checkbox" class="split-ck" data-field="taxed" '+(taxed?'checked':'')+
-      ' title="Apply tax" onchange="updateRowAmount('+id+')">'+
+      ' title="Apply tax">'+
     '<div class="split-computed '+(taxed?'taxed':'plain')+'" id="split-fin-'+id+'">'+fmt(fin,2)+'</div>'+
     pmSelect('split-pm-'+id, pm||'', 'split-pm-sel', 'pm')+
-    '<select class="split-var-sel" data-field="varroute" id="split-var-'+id+'" onchange="onVarRouteChange('+id+')">'+
+    '<select class="split-var-sel" data-field="varroute" id="split-var-'+id+'">'+
       '<option value="">— txn —</option>'+
       '<option value="groceries">→ Groceries</option>'+
       '<option value="gas">→ Gas</option>'+
@@ -4225,11 +4260,11 @@ function addItem(sid){
   var div = document.createElement('div');
   div.className = 'item-adder-row';
   div.id = 'ia-item-'+iid;
+  div.dataset.sid = sid;
   div.innerHTML =
     '<input type="text"   placeholder="Item name…" id="ia-desc-'+iid+'" style="flex:1">'+
-    '<input type="number" placeholder="0.00" step="0.01" id="ia-price-'+iid+'"'+
-      ' oninput="recalcItems('+sid+')" onchange="recalcItems('+sid+')">'+
-    '<label class="ia-tax"><input type="checkbox" id="ia-tax-'+iid+'" onchange="recalcItems('+sid+')"> tax</label>'+
+    '<input type="number" placeholder="0.00" step="0.01" id="ia-price-'+iid+'">'+
+    '<label class="ia-tax"><input type="checkbox" id="ia-tax-'+iid+'"> tax</label>'+
     '<button class="ia-del" data-action="removeItem" data-args="'+sid+','+iid+'" title="Remove">×</button>';
   rows.appendChild(div);
   // Focus the price field of the new item
@@ -4639,7 +4674,7 @@ async function voidPayment(sheetKey, displayName, amount, dateStr){
   if(!confirm('Void last payment of '+fmt(amount,2)+' for '+displayName+'?\n\nThis will delete the most recent row in Card Payments and add $'+amount.toFixed(2)+' back to the balance.')) return;
   showBanner('Voiding payment…','loading');
   try {
-    var result = await apiPost(SCRIPT_URL, { action:'voidLastPayment', cardName:sheetKey });
+    var result = await apiPost(SCRIPT_URL, { action:'voidLastPayment', idemKey:genIdemKey('void'), cardName:sheetKey });
     showBanner('Voided '+fmt(Math.abs(result.voidedAmount),2)+'. New balance: '+fmt(result.newBalance,2),'ok');
     // Optimistically update card balance locally -- add back the voided amount
     if(allData && allData.cardBalances && allData.cardBalances.cards && allData.cardBalances.cards[sheetKey]){
@@ -5221,7 +5256,7 @@ async function logCreditSnapshot(){
   if(isDemo || !SCRIPT_URL){ showBanner('Demo mode — not saved','ok'); return; }
   showBanner('Logging to Credit sheet…','loading');
   try {
-    await apiPost(SCRIPT_URL,{action:'logCreditSnapshot',date:localToday(),balance:bal,limit:lim});
+    await apiPost(SCRIPT_URL,{action:'logCreditSnapshot',idemKey:genIdemKey('credit'),date:localToday(),balance:bal,limit:lim});
     showBanner('Logged','ok');
     var fresh = await apiFetch(SCRIPT_URL,'accounts');
     if(allData){ allData.creditHistory=fresh.creditHistory||[]; allData.loanTotal=fresh.loanTotal; }
