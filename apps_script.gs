@@ -96,6 +96,8 @@ function dispatch(payload) {
     else if (action === 'cardTxns')        return getTransactionsByCard(payload.pm, payload.limit);
     else if (action === 'config')          return getConfig();
     else if (action === 'hsa')             return getHsa();
+    else if (action === 'ledgerMonthly')   return getLedgerMonthly();
+    else if (action === 'ledgerTxns')      return getLedgerTxns(payload.month);
     // Write actions
     else if (action === 'updateTransaction')  { var r = updateTransaction(payload);  if (payload.month) invalidateMonthCache(payload.month); invalidateCardBalanceCache(); return r; }
     else if (action === 'addTransaction')     { var r = _withIdem(payload, function(){ return addTransaction(payload); });     if (payload.month) invalidateMonthCache(payload.month); invalidateCardBalanceCache(); return r; }
@@ -119,6 +121,7 @@ function dispatch(payload) {
     else if (action === 'addHsaReceipt')      return _withIdem(payload, function(){ return addHsaReceipt(payload); });   // invalidates HSA cache internally
     else if (action === 'scanHsaFolder')      return scanHsaFolder(); // idempotent via fileId dedup, not _withIdem
     else if (action === 'updateHsaReceipt')   return _withIdem(payload, function(){ return updateHsaReceipt(payload); }); // invalidates HSA cache internally
+    else if (action === 'ledgerAddTxn')       return _withIdem(payload, function(){ return ledgerAddTxn(payload); }); // invalidates ledger cache internally
     else return { error: 'Unknown action: ' + action };
   } catch(err) {
     return { error: err.message };
@@ -146,6 +149,8 @@ function doGet(e) {
     else if (action === 'cardTxns')        data = getTransactionsByCard(e.parameter.pm, e.parameter.limit);
     else if (action === 'config')          data = getConfig();
     else if (action === 'hsa')             data = getHsa();
+    else if (action === 'ledgerMonthly')   data = getLedgerMonthly();
+    else if (action === 'ledgerTxns')      data = getLedgerTxns(e.parameter.month);
     else data = { error: 'Unknown action: ' + action };
   } catch(err) {
     data = { error: err.message };
@@ -183,6 +188,7 @@ function doPost(e) {
     else if (p.action === 'addHsaReceipt')      data = _withIdem(p, function(){ return addHsaReceipt(p); });   // invalidates HSA cache internally
     else if (p.action === 'scanHsaFolder')      data = scanHsaFolder(); // idempotent via fileId dedup, not _withIdem
     else if (p.action === 'updateHsaReceipt')   data = _withIdem(p, function(){ return updateHsaReceipt(p); }); // invalidates HSA cache internally
+    else if (p.action === 'ledgerAddTxn')       data = _withIdem(p, function(){ return ledgerAddTxn(p); }); // invalidates ledger cache internally
     else data = { error: 'Unknown POST action: ' + p.action };
     // Invalidate caches for the affected month and card balances
     if (p.month) invalidateMonthCache(p.month);
