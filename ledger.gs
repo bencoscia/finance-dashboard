@@ -47,23 +47,17 @@ LEDGER_HEADERS[LEDGER_FIXED]   = ['id','month','name','source','amount','paid','
 LEDGER_HEADERS[LEDGER_INCOME]  = ['id','month','date','source','amount'];
 LEDGER_HEADERS[LEDGER_VARHIST] = ['month','category','amount'];
 
-// One-time setup: create the four sheets with headers. Never overwrites --
-// an existing sheet is left untouched and reported. Run from the editor,
-// then import the migration CSVs (paste starting at row 2, matching order).
-function setupLedgerSheets() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var made = [], skipped = [], names = [LEDGER_TXNS, LEDGER_FIXED, LEDGER_INCOME, LEDGER_VARHIST];
-  for (var i = 0; i < names.length; i++) {
-    var name = names[i];
-    if (ss.getSheetByName(name)) { skipped.push(name); continue; }
-    var sh = ss.insertSheet(name);
-    var hdr = LEDGER_HEADERS[name];
-    sh.getRange(1, 1, 1, hdr.length).setValues([hdr]).setFontWeight('bold');
-    sh.setFrozenRows(1);
-    made.push(name);
-  }
-  return { ok: true, created: made, skippedExisting: skipped };
-}
+// MANUAL SHEET SETUP (no script function creates sheets -- scripted
+// insertSheet on this workbook triggers full recalculation and times out).
+// Create four tabs by hand, paste the header row into row 1 of each,
+// View > Freeze > 1 row, then import the migration CSVs at A1 (the CSVs
+// include the header row; "Replace data at selected cell"):
+//   Txns:             id  date  month  description  amount  method  category  discretionary  ben  jenna
+//   Fixed Log:        id  month  name  source  amount  paid  paid_date
+//   Income Log:       id  month  date  source  amount
+//   Variable History: month  category  amount
+// Optionally create an empty hidden tab '_TestScratchLedger_' so testLedger
+// never has to insertSheet either.
 
 // -- tolerant readers (imported CSV cells may be text where booleans/dates
 //    are expected; Sheets may hand back Date objects or strings) ----------
@@ -170,7 +164,7 @@ function getLedgerMonthly() {
   var txnRows    = readSheet(LEDGER_TXNS);
   var fixedRows  = readSheet(LEDGER_FIXED);
   var incomeRows = readSheet(LEDGER_INCOME);
-  if (!txnRows) return { error: 'Sheet not found: ' + LEDGER_TXNS + ' -- run setupLedgerSheets() and import the migration CSVs.' };
+  if (!txnRows) return { error: 'Sheet not found: ' + LEDGER_TXNS + ' -- create the ledger sheets (see manual setup notes at top of ledger.gs) and import the migration CSVs.' };
   var out = _ledgerAggregate(txnRows, fixedRows || [[]], incomeRows || [[]]);
   out.updated = new Date().toISOString();
   try { cache.put(LEDGER_CACHE_KEY, JSON.stringify(out), 300); } catch (e2) {}
@@ -202,67 +196,322 @@ function getLedgerTxns(month) {
   return { month: mk, txns: out };
 }
 
-// -- WRITE: ledgerAddTxn ----------------------------------------------------
-// Validated append. id = max existing id + 1 under LockService (same pattern
-// as addHsaReceipt -- two simultaneous adds must never share an id, because
-// future edit/delete paths locate rows by id). Wrapped in _withIdem by both
-// routers; invalidates the ledger cache internally on success.
-function ledgerAddTxn(p) {
+// -- shared write plumbing --------------------------------------------------
+function _ledgerToday() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+function _ledgerWithLock(fn) {
+  var lock = LockService.getScriptLock();
+  var got = false;
+  try { got = lock.tryLock(5000); } catch (e) {}
+  if (!got) return { error: 'Could not acquire lock -- please try again.' };
+  try { return fn(); }
+  finally { try { lock.releaseLock(); } catch (e2) {} }
+}
+function _ledgerNextId(values) {
+  var maxId = 0;
+  for (var i = 1; i < values.length; i++) {
+    var n = parseInt(values[i][0], 10);
+    if (!isNaN(n) && n > maxId) maxId = n;
+  }
+  return maxId + 1;
+}
+function _ledgerFindRowById(values, id) { // -> sheet row number, or -1
+  var want = parseInt(id, 10);
+  for (var i = 1; i < values.length; i++) {
+    if (parseInt(values[i][0], 10) === want) return i + 1;
+  }
+  return -1;
+}
+
+// Validate + normalize a txn payload. Returns { error } or { rec } where
+// rec is the 9 data columns (everything after id). Single place -- add,
+// update, and split all route through here.
+function _ledgerValidateTxn(p) {
   var dateStr = _ldate(p.date);
   if (!dateStr) return { error: 'Invalid or missing date (need YYYY-MM-DD).' };
-  var dchk = new Date(dateStr + 'T12:00:00');
-  if (isNaN(dchk.getTime())) return { error: 'Not a real date: ' + dateStr };
-
   var amount = _ln(p.amount);
   if (amount === null || amount === 0) return { error: 'Amount must be a nonzero number.' };
-
   var category = String(p.category || 'onetime');
   if (LEDGER_CATEGORIES.indexOf(category) < 0)
-    return { error: 'Unknown category: ' + category + ' (want onetime|groceries|gas)' };
-
+    return { error: 'Unknown category: ' + category + ' (want onetime|groceries|gas|transfer)' };
   var method = String(p.method || '').trim();
   if (!method) return { error: 'Payment method is required.' };
-
   var description = String(p.description || '').trim();
   if (!description) {
     if (category === 'gas') description = 'Gas';
     else return { error: 'Description is required.' };
   }
-
   // month is an explicit assignment, not always month(date): a July-1 charge
   // can belong to June's books, exactly as the old sheets allowed.
   var mk = _lmonth(p.month) || _lmonth(dateStr);
+  return { rec: [dateStr, mk, description, amount, method, category,
+                 !!p.discretionary, !!p.ben, !!p.jenna] };
+}
 
+// -- WRITE: ledgerAddTxn ----------------------------------------------------
+// Validated append. id = max existing id + 1 under LockService (two
+// simultaneous adds must never share an id; edit/delete locate rows by id).
+// Wrapped in _withIdem by both routers; invalidates caches internally.
+function ledgerAddTxn(p) {
+  var v = _ledgerValidateTxn(p);
+  if (v.error) return v;
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(LEDGER_TXNS);
-  if (!sheet) return { error: 'Sheet not found: ' + LEDGER_TXNS + ' -- run setupLedgerSheets().' };
-
-  var lock = LockService.getScriptLock();
-  var gotLock = false;
-  try { gotLock = lock.tryLock(5000); } catch (e) {}
-  if (!gotLock) return { error: 'Could not acquire lock -- please try again.' };
-
-  try {
+  if (!sheet) return { error: 'Sheet not found: ' + LEDGER_TXNS };
+  return _ledgerWithLock(function () {
     invalidateSheet(LEDGER_TXNS);
     var values = readSheet(sheet);
-    var maxId = 0;
-    for (var i = 1; i < values.length; i++) {
-      var n = parseInt(values[i][0], 10);
-      if (!isNaN(n) && n > maxId) maxId = n;
-    }
-    var newId = maxId + 1;
+    var newId = _ledgerNextId(values);
     var row = Math.max(sheet.getLastRow() + 1, 2);
-    sheet.getRange(row, 1, 1, 10).setValues([[
-      newId, dateStr, mk, description, amount, method, category,
-      !!p.discretionary, !!p.ben, !!p.jenna
-    ]]);
+    sheet.getRange(row, 1, 1, 10).setValues([[newId].concat(v.rec)]);
     SpreadsheetApp.flush();
     invalidateLedgerCache();
     invalidateSheet(LEDGER_TXNS);
-    return { ok: true, id: newId, month: mk };
-  } finally {
-    try { lock.releaseLock(); } catch (e2) {}
+    return { ok: true, id: newId, month: v.rec[1] };
+  });
+}
+
+// -- WRITE: ledgerUpdateTxn -------------------------------------------------
+// Full-record replace by id: client sends the complete corrected txn (same
+// fields as add, plus id). Partial updates are a foot-gun on money rows --
+// the record you validated is the record you store.
+function ledgerUpdateTxn(p) {
+  if (!p.id) return { error: 'ledgerUpdateTxn needs id.' };
+  var v = _ledgerValidateTxn(p);
+  if (v.error) return v;
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(LEDGER_TXNS);
+  if (!sheet) return { error: 'Sheet not found: ' + LEDGER_TXNS };
+  return _ledgerWithLock(function () {
+    invalidateSheet(LEDGER_TXNS);
+    var values = readSheet(sheet);
+    var row = _ledgerFindRowById(values, p.id);
+    if (row < 0) return { error: 'Txn id ' + p.id + ' not found.' };
+    sheet.getRange(row, 2, 1, 9).setValues([v.rec]);
+    SpreadsheetApp.flush();
+    invalidateLedgerCache();
+    invalidateSheet(LEDGER_TXNS);
+    return { ok: true, id: parseInt(p.id, 10), month: v.rec[1] };
+  });
+}
+
+// -- WRITE: ledgerDeleteTxn -------------------------------------------------
+// deleteRow is safe on a flat table (no formulas below the data block), and
+// row shifts are irrelevant because everything locates by id. A repeat
+// delete of the same id fails loudly ('not found') -- genuine network
+// retries are already absorbed by _withIdem before reaching here.
+function ledgerDeleteTxn(p) {
+  if (!p.id) return { error: 'ledgerDeleteTxn needs id.' };
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(LEDGER_TXNS);
+  if (!sheet) return { error: 'Sheet not found: ' + LEDGER_TXNS };
+  return _ledgerWithLock(function () {
+    invalidateSheet(LEDGER_TXNS);
+    var values = readSheet(sheet);
+    var row = _ledgerFindRowById(values, p.id);
+    if (row < 0) return { error: 'Txn id ' + p.id + ' not found.' };
+    sheet.deleteRow(row);
+    SpreadsheetApp.flush();
+    invalidateLedgerCache();
+    invalidateSheet(LEDGER_TXNS);
+    return { ok: true, id: parseInt(p.id, 10) };
+  });
+}
+
+// -- WRITE: ledgerSplitTxn --------------------------------------------------
+// Atomic split under one lock: the original row is rewritten as parts[0]
+// (keeping its id), the remaining parts append with new ids. INVARIANT:
+// the parts must sum to the original amount (a split conserves money);
+// anything else is an update or an add, and is rejected loudly.
+function _ledgerPrepSplit(orig, parts) { // pure; orig = {date,month,method,...}
+  if (!parts || !parts.length || parts.length < 2)
+    return { error: 'Split needs at least 2 parts.' };
+  var recs = [], sum = 0;
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i];
+    var merged = {
+      date: part.date !== undefined ? part.date : orig.date,
+      month: part.month !== undefined ? part.month : orig.month,
+      description: part.description,
+      amount: part.amount,
+      method: part.method !== undefined ? part.method : orig.method,
+      category: part.category !== undefined ? part.category : orig.category,
+      discretionary: part.discretionary !== undefined ? part.discretionary : orig.discretionary,
+      ben: part.ben !== undefined ? part.ben : orig.ben,
+      jenna: part.jenna !== undefined ? part.jenna : orig.jenna
+    };
+    var v = _ledgerValidateTxn(merged);
+    if (v.error) return { error: 'Part ' + (i + 1) + ': ' + v.error };
+    recs.push(v.rec);
+    sum += v.rec[3];
   }
+  if (Math.abs(sum - orig.amount) > 0.005)
+    return { error: 'Split parts sum to ' + sum.toFixed(2) + ' but original is ' +
+                    orig.amount.toFixed(2) + ' -- a split must conserve the amount.' };
+  return { recs: recs };
+}
+
+function ledgerSplitTxn(p) {
+  if (!p.id) return { error: 'ledgerSplitTxn needs id.' };
+  var parts = p.parts;
+  if (typeof parts === 'string') { try { parts = JSON.parse(parts); } catch (e) { return { error: 'parts is not valid JSON.' }; } }
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(LEDGER_TXNS);
+  if (!sheet) return { error: 'Sheet not found: ' + LEDGER_TXNS };
+  return _ledgerWithLock(function () {
+    invalidateSheet(LEDGER_TXNS);
+    var values = readSheet(sheet);
+    var row = _ledgerFindRowById(values, p.id);
+    if (row < 0) return { error: 'Txn id ' + p.id + ' not found.' };
+    var r = values[row - 1];
+    var orig = { date: _ldate(r[1]), month: _lmonth(r[2]), description: String(r[3] || ''),
+                 amount: _ln(r[4]), method: String(r[5] || ''), category: String(r[6] || 'onetime'),
+                 discretionary: _lb(r[7]), ben: _lb(r[8]), jenna: _lb(r[9]) };
+    var prep = _ledgerPrepSplit(orig, parts);
+    if (prep.error) return prep;
+    var ids = [parseInt(p.id, 10)];
+    sheet.getRange(row, 2, 1, 9).setValues([prep.recs[0]]);
+    var nextId = _ledgerNextId(values);
+    var appendAt = Math.max(sheet.getLastRow() + 1, 2);
+    var newRows = [];
+    for (var i = 1; i < prep.recs.length; i++) {
+      newRows.push([nextId].concat(prep.recs[i]));
+      ids.push(nextId);
+      nextId++;
+    }
+    sheet.getRange(appendAt, 1, newRows.length, 10).setValues(newRows);
+    SpreadsheetApp.flush();
+    invalidateLedgerCache();
+    invalidateSheet(LEDGER_TXNS);
+    return { ok: true, ids: ids };
+  });
+}
+
+// -- READ: ledgerFixed -- one month's fixed rows, by stable id --------------
+function getLedgerFixed(month) {
+  var mk = _lmonth(month);
+  if (!mk) return { error: 'ledgerFixed needs month=YYYY-MM' };
+  var rows = readSheet(LEDGER_FIXED);
+  if (!rows) return { error: 'Sheet not found: ' + LEDGER_FIXED };
+  var out = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (_lmonth(r[1]) !== mk) continue;
+    out.push({ id: parseInt(r[0], 10), month: mk, name: String(r[2] || ''),
+               source: String(r[3] || ''), amount: _ln(r[4]), paid: _lb(r[5]),
+               paid_date: _ldate(r[6]) });
+  }
+  out.sort(function (a, b) { return a.id - b.id; });
+  return { month: mk, fixed: out };
+}
+
+// -- WRITE: ledgerAddFixed --------------------------------------------------
+function ledgerAddFixed(p) {
+  var mk = _lmonth(p.month);
+  if (!mk) return { error: 'ledgerAddFixed needs month=YYYY-MM.' };
+  var name = String(p.name || '').trim();
+  if (!name) return { error: 'Fixed expense name is required.' };
+  var amount = _ln(p.amount);
+  if (amount === null) return { error: 'Amount must be a number.' };
+  var paid = !!p.paid && String(p.paid).toUpperCase() !== 'FALSE';
+  var paidDate = paid ? (_ldate(p.paid_date) || _ledgerToday()) : '';
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(LEDGER_FIXED);
+  if (!sheet) return { error: 'Sheet not found: ' + LEDGER_FIXED };
+  return _ledgerWithLock(function () {
+    invalidateSheet(LEDGER_FIXED);
+    var values = readSheet(sheet);
+    var newId = _ledgerNextId(values);
+    var row = Math.max(sheet.getLastRow() + 1, 2);
+    sheet.getRange(row, 1, 1, 7).setValues([[newId, mk, name,
+      String(p.source || '').trim(), amount, paid, paidDate]]);
+    SpreadsheetApp.flush();
+    invalidateLedgerCache();
+    invalidateSheet(LEDGER_FIXED);
+    return { ok: true, id: newId, month: mk };
+  });
+}
+
+// -- WRITE: ledgerUpdateFixed -----------------------------------------------
+// Partial update by id: only supplied keys change (dashboard ops are
+// single-field: toggle paid, edit cost, rename). paid=true without a date
+// stamps today; paid=false clears the date -- a paid_date on an unpaid row
+// is a contradiction we refuse to store.
+function ledgerUpdateFixed(p) {
+  if (!p.id) return { error: 'ledgerUpdateFixed needs id.' };
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(LEDGER_FIXED);
+  if (!sheet) return { error: 'Sheet not found: ' + LEDGER_FIXED };
+  return _ledgerWithLock(function () {
+    invalidateSheet(LEDGER_FIXED);
+    var values = readSheet(sheet);
+    var row = _ledgerFindRowById(values, p.id);
+    if (row < 0) return { error: 'Fixed id ' + p.id + ' not found.' };
+    var r = values[row - 1].slice();
+    if (p.name !== undefined) {
+      var nm = String(p.name).trim();
+      if (!nm) return { error: 'Name cannot be blank.' };
+      r[2] = nm;
+    }
+    if (p.source !== undefined) r[3] = String(p.source).trim();
+    if (p.amount !== undefined) {
+      var amt = _ln(p.amount);
+      if (amt === null) return { error: 'Amount must be a number.' };
+      r[4] = amt;
+    }
+    if (p.paid !== undefined) {
+      var paid = (p.paid === true) || String(p.paid).toUpperCase() === 'TRUE';
+      r[5] = paid;
+      r[6] = paid ? (_ldate(p.paid_date) || _ldate(r[6]) || _ledgerToday()) : '';
+    } else if (p.paid_date !== undefined) {
+      if (!_lb(r[5])) return { error: 'Cannot set paid_date on an unpaid row.' };
+      r[6] = _ldate(p.paid_date) || _ledgerToday();
+    }
+    sheet.getRange(row, 2, 1, 6).setValues([[r[1], r[2], r[3], r[4], r[5], r[6]]]);
+    SpreadsheetApp.flush();
+    invalidateLedgerCache();
+    invalidateSheet(LEDGER_FIXED);
+    return { ok: true, id: parseInt(p.id, 10) };
+  });
+}
+
+// -- WRITE: ledgerSeedFixedMonth --------------------------------------------
+// The surviving fragment of addMonth: copy the most recent prior month's
+// fixed rows into the target month, all unpaid. Refuses if the target
+// already has rows (re-seeding would duplicate; delete the rows in the
+// sheet first if a re-seed is genuinely wanted).
+function ledgerSeedFixedMonth(p) {
+  var mk = _lmonth(p.month);
+  if (!mk) return { error: 'ledgerSeedFixedMonth needs month=YYYY-MM.' };
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(LEDGER_FIXED);
+  if (!sheet) return { error: 'Sheet not found: ' + LEDGER_FIXED };
+  return _ledgerWithLock(function () {
+    invalidateSheet(LEDGER_FIXED);
+    var values = readSheet(sheet);
+    var srcMonth = '', i;
+    for (i = 1; i < values.length; i++) {
+      var m = _lmonth(values[i][1]);
+      if (!m) continue;
+      if (m === mk) return { error: mk + ' already has fixed rows -- not seeding twice.' };
+      if (m < mk && m > srcMonth) srcMonth = m;
+    }
+    if (!srcMonth) return { error: 'No prior month found to seed from.' };
+    var newRows = [], nextId = _ledgerNextId(values);
+    for (i = 1; i < values.length; i++) {
+      if (_lmonth(values[i][1]) !== srcMonth) continue;
+      newRows.push([nextId, mk, String(values[i][2] || ''), String(values[i][3] || ''),
+                    _ln(values[i][4]) || 0, false, '']);
+      nextId++;
+    }
+    var row = Math.max(sheet.getLastRow() + 1, 2);
+    sheet.getRange(row, 1, newRows.length, 7).setValues(newRows);
+    SpreadsheetApp.flush();
+    invalidateLedgerCache();
+    invalidateSheet(LEDGER_FIXED);
+    return { ok: true, month: mk, seededFrom: srcMonth, count: newRows.length };
+  });
 }
 
 // -- Tests (compact, failure-first; pure fns on fixtures, write path on a
@@ -310,22 +559,40 @@ function testLedger() {
   ok(agg.months.length === 1 && agg.months[0] === '2026-06', 'months list');
 
   // validation rejections
-  ok(!!ledgerAddTxnValidateOnly({ date: 'nope', amount: 5, method: 'AMEX', description: 'x' }), 'rejects bad date');
-  ok(!!ledgerAddTxnValidateOnly({ date: '2026-06-01', amount: 0, method: 'AMEX', description: 'x' }), 'rejects zero amount');
-  ok(!!ledgerAddTxnValidateOnly({ date: '2026-06-01', amount: 5, method: '', description: 'x' }), 'rejects empty method');
-  ok(!!ledgerAddTxnValidateOnly({ date: '2026-06-01', amount: 5, method: 'AMEX', description: '', category: 'onetime' }), 'rejects empty onetime description');
-  ok(!ledgerAddTxnValidateOnly({ date: '2026-06-01', amount: 5, method: 'Costco', description: '', category: 'gas' }), 'gas defaults description');
+  ok(!!_ledgerValidateTxn({ date: 'nope', amount: 5, method: 'AMEX', description: 'x' }).error, 'rejects bad date');
+  ok(!!_ledgerValidateTxn({ date: '2026-06-01', amount: 0, method: 'AMEX', description: 'x' }).error, 'rejects zero amount');
+  ok(!!_ledgerValidateTxn({ date: '2026-06-01', amount: 5, method: '', description: 'x' }).error, 'rejects empty method');
+  ok(!!_ledgerValidateTxn({ date: '2026-06-01', amount: 5, method: 'AMEX', description: '', category: 'onetime' }).error, 'rejects empty onetime description');
+  ok(!_ledgerValidateTxn({ date: '2026-06-01', amount: 5, method: 'Costco', description: '', category: 'gas' }).error, 'gas defaults description');
 
-  // write path on scratch sheet: sequential ids
+  // split preparation: conservation invariant, inheritance, rejections (pure)
+  var so = { date: '2026-06-10', month: '2026-06', description: 'Costco run', amount: 150.00,
+             method: 'Costco', category: 'onetime', discretionary: false, ben: true, jenna: true };
+  var sp = _ledgerPrepSplit(so, [
+    { description: 'Groceries part', amount: 100.00, category: 'groceries' },
+    { description: 'Beach towels', amount: 50.00, discretionary: true }]);
+  ok(!sp.error && sp.recs.length === 2, 'split accepts conserving parts: ' + (sp.error || 'ok'));
+  ok(!sp.error && sp.recs[0][5] === 'groceries' && sp.recs[1][4] === 'Costco', 'split parts inherit method, override category');
+  ok(!!_ledgerPrepSplit(so, [{ description: 'a', amount: 100 }, { description: 'b', amount: 49 }]).error, 'split rejects non-conserving parts');
+  ok(!!_ledgerPrepSplit(so, [{ description: 'a', amount: 150 }]).error, 'split rejects single part');
+
+  // write paths on a scratch sheet, two phases: txn lifecycle, then fixed
+  // lifecycle (same tab, re-headed between phases). Never touches live sheets.
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var scratch = ss.getSheetByName('_TestScratchLedger_');
   if (!scratch) {
-    scratch = ss.insertSheet('_TestScratchLedger_');
+    scratch = ss.insertSheet('_TestScratchLedger_'); // create once, reused forever
     scratch.hideSheet();
   }
-  scratch.clearContents();
-  var hdr = LEDGER_HEADERS[LEDGER_TXNS];
-  scratch.getRange(1, 1, 1, hdr.length).setValues([hdr]);
+  function rehead(sheetKey) {
+    scratch.clearContents();
+    var hdr = LEDGER_HEADERS[sheetKey];
+    scratch.getRange(1, 1, 1, hdr.length).setValues([hdr]);
+    invalidateSheet('_TestScratchLedger_');
+  }
+
+  // -- phase 1: txn lifecycle --
+  rehead(LEDGER_TXNS);
   var real = LEDGER_TXNS;
   try {
     LEDGER_TXNS = '_TestScratchLedger_';
@@ -335,26 +602,62 @@ function testLedger() {
     ok(r2.ok && r2.id === 2, 'second id = 2: ' + JSON.stringify(r2));
     var got = getLedgerTxns('2026-06');
     ok(got.txns && got.txns.length === 2 && got.txns[1].discretionary === true, 'read back by month with flags');
+
+    var ru = ledgerUpdateTxn({ id: 2, date: '2026-06-03', month: '2026-05', description: 'test b fixed',
+                               amount: 9.99, method: 'Costco', category: 'gas' });
+    ok(ru.ok && ru.month === '2026-05', 'update rewrites record incl month reassignment: ' + JSON.stringify(ru));
+    got = getLedgerTxns('2026-05');
+    ok(got.txns.length === 1 && near(got.txns[0].amount, 9.99) && got.txns[0].method === 'Costco', 'updated row reads back in new month');
+    ok(!!ledgerUpdateTxn({ id: 99, date: '2026-06-01', amount: 1, method: 'AMEX', description: 'x' }).error, 'update of missing id fails loudly');
+
+    var rs = ledgerSplitTxn({ id: 1, parts: [
+      { description: 'part 1', amount: 8.5, category: 'groceries' },
+      { description: 'part 2', amount: 4.0, discretionary: true }] });
+    ok(rs.ok && rs.ids.length === 2 && rs.ids[0] === 1 && rs.ids[1] === 3, 'split keeps original id, appends next id: ' + JSON.stringify(rs));
+    got = getLedgerTxns('2026-06');
+    var splitSum = 0;
+    for (var si = 0; si < got.txns.length; si++) splitSum += got.txns[si].amount;
+    ok(got.txns.length === 2 && near(splitSum, 12.5), 'split conserved the amount on-sheet: ' + splitSum);
+    ok(!!ledgerSplitTxn({ id: 3, parts: [{ description: 'a', amount: 1 }, { description: 'b', amount: 1 }] }).error, 'non-conserving split rejected at the sheet');
+
+    var rd = ledgerDeleteTxn({ id: 3 });
+    ok(rd.ok, 'delete by id: ' + JSON.stringify(rd));
+    ok(!!ledgerDeleteTxn({ id: 3 }).error, 'repeat delete fails loudly');
+    ok(getLedgerTxns('2026-06').txns.length === 1, 'deleted row is gone');
   } finally {
     LEDGER_TXNS = real;
+    invalidateSheet('_TestScratchLedger_');
+  }
+
+  // -- phase 2: fixed lifecycle --
+  rehead(LEDGER_FIXED);
+  var realF = LEDGER_FIXED;
+  try {
+    LEDGER_FIXED = '_TestScratchLedger_';
+    var f1 = ledgerAddFixed({ month: '2026-06', name: 'Mortgage', source: 'Checking', amount: 2000 });
+    var f2 = ledgerAddFixed({ month: '2026-06', name: 'Spotify', source: 'AMEX', amount: 19.99, paid: true, paid_date: '2026-06-09' });
+    ok(f1.ok && f1.id === 1 && f2.ok && f2.id === 2, 'fixed adds with sequential ids');
+    var gf = getLedgerFixed('2026-06');
+    ok(gf.fixed.length === 2 && gf.fixed[1].paid === true && gf.fixed[1].paid_date === '2026-06-09', 'fixed read back with paid state');
+
+    ok(ledgerUpdateFixed({ id: 1, paid: true }).ok, 'toggle paid on');
+    gf = getLedgerFixed('2026-06');
+    ok(gf.fixed[0].paid === true && !!gf.fixed[0].paid_date, 'paid=true stamps a date');
+    ok(ledgerUpdateFixed({ id: 1, paid: false }).ok && getLedgerFixed('2026-06').fixed[0].paid_date === '', 'paid=false clears the date');
+    ok(ledgerUpdateFixed({ id: 1, amount: 2100.5 }).ok && near(getLedgerFixed('2026-06').fixed[0].amount, 2100.5), 'partial amount update');
+    ok(!!ledgerUpdateFixed({ id: 1, paid_date: '2026-06-15' }).error, 'paid_date on unpaid row refused');
+
+    var sd = ledgerSeedFixedMonth({ month: '2026-07' });
+    ok(sd.ok && sd.count === 2 && sd.seededFrom === '2026-06', 'seed copies prior month: ' + JSON.stringify(sd));
+    gf = getLedgerFixed('2026-07');
+    ok(gf.fixed.length === 2 && gf.fixed[0].paid === false && gf.fixed[0].paid_date === '', 'seeded rows are unpaid');
+    ok(!!ledgerSeedFixedMonth({ month: '2026-07' }).error, 'double-seed refused');
+  } finally {
+    LEDGER_FIXED = realF;
     invalidateSheet('_TestScratchLedger_');
   }
 
   if (fails.length) { Logger.log('testLedger FAILURES:\n' + fails.join('\n')); }
   Logger.log('testLedger: ' + passes + ' passed, ' + fails.length + ' failed');
   return { passed: passes, failed: fails };
-}
-
-// Validation-only twin used by tests (returns the error string or null,
-// never touches the sheet). Keep its checks in lockstep with ledgerAddTxn.
-function ledgerAddTxnValidateOnly(p) {
-  var dateStr = _ldate(p.date);
-  if (!dateStr) return 'bad date';
-  var amount = _ln(p.amount);
-  if (amount === null || amount === 0) return 'bad amount';
-  var category = String(p.category || 'onetime');
-  if (LEDGER_CATEGORIES.indexOf(category) < 0) return 'bad category';
-  if (!String(p.method || '').trim()) return 'bad method';
-  if (!String(p.description || '').trim() && category !== 'gas') return 'bad description';
-  return null;
 }
