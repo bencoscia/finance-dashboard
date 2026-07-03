@@ -223,14 +223,15 @@ function doPost(e) {
 // -- GET: all ------------------------------------------------
 function getAllData() {
   var loanData = getLoanData();
+  var useLedger = _ledgerCutoverOn(); // Config key 'ledger_cutover' = TRUE
   return {
     config:        getConfig(),
-    monthly:       getMonthlyData(),
+    monthly:       useLedger ? ledgerComputeMonths() : getMonthlyData(),
     accounts:      getAccountsData(),
     cardTotals:    getCardTotals(),
     cardBalances:  getCardBalances(),
     budget:        cfg().budget,
-    months:        getMonthlySheetNames(),
+    months:        useLedger ? ledgerMonthNames() : getMonthlySheetNames(),
     loanInterest:  loanData.sheetTotalInterest || loanData.totalInterest || 0,
     loanPrincipal: loanData.sheetTotalPayment  ? (loanData.sheetTotalPayment - (loanData.sheetTotalInterest||0)) : 0,
     updated:       new Date().toISOString()
@@ -240,6 +241,12 @@ function getAllData() {
 // Fast refresh -- called after every save. Only recomputes the current month;
 // all other months served from CacheService. Typically reads 1 sheet, not 17.
 function getQuickData() {
+  if (_ledgerCutoverOn()) {
+    // Ledger path needs no per-month cache surgery: one aggregate pass,
+    // already invalidated by every ledger write.
+    return { monthly: ledgerComputeMonths(), months: ledgerMonthNames(),
+             updated: new Date().toISOString() };
+  }
   var p = _lastPostParams || {};
   var currentMonth = p.month || getMonthlySheetNames()[0] || '';
   return {
@@ -495,6 +502,7 @@ function invalidateMonthCache(name) {
 
 // -- GET: transactions ----------------------------------------
 function getTransactions(monthName) {
+  if (_ledgerCutoverOn()) return ledgerGetTransactions(monthName);
   if (!monthName) return { error: 'month parameter required' };
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(monthName);
@@ -564,6 +572,7 @@ function getTransactions(monthName) {
 
 // -- GET: fixed + variable expenses ---------------------------
 function getFixedExpenses(monthName) {
+  if (_ledgerCutoverOn()) return ledgerGetFixedExpenses(monthName);
   if (!monthName) return { error: 'month parameter required' };
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(monthName);
@@ -635,6 +644,7 @@ function getFixedExpenses(monthName) {
 // Groceries: cols L=date, M=store, N=cost, O=payment  (rows 4-9, total at N17)
 // Gas:       cols L=date, M=cost, N=payment            (rows 21-26, total at M34)
 function getVariableEntries(monthName) {
+  if (_ledgerCutoverOn()) return ledgerGetVariableEntries(monthName);
   if (!monthName) return { error: 'month required' };
   var ss    = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(monthName);
@@ -1544,9 +1554,14 @@ function _computeCardBalances() {
     totalLimit   += cards[k].limit   || 0;
   });
 
-  // Checking balance from most recent month sheet
+  // Checking balance: ledger-computed post-cutover, month sheet before
   var checkingBalance = null, checkingBalanceAlt = null;
-  if (monthNames.length) {
+  var checkingSrc = monthNames.length ? monthNames[0] : null;
+  if (_ledgerCutoverOn()) {
+    var lcb = ledgerCheckingBalance();
+    if (!lcb.error) { checkingBalance = lcb.balance; checkingSrc = 'Ledger (since ' + lcb.since + ')'; }
+    else checkingSrc = lcb.error;
+  } else if (monthNames.length) {
     var mSheet = ss.getSheetByName(monthNames[0]);
     var mVals  = mSheet ? readSheet(mSheet) : [];
     for (var i = 0; i < mVals.length; i++) {
@@ -1567,7 +1582,7 @@ function _computeCardBalances() {
     totalLimit:        totalLimit,
     checkingBalance:   checkingBalance,
     checkingBalanceAlt:checkingBalanceAlt,
-    checkingSource:    monthNames.length ? monthNames[0] : null,
+    checkingSource:    checkingSrc,
   };
 }
 
@@ -2253,6 +2268,7 @@ function getMortgageData() {
 // Scans every month sheet, returns transactions where col D = pm.
 // Also includes grocery/gas tracker entries attributed to that pm.
 function getTransactionsByCard(pm, limitStr) {
+  if (_ledgerCutoverOn()) return ledgerGetTransactionsByCard(pm, limitStr);
   if (!pm) return { error: 'pm required' };
   var limit   = parseInt(limitStr) || 500;
   var months  = getMonthlySheetNames();

@@ -172,7 +172,11 @@ function getLedgerMonthly() {
 }
 
 function invalidateLedgerCache() {
-  try { CacheService.getScriptCache().remove(LEDGER_CACHE_KEY); } catch (e) {}
+  try {
+    var c = CacheService.getScriptCache();
+    c.remove(LEDGER_CACHE_KEY);
+    c.remove(LEDGER_CACHE_VERSION + '_oldshape');
+  } catch (e) {}
 }
 
 // -- READ: ledgerTxns -- one month's transactions, by stable id -----------
@@ -512,6 +516,338 @@ function ledgerSeedFixedMonth(p) {
     invalidateSheet(LEDGER_FIXED);
     return { ok: true, month: mk, seededFrom: srcMonth, count: newRows.length };
   });
+}
+
+// ============================================================================
+// OLD-SHAPE ADAPTERS -- serve the dashboard's existing response shapes from
+// the ledger tables, gated by the Config sheet key 'ledger_cutover' (TRUE to
+// flip; no redeploy needed). Old month NAMES ('June 2026') stay the wire
+// format for these adapted endpoints; ledger-native endpoints use YYYY-MM.
+// Rows carry stable `id` instead of `rowIndex` -- the frontend cutover commit
+// switches its handles accordingly.
+// ============================================================================
+
+var LEDGER_MONTH_NAMES = ['January','February','March','April','May','June',
+  'July','August','September','October','November','December'];
+
+function _ledgerMonthName(mk) { // '2026-06' -> 'June 2026'
+  var m = /^(\d{4})-(\d{2})$/.exec(String(mk || ''));
+  if (!m) return String(mk || '');
+  return LEDGER_MONTH_NAMES[parseInt(m[2], 10) - 1] + ' ' + m[1];
+}
+function _ledgerMonthKey(name) { // 'June 2026' -> '2026-06'
+  var mk = _lmonth(name);
+  if (mk) return mk;
+  var parts = String(name || '').trim().split(' ');
+  var idx = LEDGER_MONTH_NAMES.indexOf(parts[0]);
+  if (idx < 0 || !/^\d{4}$/.test(parts[1] || '')) return '';
+  return parts[1] + '-' + ('0' + (idx + 1)).slice(-2);
+}
+
+function _ledgerCutoverOn() {
+  var rows = readSheet('Config');
+  if (!rows) return false;
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i][0] || '').trim() === 'ledger_cutover')
+      return String(rows[i][1]).toUpperCase() === 'TRUE';
+  }
+  return false;
+}
+
+function _ledgerVarhist() { // -> { '2026-06': { Budget: 13204.75, Dogs: ... } }
+  var rows = readSheet(LEDGER_VARHIST) || [[]];
+  var out = {};
+  for (var i = 1; i < rows.length; i++) {
+    var mk = _lmonth(rows[i][0]);
+    var amt = _ln(rows[i][2]);
+    if (!mk || amt === null) continue;
+    if (!out[mk]) out[mk] = {};
+    out[mk][String(rows[i][1] || '').trim()] = amt;
+  }
+  return out;
+}
+
+// getMonthlyData successor in the OLD row shape. One pass over the ledger
+// tables; FCF/savings/daycare parity with _computeOneMonth (keyword lists
+// FCF_EXCLUDE_FIXED / FCF_SAVINGS_ITEMS shared from apps_script.gs -- one
+// global scope). Chart stack identity holds exactly:
+//   totalExpenses = discretionary + nonDiscOneTime + variable + fixed
+// because variable := groceries + gas and fixed := fixedPaid.
+function ledgerComputeMonths() {
+  var cache = CacheService.getScriptCache();
+  var CKEY = LEDGER_CACHE_VERSION + '_oldshape';
+  try {
+    var hit = cache.get(CKEY);
+    if (hit) return JSON.parse(hit);
+  } catch (e) {}
+
+  var txnRows = readSheet(LEDGER_TXNS);
+  if (!txnRows) return [];
+  var fixedRows = readSheet(LEDGER_FIXED) || [[]];
+  var incomeRows = readSheet(LEDGER_INCOME) || [[]];
+  var agg = _ledgerAggregate(txnRows, fixedRows, incomeRows);
+  var vh = _ledgerVarhist();
+
+  // per-month FCF fields + income attribution (old _computeOneMonth parity:
+  // fcf/savings/daycare use listed amounts regardless of paid status)
+  var fcf = {};
+  function fb(mk) {
+    if (!fcf[mk]) fcf[mk] = { fixedFcf: 0, fixedSavings: 0, daycareGross: 0, benIncome: 0, jennaIncome: 0 };
+    return fcf[mk];
+  }
+  var i, r, mk;
+  var daycareReimb = {};
+  for (i = 1; i < fixedRows.length; i++) {
+    r = fixedRows[i];
+    mk = _lmonth(r[1]);
+    var amt = _ln(r[4]);
+    if (!mk || amt === null) continue;
+    var nm = String(r[2] || '').trim();
+    var b = fb(mk);
+    var isSavings = FCF_SAVINGS_ITEMS.some(function (kw) { return nm.indexOf(kw) >= 0; });
+    var isExcluded = FCF_EXCLUDE_FIXED.some(function (kw) { return nm.indexOf(kw) >= 0; });
+    if (nm === 'Daycare') { b.daycareGross += amt; }
+    else if (nm.indexOf('Daycare Reimbursement') >= 0) { daycareReimb[mk] = (daycareReimb[mk] || 0) + amt; }
+    else {
+      if (isSavings) b.fixedSavings += amt;
+      if (!isExcluded) b.fixedFcf += amt;
+    }
+  }
+  for (i = 1; i < incomeRows.length; i++) {
+    r = incomeRows[i];
+    mk = _lmonth(r[1]) || _lmonth(r[2]);
+    var iamt = _ln(r[4]);
+    if (!mk || iamt === null || iamt <= 0) continue;
+    var srcNm = String(r[3] || '');
+    if (srcNm.indexOf('Schr') >= 0) fb(mk).benIncome += iamt;
+    else if (srcNm.indexOf('St. Joe') >= 0 || srcNm.indexOf('St Joe') >= 0) fb(mk).jennaIncome += iamt;
+  }
+
+  var out = [];
+  for (i = 0; i < agg.months.length; i++) {
+    mk = agg.months[i];
+    var m = agg.perMonth[mk];
+    var f = fb(mk);
+    var row = { month: _ledgerMonthName(mk) };
+    row.totalExpenses = Math.round(m.totalExpenses * 100) / 100;
+    row.discretionary = Math.round(m.discretionary * 100) / 100;
+    row.fixed = Math.round(m.fixedPaid * 100) / 100;
+    row.variable = Math.round((m.groceries + m.gas) * 100) / 100;
+    row.oneTime = Math.round(m.onetime * 100) / 100;
+    // derived from the ROUNDED siblings so the chart-stack identity
+    // totalExpenses = discretionary + nonDiscOneTime + variable + fixed
+    // holds to the cent (independent rounding drifts by 1 cent otherwise)
+    row.nonDiscOneTime = Math.round((row.totalExpenses - row.discretionary - row.variable - row.fixed) * 100) / 100;
+    var bud = vh[mk] && vh[mk]['Budget'] !== undefined ? vh[mk]['Budget'] : (cfg().budget || null);
+    if (bud !== null && bud !== undefined) {
+      row.budget = Math.round(bud * 100) / 100;
+      row.surplusDeficit = Math.round((bud - m.totalExpenses) * 100) / 100;
+    }
+    if (m.income > 0) {
+      row.income = Math.round(m.income * 100) / 100;
+      row.netForMonth = Math.round((m.income - m.totalExpenses) * 100) / 100;
+    }
+    if (f.benIncome > 0) row.benIncome = Math.round(f.benIncome * 100) / 100;
+    if (f.jennaIncome > 0) row.jennaIncome = Math.round(f.jennaIncome * 100) / 100;
+    var daycareNet = f.daycareGross - (cfg().daycareFsaAnnual / 12);
+    var fixedFcf = f.fixedFcf + (f.daycareGross > 0 ? Math.max(0, daycareNet) : 0);
+    row.fixedFcf = Math.round(fixedFcf * 100) / 100;
+    row.fixedSavings = Math.round(f.fixedSavings * 100) / 100;
+    row.daycareGross = Math.round(f.daycareGross * 100) / 100;
+    row.daycareNet = Math.round(Math.max(0, daycareNet) * 100) / 100;
+    out.push(row);
+  }
+  try { cache.put(CKEY, JSON.stringify(out), 300); } catch (e2) {}
+  return out;
+}
+
+function ledgerMonthNames() { // newest-first old-style names, getMonthlySheetNames parity
+  var rows = readSheet(LEDGER_TXNS) || [[]];
+  var seen = {}, i;
+  for (i = 1; i < rows.length; i++) {
+    var mk = _lmonth(rows[i][2]) || _lmonth(rows[i][1]);
+    if (mk) seen[mk] = true;
+  }
+  var keys = [];
+  for (var k in seen) keys.push(k);
+  keys.sort(); keys.reverse();
+  var out = [];
+  for (i = 0; i < keys.length; i++) out.push(_ledgerMonthName(keys[i]));
+  return out;
+}
+
+// getTransactions old shape (id instead of rowIndex). Includes categories
+// onetime AND transfer -- both lived in the old txn block; groceries/gas
+// lived in subtables and are served by ledgerGetVariableEntries.
+function ledgerGetTransactions(monthName) {
+  var mk = _ledgerMonthKey(monthName);
+  if (!mk) return { error: 'month parameter required' };
+  var rows = readSheet(LEDGER_TXNS);
+  if (!rows) return { error: 'Sheet not found: ' + LEDGER_TXNS };
+  var txns = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (_lmonth(r[2]) !== mk) continue;
+    var cat = String(r[6] || 'onetime');
+    if (cat !== 'onetime' && cat !== 'transfer') continue;
+    txns.push({
+      id: parseInt(r[0], 10), date: _ldate(r[1]),
+      description: String(r[3] || ''), cost: _ln(r[4]),
+      paymentMethod: String(r[5] || ''), category: cat,
+      discretionary: _lb(r[7]), ben: _lb(r[8]), jenna: _lb(r[9])
+    });
+  }
+  txns.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id; });
+  return { month: monthName, transactions: txns };
+}
+
+// getFixedExpenses old shape { month, fixed, variable } -- fixed rows carry
+// id; the variable summary list is computed (Groceries/Gas from txns) plus
+// this month's Variable History display rows (Dogs, utilities, ...).
+function ledgerGetFixedExpenses(monthName) {
+  var mk = _ledgerMonthKey(monthName);
+  if (!mk) return { error: 'month parameter required' };
+  var gf = getLedgerFixed(mk);
+  if (gf.error) return gf;
+  var fixed = [];
+  for (var i = 0; i < gf.fixed.length; i++) {
+    var x = gf.fixed[i];
+    fixed.push({ id: x.id, source: x.source, name: x.name, cost: x.amount,
+                 paid: x.paid, paidDate: x.paid_date });
+  }
+  var txnRows = readSheet(LEDGER_TXNS) || [[]];
+  var groc = 0, gas = 0;
+  for (i = 1; i < txnRows.length; i++) {
+    if (_lmonth(txnRows[i][2]) !== mk) continue;
+    var amt = _ln(txnRows[i][4]);
+    if (amt === null) continue;
+    var cat = String(txnRows[i][6] || '');
+    if (cat === 'groceries') groc += amt;
+    else if (cat === 'gas') gas += amt;
+  }
+  var variable = [{ name: 'Groceries', cost: Math.round(groc * 100) / 100 },
+                  { name: 'Gas', cost: Math.round(gas * 100) / 100 }];
+  var vh = _ledgerVarhist()[mk] || {};
+  for (var k in vh) {
+    if (k === 'Budget' || k === 'Groceries' || k === 'Gas') continue;
+    variable.push({ name: k, cost: Math.round(vh[k] * 100) / 100 });
+  }
+  return { month: monthName, fixed: fixed, variable: variable };
+}
+
+// getVariableEntries old shape; entries carry id. totalRow/entryStart were
+// sheet-position plumbing for the old insertCells writes -- gone by design.
+function ledgerGetVariableEntries(monthName) {
+  var mk = _ledgerMonthKey(monthName);
+  if (!mk) return { error: 'month required' };
+  var rows = readSheet(LEDGER_TXNS);
+  if (!rows) return { error: 'Sheet not found: ' + LEDGER_TXNS };
+  var groceries = [], gas = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (_lmonth(r[2]) !== mk) continue;
+    var cat = String(r[6] || '');
+    var amt = _ln(r[4]);
+    if (cat === 'groceries') {
+      groceries.push({ id: parseInt(r[0], 10), date: _ldate(r[1]),
+        store: String(r[3] || ''), cost: amt === null ? null : Math.round(amt * 100) / 100,
+        payment: String(r[5] || '') });
+    } else if (cat === 'gas') {
+      gas.push({ id: parseInt(r[0], 10), date: _ldate(r[1]),
+        cost: amt === null ? null : Math.round(amt * 100) / 100,
+        payment: String(r[5] || '') });
+    }
+  }
+  function byDate(a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id; }
+  groceries.sort(byDate); gas.sort(byDate);
+  return { month: monthName,
+           groceries: { entries: groceries },
+           gas: { entries: gas } };
+}
+
+// Checking balance, ledger world. Old-sheet semantics preserved exactly:
+//   balance = prior + income - paid fixed (source Checking)
+//             - sum(method-Checking txns)   [positives spend, negatives deposit,
+//                                            transfers included -- IRA contributions
+//                                            are entered as transfer txns from checking]
+//             + Card Payments for the month [stored negative, so adding subtracts]
+// The chain is anchored by two Config keys set once at cutover (sheet-level):
+//   checking_seed        -- the balance at the start of checking_seed_month
+//   checking_seed_month  -- YYYY-MM; months before it live in the frozen sheets
+function ledgerCheckingBalance() {
+  var seed = null, seedMonth = '';
+  var conf = readSheet('Config') || [[]];
+  for (var i = 0; i < conf.length; i++) {
+    var k = String(conf[i][0] || '').trim();
+    if (k === 'checking_seed') seed = _ln(conf[i][1]);
+    if (k === 'checking_seed_month') seedMonth = _lmonth(conf[i][1]);
+  }
+  if (seed === null || !seedMonth)
+    return { error: 'Set Config keys checking_seed and checking_seed_month (YYYY-MM) to enable the ledger checking balance.' };
+
+  var bal = seed, mk;
+  var txnRows = readSheet(LEDGER_TXNS) || [[]];
+  for (i = 1; i < txnRows.length; i++) {
+    mk = _lmonth(txnRows[i][2]) || _lmonth(txnRows[i][1]);
+    if (!mk || mk < seedMonth) continue;
+    if (String(txnRows[i][5]) !== 'Checking') continue;
+    var amt = _ln(txnRows[i][4]);
+    if (amt !== null) bal -= amt;
+  }
+  var fixedRows = readSheet(LEDGER_FIXED) || [[]];
+  for (i = 1; i < fixedRows.length; i++) {
+    mk = _lmonth(fixedRows[i][1]);
+    if (!mk || mk < seedMonth) continue;
+    if (String(fixedRows[i][3] || '').trim() !== 'Checking') continue;
+    if (!_lb(fixedRows[i][5])) continue;
+    var famt = _ln(fixedRows[i][4]);
+    if (famt !== null) bal -= famt;
+  }
+  var incRows = readSheet(LEDGER_INCOME) || [[]];
+  for (i = 1; i < incRows.length; i++) {
+    mk = _lmonth(incRows[i][1]) || _lmonth(incRows[i][2]);
+    if (!mk || mk < seedMonth) continue;
+    var iamt = _ln(incRows[i][4]);
+    if (iamt !== null) bal += iamt;
+  }
+  var cpRows = readSheet('Card Payments') || [[]];
+  for (i = 0; i < cpRows.length; i++) {
+    var cpmk = _ledgerMonthKey(String(cpRows[i][3] || ''));
+    if (!cpmk || cpmk < seedMonth) continue;
+    var pamt = _ln(cpRows[i][2]);
+    if (pamt !== null) bal += pamt; // payments stored negative
+  }
+  return { balance: Math.round(bal * 100) / 100, since: seedMonth };
+}
+
+// Card drawer, ledger world: one pass over Txns (all categories -- the old
+// version merged the txn block with grocery/gas subtable entries; here they
+// are already one table). Newest first, capped.
+function ledgerGetTransactionsByCard(pm, limitStr) {
+  if (!pm) return { error: 'pm required' };
+  var limit = parseInt(limitStr, 10) || 500;
+  var rows = readSheet(LEDGER_TXNS);
+  if (!rows) return { error: 'Sheet not found: ' + LEDGER_TXNS };
+  var results = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (String(r[5] || '').trim() !== pm) continue;
+    var amt = _ln(r[4]);
+    if (amt === null) continue;
+    var cat = String(r[6] || 'onetime');
+    results.push({
+      month: _ledgerMonthName(_lmonth(r[2]) || _lmonth(r[1])),
+      date: _ldate(r[1]),
+      description: String(r[3] || ''),
+      cost: Math.round(amt * 100) / 100,
+      paymentMethod: pm,
+      discretionary: _lb(r[7]), ben: _lb(r[8]), jenna: _lb(r[9]),
+      source: cat === 'groceries' ? 'grocery' : cat === 'gas' ? 'gas' : 'transaction'
+    });
+  }
+  results.sort(function (a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : 0; });
+  if (results.length > limit) results = results.slice(0, limit);
+  return { pm: pm, transactions: results, count: results.length };
 }
 
 // -- Tests (compact, failure-first; pure fns on fixtures, write path on a
