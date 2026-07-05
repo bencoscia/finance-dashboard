@@ -1861,6 +1861,15 @@ function qaRenderFields(){
   }
 }
 
+// 'June 2026' -> '2026-06' for ledger write payloads (reads still take names)
+var MKEY_NAMES=['January','February','March','April','May','June','July','August','September','October','November','December'];
+function mkey(name){
+  var p=String(name||'').trim().split(' ');
+  var i=MKEY_NAMES.indexOf(p[0]);
+  if(i<0||!/^\d{4}$/.test(p[1]||'')) return String(name||'');
+  return p[1]+'-'+('0'+(i+1)).slice(-2);
+}
+
 async function submitQuickAdd(){
   var btn=$('qa-submit-btn');
   var month=qaCurMonth();
@@ -1875,25 +1884,35 @@ async function submitQuickAdd(){
   btn.disabled=true; btn.textContent='Saving…';
   try{
     if(qaType==='txn'){
-      await apiPost(SCRIPT_URL,{action:'addTransaction', idemKey:genIdemKey('txn'), month:month,
-        date:$('qa-date').value, description:$('qa-desc').value.trim(), cost:amt,
-        paymentMethod:$('qa-pm').value, discretionary:$('qa-disc').checked,
+      await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('txn'), month:mkey(month),
+        date:$('qa-date').value, description:$('qa-desc').value.trim(), amount:amt,
+        method:$('qa-pm').value, category:'onetime', discretionary:$('qa-disc').checked,
         ben:$('qa-ben').checked, jenna:$('qa-jenna').checked});
       if(curMonthTxn===month) loadTxns(month,true);
       quickRefresh(); refreshCardBalances();
     } else if(qaType==='groceries'||qaType==='gas'){
-      await apiPost(SCRIPT_URL,{action:'addVariableEntry', idemKey:genIdemKey('var'), month:month,
+      if(!$('qa-pm').value){ $('qa-err').textContent='Select a payment method.'; return; }
+      await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('var'), month:mkey(month),
         category:qaType, date:$('qa-date').value, amount:Math.abs(amt),
-        payment:$('qa-pm').value,
-        store:qaType==='groceries'?$('qa-store').value.trim():undefined});
+        method:$('qa-pm').value,
+        description:qaType==='groceries'?$('qa-store').value.trim():'Gas',
+        discretionary:false, ben:true, jenna:true});
       if(curMonthFx===month) loadFixed(month,true);
       refreshCardBalances();
     } else if(qaType==='checking'){
       var isDep=$('qa-chk-type').value==='deposit';
-      await apiPost(SCRIPT_URL,{action:'makeCheckingEntry', idemKey:genIdemKey('chk'), month:month,
-        description:$('qa-desc').value.trim()||'Paycheck',
-        amount:isDep?Math.abs(amt):-Math.abs(amt),
-        date:$('qa-date').value});
+      // Deposits/paychecks are income; withdrawals are transfer txns from
+      // checking (the old system stored them as negative income rows).
+      if(isDep){
+        await apiPost(SCRIPT_URL,{action:'ledgerAddIncome', idemKey:genIdemKey('chk'), month:mkey(month),
+          source:$('qa-desc').value.trim()||'Paycheck',
+          amount:Math.abs(amt), date:$('qa-date').value});
+      } else {
+        await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('chk'), month:mkey(month),
+          description:$('qa-desc').value.trim()||'Withdrawal', category:'transfer',
+          method:'Checking', amount:Math.abs(amt), date:$('qa-date').value,
+          discretionary:false, ben:false, jenna:false});
+      }
       quickRefresh(); refreshCardBalances();
     } else if(qaType==='hsa'){
       if(amt<=0){ $('qa-err').textContent='Enter a receipt amount greater than zero.'; return; }
@@ -2929,7 +2948,7 @@ async function quickRefresh(){
     renderCardStrip(); // refresh strip on transactions tab too
   } catch(e){ /* silent fail — not critical */ }
 }
-// Stored in localStorage: { 'Month YYYY:rowIndex': true }
+// Stored in localStorage keyed by 'Month YYYY:<txn id>' (ids are stable; pre-cutover rowIndex-keyed tags are orphaned)
 // ── TAGS ─────────────────────────────────────────────────────
 var TAGS_KEY = 'fin_tags_v1';
 
@@ -2978,7 +2997,7 @@ function getTagColor(tag){
 var _pickerRowIdx=-1, _pickerEl=null;
 function openTagPicker(i,e){
   e.stopPropagation(); closePicker(); _pickerRowIdx=i;
-  var t=txns[i], rowTags=getRowTags(curMonthTxn,t.rowIndex);
+  var t=txns[i], rowTags=getRowTags(curMonthTxn,t.id);
   var allTags=Object.keys(getAllKnownTags()).sort();
   var picker=document.createElement('div');
   picker.className='tag-picker'; picker.id='tag-picker-popup';
@@ -3022,10 +3041,10 @@ function filterPickerList(){
   });
 }
 function toggleTagOnRow(i,tag){
-  var t=txns[i]; if(t.rowIndex==null) return;
-  var existing=getRowTags(curMonthTxn,t.rowIndex);
-  if(existing.indexOf(tag)>=0) removeTagFromRow(curMonthTxn,t.rowIndex,tag);
-  else addTagToRow(curMonthTxn,t.rowIndex,tag);
+  var t=txns[i]; if(t.id==null) return;
+  var existing=getRowTags(curMonthTxn,t.id);
+  if(existing.indexOf(tag)>=0) removeTagFromRow(curMonthTxn,t.id,tag);
+  else addTagToRow(curMonthTxn,t.id,tag);
   refreshRowTags(i);
   document.querySelectorAll('.tag-picker-item').forEach(function(item){
     item.classList.toggle('selected',item.textContent===tag);
@@ -3036,12 +3055,12 @@ function createAndApplyTag(i,nameOverride){
   var inp=$('tag-new-input');
   var name=(nameOverride||(inp?inp.value:'')).trim().toLowerCase();
   if(!name) return;
-  var t=txns[i]; addTagToRow(curMonthTxn,t.rowIndex,name);
+  var t=txns[i]; addTagToRow(curMonthTxn,t.id,name);
   refreshRowTags(i); closePicker(); renderTagSummary();
 }
 function removeTag(i,tag,e){
   e&&e.stopPropagation();
-  removeTagFromRow(curMonthTxn,txns[i].rowIndex,tag);
+  removeTagFromRow(curMonthTxn,txns[i].id,tag);
   refreshRowTags(i); renderTagSummary();
   if(activeFilters.tag===tag) clearFilters();
 }
@@ -3059,7 +3078,7 @@ function wireTagArea(i){
 
 function refreshRowTags(i){
   var el=$('rowtags-'+i); if(!el) return;
-  var t=txns[i], rowTags=getRowTags(curMonthTxn,t.rowIndex);
+  var t=txns[i], rowTags=getRowTags(curMonthTxn,t.id);
   el.innerHTML=rowTags.map(function(tag){
     var c=getTagColor(tag);
     return '<span class="txn-tag" style="background:'+c+'20;color:'+c+';border-color:'+c+'40">'+
@@ -3073,8 +3092,8 @@ function renderTagSummary(){
   var panel=$('tag-summary-panel'); if(!panel) return;
   var tagData=getAllTagData(), tagTotals={};
   txns.forEach(function(t,i){
-    if(t.rowIndex==null) return;
-    (tagData[txnTagKey(curMonthTxn,t.rowIndex)]||[]).forEach(function(tag){
+    if(t.id==null) return;
+    (tagData[txnTagKey(curMonthTxn,t.id)]||[]).forEach(function(tag){
       if(!tagTotals[tag]) tagTotals[tag]={total:0,count:0};
       tagTotals[tag].total+=(t.cost||0); tagTotals[tag].count++;
     });
@@ -3274,8 +3293,8 @@ function applyFilters(){
     if(show && flags.disc  && !t.discretionary) show = false;
     if(show && flags.ben   && !t.ben)            show = false;
     if(show && flags.jenna && !t.jenna)          show = false;
-    if(show && flags.pend  && !(pfCache && pfCache[pendingKey(curMonthTxn, t.rowIndex)])) show = false;
-    if(show && flags.tag   && flags.tag !== '' && getRowTags(curMonthTxn, t.rowIndex).indexOf(flags.tag) < 0) show = false;
+    if(show && flags.pend  && !(pfCache && pfCache[pendingKey(curMonthTxn, t.id)])) show = false;
+    if(show && flags.tag   && flags.tag !== '' && getRowTags(curMonthTxn, t.id).indexOf(flags.tag) < 0) show = false;
 
     if(rows[i]) rows[i].style.display = show ? '' : 'none';
     if(show){ visible++; visibleTotal += (t.cost || 0); }
@@ -3349,14 +3368,14 @@ function updateSum(){
 }
 function viewRow(t,i){
   var tr=document.createElement('tr'); tr.dataset.i=i;
-  var pending = t.rowIndex != null ? isPending(curMonthTxn, t.rowIndex) : false;
+  var pending = t.id != null ? isPending(curMonthTxn, t.id) : false;
   if(pending) tr.className='txn-pending-row';
   if(pending) tr.id='pending-row-'+i;
   var cc=t.cost==null?'':(t.cost<0?'cpos':(t.cost>4000?'cneg':''));
   var pendBtn = '<span class="tag pending" data-action="toggleRowPending" data-args="'+i+'" title="'+(pending?'Remove pending flag':'Flag for review')+'">'+(pending?'⏳':'○')+'</span>';
 
   // Tags for this row
-  var rowTags = getRowTags(curMonthTxn, t.rowIndex);
+  var rowTags = getRowTags(curMonthTxn, t.id);
   var tagHtml = rowTags.map(function(tag){
     var c = getTagColor(tag);
     return '<span class="txn-tag" style="background:'+c+'20;color:'+c+';border-color:'+c+'40">'+
@@ -3421,13 +3440,15 @@ async function saveRow(i,isNew){
 
     showBanner('Saving…','loading');
     try {
-      var hasRowIndex = txns[i].rowIndex != null;
-      var action = (isNew || !hasRowIndex) ? 'addTransaction' : 'updateTransaction';
-      var payload = Object.assign({action: action, month: curMonthTxn}, updated);
-      if(!isNew && hasRowIndex) payload.rowIndex = txns[i].rowIndex;
-      if(action === 'addTransaction') payload.idemKey = genIdemKey('txn');
+      var hasId = txns[i].id != null;
+      var action = (isNew || !hasId) ? 'ledgerAddTxn' : 'ledgerUpdateTxn';
+      var payload = { action: action, idemKey: genIdemKey('txn'), month: mkey(curMonthTxn),
+        date: updated.date, description: updated.description, amount: updated.cost,
+        method: updated.paymentMethod, category: txns[i].category || 'onetime',
+        discretionary: updated.discretionary, ben: updated.ben, jenna: updated.jenna };
+      if(!isNew && hasId) payload.id = txns[i].id;
       var result = await apiPost(SCRIPT_URL, payload);
-      if(action === 'addTransaction') updated.rowIndex = result.rowIndex;
+      if(action === 'ledgerAddTxn') updated.id = result.id;
       showBanner('Saved','ok');
       quickRefresh();
       refreshCardBalances();
@@ -3450,16 +3471,12 @@ async function delRow(i){
   var removed = txns[i];
   // Optimistic: row disappears the moment deletion is confirmed
   txns.splice(i,1); renderTxnTable();
-  if(isDemo || !SCRIPT_URL || removed.rowIndex == null) return;
+  if(isDemo || !SCRIPT_URL || removed.id == null) return;
   showBanner('Deleting…','loading');
   try {
-    await apiPost(SCRIPT_URL,{action:'deleteTransaction',month:curMonthTxn,rowIndex:removed.rowIndex});
+    await apiPost(SCRIPT_URL,{action:'ledgerDeleteTxn', idemKey:genIdemKey('del'), id:removed.id});
     showBanner('Deleted','ok');
-    // The sheet shifted rows below the deleted one up by 1 -- keep every
-    // local rowIndex in sync so a follow-up edit/delete hits the right row
-    txns.forEach(function(t){
-      if(t.rowIndex != null && t.rowIndex > removed.rowIndex) t.rowIndex--;
-    });
+    // No row-shift bookkeeping: rows are located by stable id, not position.
     quickRefresh();
     refreshCardBalances();
   } catch(e){
@@ -3469,7 +3486,7 @@ async function delRow(i){
   }
 }
 function addRow(){
-  var blank={rowIndex:null,date:localToday(),description:'',cost:null,paymentMethod:'',discretionary:false,ben:false,jenna:false};
+  var blank={id:null,date:localToday(),description:'',cost:null,paymentMethod:'',discretionary:false,ben:false,jenna:false};
   txns.unshift(blank); renderTxnTable();
   var t=txns[0]; var tr=document.createElement('tr'); tr.dataset.i=0; tr.className='editing';
   tr.innerHTML=
@@ -3498,7 +3515,7 @@ async function splitFromAddRow(){
   if(_splitAddInFlight) return; // ignore extra clicks while the save runs
   // Already auto-saved by a previous split click (e.g. modal was cancelled)?
   // Reuse that row instead of saving the full amount again.
-  if(txns[0] && txns[0].rowIndex != null){ showSplitModal(0); return; }
+  if(txns[0] && txns[0].id != null){ showSplitModal(0); return; }
   var desc  = $('desc-0') ? $('desc-0').value.trim() : '';
   var cost  = $('cost-0') ? parseFloat($('cost-0').value) : null;
   var pm    = $('pm-0')   ? $('pm-0').value   : '';
@@ -3518,7 +3535,7 @@ async function splitFromAddRow(){
     return;
   }
 
-  // Save the row first to get a real rowIndex, then open split modal.
+  // Save the row first to get a real id, then open split modal.
   // Guard + disabled controls prevent double-clicks creating duplicates.
   _splitAddInFlight = true;
   var addRow = document.querySelector('#tbody tr[data-i="0"]');
@@ -3527,13 +3544,12 @@ async function splitFromAddRow(){
   showBanner('Saving before split…','loading');
   try {
     var result = await apiPost(SCRIPT_URL, {
-      action: 'addTransaction', idemKey: genIdemKey('txn'), month: curMonthTxn,
-      date: date, description: desc, cost: cost,
-      paymentMethod: pm, discretionary: disc, ben: ben, jenna: jenna,
+      action: 'ledgerAddTxn', idemKey: genIdemKey('txn'), month: mkey(curMonthTxn),
+      date: date, description: desc, amount: cost,
+      method: pm, discretionary: disc, ben: ben, jenna: jenna,
     });
     if(result.error){ showBanner('Save failed: '+result.error, 'err'); return; }
-    var rowIdx = result.rowIndex;
-    txns[0] = { rowIndex: rowIdx, date: date, description: desc, cost: cost,
+    txns[0] = { id: result.id, date: date, description: desc, cost: cost,
                 paymentMethod: pm, discretionary: disc, ben: ben, jenna: jenna };
     showBanner('Saved. Opening split…','ok');
     showSplitModal(0);
@@ -3676,15 +3692,17 @@ async function saveVarEntry(category){
 
   try {
     if(!isDemo && SCRIPT_URL){
+      if(!payVal){ showBanner('Select a payment method','err'); if(saveBtn){saveBtn.disabled=false;saveBtn.textContent='Save';} return; }
       var varPayload = {
-        action:   'addVariableEntry',
+        action:   'ledgerAddTxn',
         idemKey:  genIdemKey('var'),
-        month:    curMonthFx,
+        month:    mkey(curMonthFx),
         category: category,
         date:     dateVal,
         amount:   amtVal,
-        store:    storeVal,
-        payment:  payVal,
+        description: isGroc ? storeVal : 'Gas',
+        method:   payVal,
+        discretionary: false, ben: true, jenna: true,
       };
       await apiPost(SCRIPT_URL, varPayload);
     }
@@ -3697,7 +3715,7 @@ async function saveVarEntry(category){
 
     showBanner((isGroc?'Grocery':'Gas')+' entry of '+fmt(amtVal,2)+' added to '+curMonthFx, 'ok');
     refreshCardBalances();
-    // Reconcile with server to get fresh rowIndices (insert shifts subsequent rows)
+    // Reconcile with server to pick up the assigned ids
     if(!isDemo && SCRIPT_URL && curMonthFx){
       var fresh = await apiFetch(SCRIPT_URL, 'variableEntries', {month: curMonthFx});
       if(fresh && !fresh.error) varEntries = fresh;
@@ -3725,7 +3743,7 @@ function editVarEntry(prefix, idx){
     '<td><input class="ei" type="number" id="vedit-amt-'+idx+'" step="0.01" value="'+(e.cost||'')+'"></td>'+
     '<td><select class="ei" id="vedit-pay-'+idx+'"><option value="">—</option>'+pmOpts+'</select></td>'+
     '<td style="white-space:nowrap">'+
-    '<button class="rbtn save-btn" data-action="saveVarEdit" data-args="'+prefix+','+idx+','+e.rowIndex+'">✓</button>'+
+    '<button class="rbtn save-btn" data-action="saveVarEdit" data-args="'+prefix+','+idx+','+e.id+'">✓</button>'+
     '<button class="rbtn cancel-btn" data-action="cancelVarEdit">✕</button>'+
     '</td>';
   row.className = 'editing';
@@ -3735,7 +3753,7 @@ function cancelVarEdit(){
   renderFixedTab();
 }
 
-async function saveVarEdit(prefix, idx, rowIndex){
+async function saveVarEdit(prefix, idx, id){
   var cat    = prefix === 'groc' ? 'groceries' : 'gas';
   var isGroc = prefix === 'groc';
   var date   = $('vedit-date-'+idx)  ? $('vedit-date-'+idx).value  : '';
@@ -3749,15 +3767,18 @@ async function saveVarEdit(prefix, idx, rowIndex){
   showBanner('Saving…','loading');
   try {
     if(!isDemo && SCRIPT_URL){
+      if(!pay){ showBanner('Select a payment method','err'); return; }
       await apiPost(SCRIPT_URL, {
-        action:    'updateVariableEntry',
-        month:     curMonthFx,
+        action:    'ledgerUpdateTxn',
+        idemKey:   genIdemKey('var'),
+        id:        id,
+        month:     mkey(curMonthFx),
         category:  cat,
-        rowIndex:  rowIndex,
         date:      date,
         amount:    amt,
-        store:     store,
-        payment:   pay,
+        description: isGroc ? store : 'Gas',
+        method:    pay,
+        discretionary: false, ben: true, jenna: true,
       });
     }
     // Update local state
@@ -3775,17 +3796,16 @@ async function saveVarEdit(prefix, idx, rowIndex){
   }
 }
 
-async function delVarEntry(prefix, idx, rowIndex){
+async function delVarEntry(prefix, idx, id){
   var cat = prefix === 'groc' ? 'groceries' : 'gas';
   if(!confirm('Delete this entry?')) return;
   showBanner('Deleting…','loading');
   try {
     if(!isDemo && SCRIPT_URL){
       await apiPost(SCRIPT_URL, {
-        action:   'deleteVariableEntry',
-        month:    curMonthFx,
-        category: cat,
-        rowIndex: rowIndex,
+        action:  'ledgerDeleteTxn',
+        idemKey: genIdemKey('del'),
+        id:      id,
       });
     }
     // Remove from local state
@@ -3796,7 +3816,7 @@ async function delVarEntry(prefix, idx, rowIndex){
     // Reverse the charge immediately
     var deletedEntry = varEntries && varEntries[cat] ? varEntries[cat].entries[idx] : null;
     if(deletedEntry && deletedEntry.payment && deletedEntry.cost)
-    // Reload from server to get fresh rowIndices (delete shifts subsequent rows)
+    // Reload from server so local state matches the sheet
     if(!isDemo && SCRIPT_URL && curMonthFx){
       var fresh = await apiFetch(SCRIPT_URL, 'variableEntries', {month: curMonthFx});
       if(fresh && !fresh.error) varEntries = fresh;
@@ -3895,7 +3915,7 @@ function renderFixedTab(){
       (SCRIPT_URL&&!isDemo?'<th></th>':'')+
       '</tr></thead><tbody>';
     grocEntries.forEach(function(e,idx){
-      var ri = e.rowIndex || '';
+      var ri = e.id || '';
       html+='<tr id="var-row-groc-'+idx+'" data-var-idx="'+idx+'" data-var-cat="groceries" data-var-ri="'+ri+'">'+
         '<td class="vdate">'+esc(e.date||'')+'</td>'+
         '<td>'+esc(e.store||'')+'</td>'+
@@ -3941,7 +3961,7 @@ function renderFixedTab(){
       (SCRIPT_URL&&!isDemo?'<th></th>':'')+
       '</tr></thead><tbody>';
     gasEntries.forEach(function(e,idx){
-      var ri = e.rowIndex || '';
+      var ri = e.id || '';
       html+='<tr id="var-row-gas-'+idx+'" data-var-idx="'+idx+'" data-var-cat="gas" data-var-ri="'+ri+'">'+
         '<td class="vdate">'+esc(e.date||'')+'</td>'+
         '<td class="vcost r">'+fmt(e.cost,2)+'</td>'+
@@ -4024,7 +4044,7 @@ async function togglePaid(i){
 
   if(!isDemo&&SCRIPT_URL){
     try {
-      await apiPost(SCRIPT_URL,{action:'setFixedPaid',month:curMonthFx,rowIndex:f.rowIndex,paid:nowPaid,paidDate:paidDate});
+      await apiPost(SCRIPT_URL,{action:'ledgerUpdateFixed', idemKey:genIdemKey('fx'), id:f.id, paid:nowPaid, paid_date:paidDate});
       refreshCardBalances();
     } catch(e){
       // Revert on failure
@@ -4078,7 +4098,7 @@ async function saveFixedName(i, td, inp){
   updateFxProgress();
   if(!isDemo && SCRIPT_URL){
     try {
-      await apiPost(SCRIPT_URL,{action:'updateFixedName',month:curMonthFx,rowIndex:f.rowIndex,name:newName});
+      await apiPost(SCRIPT_URL,{action:'ledgerUpdateFixed', idemKey:genIdemKey('fx'), id:f.id, name:newName});
     } catch(e){
       fixedData.fixed[i]=f; td.textContent=f.name;
       showBanner('Save failed: '+e.message,'err');
@@ -4109,7 +4129,7 @@ async function saveFixedCost(i, td, inp){
   updateFxProgress();
   if(!isDemo&&SCRIPT_URL){
     try {
-      await apiPost(SCRIPT_URL,{action:'updateFixedCost',month:curMonthFx,rowIndex:f.rowIndex,cost:newCost});
+      await apiPost(SCRIPT_URL,{action:'ledgerUpdateFixed', idemKey:genIdemKey('fx'), id:f.id, amount:newCost});
     } catch(e){
       fixedData.fixed[i]=f; td.textContent=fmt(f.cost,2);
       showBanner('Save failed: '+e.message,'err');
@@ -4424,9 +4444,9 @@ async function submitSplit(){
   var t = txns[splitSourceIdx];
   if(!t){ hideSplitModal(); return; }
 
-  // If this transaction has no rowIndex (local state out of sync with sheet),
-  // reload from the sheet and re-match before splitting — prevents duplicate adds.
-  if(t.rowIndex == null && !isDemo && SCRIPT_URL){
+  // If this transaction has no id (local state out of sync with sheet),
+  // reload and re-match before splitting — prevents duplicate adds.
+  if(t.id == null && !isDemo && SCRIPT_URL){
     $('split-modal-err').textContent = 'Syncing with sheet…';
     await loadTxns(curMonthTxn, true);
     // Re-find the transaction by date + description + cost
@@ -4455,7 +4475,7 @@ async function submitSplit(){
   }
   var total     = t.cost || 0;
   var allocated = lines.reduce(function(s,r){ return s + r.cost; }, 0);
-  if(Math.abs(total - allocated) > 0.02){
+  if(Math.abs(total - allocated) > 0.005){ // server rejects non-conserving splits; catch it at input time
     $('split-modal-err').textContent = 'Lines must sum to '+fmt(total,2)+' (currently '+fmt(allocated,2)+').'; return;
   }
 
@@ -4463,60 +4483,49 @@ async function submitSplit(){
   $('split-submit-btn').disabled     = true;
   $('split-submit-btn').textContent  = 'Saving…';
 
-  // Separate variable-tracker lines from regular transaction lines
+  // Every line is a split part; var-routed lines are parts with a category.
+  // Grocery/gas parts vanish from the txn list (they live in the trackers)
+  // but the split stays ONE atomic server call that conserves the amount.
   var varLines = lines.filter(function(l){ return l.varRoute; });
   var txnLines = lines.filter(function(l){ return !l.varRoute; });
+  function asPart(l){
+    return {
+      description: l.varRoute === 'gas' ? (l.description || 'Gas') : l.description,
+      amount: l.cost,
+      method: l.paymentMethod || t.paymentMethod,
+      category: l.varRoute || (t.category === 'transfer' ? 'transfer' : 'onetime'),
+      discretionary: l.varRoute ? false : l.discretionary,
+      ben:   l.varRoute ? true  : l.ben,
+      jenna: l.varRoute ? true  : l.jenna,
+    };
+  }
+  var parts = lines.map(asPart);
 
   try {
     if(!isDemo && SCRIPT_URL){
-      // 1. Send variable-routed lines to their trackers
-      for(var i = 0; i < varLines.length; i++){
-        var vl = varLines[i];
-        var varPayload = {
-          action:   'addVariableEntry',
-          idemKey:  genIdemKey('var'),
-          month:    curMonthTxn,
-          category: vl.varRoute,
-          date:     t.date || localToday(),
-          amount:   Math.abs(vl.cost),   // ensure positive
-          payment:  vl.paymentMethod || '',
-          store:    vl.varRoute === 'groceries' ? (vl.description || '') : undefined,
-        };
-        var varResult = await apiPost(SCRIPT_URL, varPayload);
-        if(varResult && varResult.error) {
-          throw new Error('Variable tracker error: ' + varResult.error + ' (month: ' + curMonthTxn + ', category: ' + vl.varRoute + ')');
-        }
-      }
-
-      // 2. Handle transaction lines
-      if(t.rowIndex != null){
-        if(txnLines.length === 0){
-          // All lines routed to variable — just delete the original transaction
-          await apiPost(SCRIPT_URL, { action:'deleteTransaction', month:curMonthTxn, rowIndex:t.rowIndex });
-	} else if(txnLines.length === 1){
-          // No split needed — update the single txn line in place
+      if(t.id != null){
+        if(parts.length === 1){
+          // Single line: an in-place rewrite (possibly a category change)
+          var p1 = parts[0];
           await apiPost(SCRIPT_URL, {
-            action: 'updateTransaction', month: curMonthTxn, rowIndex: t.rowIndex,
-            date: t.date, description: txnLines[0].description, cost: txnLines[0].cost,
-            paymentMethod: txnLines[0].paymentMethod,
-            discretionary: txnLines[0].discretionary, ben: txnLines[0].ben, jenna: txnLines[0].jenna,
+            action: 'ledgerUpdateTxn', idemKey: genIdemKey('txn'), id: t.id,
+            month: mkey(curMonthTxn), date: t.date,
+            description: p1.description, amount: p1.amount, method: p1.method,
+            category: p1.category, discretionary: p1.discretionary,
+            ben: p1.ben, jenna: p1.jenna,
           });
         } else {
-          // Normal split of remaining txn lines
           await apiPost(SCRIPT_URL, {
-            action: 'splitTransaction', month: curMonthTxn, rowIndex: t.rowIndex,
-            date: t.date, lines: txnLines,
+            action: 'ledgerSplitTxn', idemKey: genIdemKey('split'), id: t.id, parts: parts,
           });
         }
       } else {
-        // Unsaved new row — add each txn line individually
-        for(var i = 0; i < txnLines.length; i++){
-          await apiPost(SCRIPT_URL, {
-            action: 'addTransaction', idemKey: genIdemKey('txn'), month: curMonthTxn, date: t.date,
-            description: txnLines[i].description, cost: txnLines[i].cost,
-            paymentMethod: txnLines[i].paymentMethod,
-            discretionary: txnLines[i].discretionary, ben: txnLines[i].ben, jenna: txnLines[i].jenna,
-          });
+        // Unsaved new row — add each part individually
+        for(var i = 0; i < parts.length; i++){
+          await apiPost(SCRIPT_URL, Object.assign({
+            action: 'ledgerAddTxn', idemKey: genIdemKey('txn'),
+            month: mkey(curMonthTxn), date: t.date,
+          }, parts[i]));
         }
       }
     }
@@ -4525,7 +4534,7 @@ async function submitSplit(){
     txns.splice(insertAt, 1);
     for(var i = txnLines.length - 1; i >= 0; i--){
       txns.splice(insertAt, 0, {
-        rowIndex: null, date: t.date,
+        id: null, date: t.date,
         description: txnLines[i].description, cost: txnLines[i].cost,
         paymentMethod: txnLines[i].paymentMethod,
         discretionary: txnLines[i].discretionary,
@@ -4610,13 +4619,21 @@ async function submitChkEntry(){
   }
 
   try {
-    await apiPost(SCRIPT_URL, {
-      action:      'makeCheckingEntry',
-      month:       month,
-      description: desc,
-      amount:      amount,
-      date:        date
-    });
+    if(amount >= 0){
+      await apiPost(SCRIPT_URL, {
+        action:  'ledgerAddIncome', idemKey: genIdemKey('chk'),
+        month:   mkey(month), source: desc, amount: amount, date: date
+      });
+    } else {
+      // Withdrawals are transfer txns from checking (money movement, not
+      // negative income as the old sheet stored them)
+      await apiPost(SCRIPT_URL, {
+        action:  'ledgerAddTxn', idemKey: genIdemKey('chk'),
+        month:   mkey(month), description: desc || 'Withdrawal',
+        category:'transfer', method: 'Checking', amount: Math.abs(amount),
+        date:    date, discretionary: false, ben: false, jenna: false
+      });
+    }
     hideChkModal();
     showBanner(
       (amount>=0?'Deposit':'Withdrawal')+' of '+fmt(Math.abs(amount),2)+' recorded in '+month,
@@ -5297,8 +5314,8 @@ function renderCreditChart(history){
 
 function toggleRowPending(i){
   var t = txns[i];
-  if(t.rowIndex == null) return;
-  togglePendingFlag(curMonthTxn, t.rowIndex);
+  if(t.id == null) return;
+  togglePendingFlag(curMonthTxn, t.id);
   clearPendingCache(); // invalidate so next applyFilters re-reads
   // Re-render just this row to flip its state
   replaceTr('tbody', i, viewRow(t, i)); wireTagArea(i);
@@ -5903,55 +5920,55 @@ function demoData(){
 }
 function demoTxns(){
   return [
-    {rowIndex:2, date:'2026-04-02',description:'China Cafe',                      cost:74.48,  paymentMethod:'Costco',      discretionary:true, ben:true, jenna:true},
-    {rowIndex:3, date:'2026-04-03',description:'Transfer from Discover for loans', cost:-1562.5,paymentMethod:'Checking',    discretionary:false,ben:false,jenna:false},
-    {rowIndex:4, date:'2026-04-03',description:'Splash Car wash (Birdie)',         cost:25.91,  paymentMethod:'Wells Fargo', discretionary:true, ben:true, jenna:true},
-    {rowIndex:5, date:'2026-04-03',description:"Dunkin' reload card",              cost:10.00,  paymentMethod:'Wells Fargo', discretionary:true, ben:false,jenna:true},
-    {rowIndex:6, date:'2026-04-06',description:'Amazon - Jenna bday - hair wrap',  cost:70.00,  paymentMethod:'Wells Fargo', discretionary:true, ben:true, jenna:false},
-    {rowIndex:7, date:'2026-04-07',description:'Gas for work trip (reimbursed)',   cost:128.74, paymentMethod:'Checking',    discretionary:false,ben:true, jenna:false},
-    {rowIndex:8, date:'2026-04-07',description:'Accidental autopay on auto loan',  cost:441.18, paymentMethod:'Checking',    discretionary:false,ben:true, jenna:false},
-    {rowIndex:9, date:'2026-04-07',description:'Cytopoint - Aria',                 cost:99.30,  paymentMethod:'Wells Fargo', discretionary:false,ben:true, jenna:true},
-    {rowIndex:10,date:'2026-04-08',description:'Jiffy Lube - Oil, Air Filter',     cost:208.96, paymentMethod:'Wells Fargo', discretionary:false,ben:true, jenna:true},
-    {rowIndex:11,date:'2026-04-09',description:'Costco - Patio Furniture',         cost:2861.99,paymentMethod:'Costco',      discretionary:true, ben:true, jenna:true},
-    {rowIndex:12,date:'2026-04-09',description:'EZ Pass Reload',                   cost:25.00,  paymentMethod:'Wells Fargo', discretionary:false,ben:true, jenna:false},
-    {rowIndex:13,date:'2026-04-09',description:'Amazon - Light bulbs',             cost:21.59,  paymentMethod:'Prime',       discretionary:false,ben:true, jenna:true},
-    {rowIndex:14,date:'2026-04-10',description:'Cork Monkey - Wine',               cost:27.00,  paymentMethod:'Costco',      discretionary:true, ben:true, jenna:true},
-    {rowIndex:15,date:'2026-04-10',description:'Deposit from Fidelity',            cost:-2078.76,paymentMethod:'Checking',   discretionary:true, ben:true, jenna:true},
-    {rowIndex:16,date:'2026-04-12',description:'Tree payment',                     cost:250.00, paymentMethod:'Checking',    discretionary:true, ben:true, jenna:true},
+    {id:2, date:'2026-04-02',description:'China Cafe',                      cost:74.48,  paymentMethod:'Costco',      discretionary:true, ben:true, jenna:true},
+    {id:3, date:'2026-04-03',description:'Transfer from Discover for loans', cost:-1562.5,paymentMethod:'Checking',    discretionary:false,ben:false,jenna:false},
+    {id:4, date:'2026-04-03',description:'Splash Car wash (Birdie)',         cost:25.91,  paymentMethod:'Wells Fargo', discretionary:true, ben:true, jenna:true},
+    {id:5, date:'2026-04-03',description:"Dunkin' reload card",              cost:10.00,  paymentMethod:'Wells Fargo', discretionary:true, ben:false,jenna:true},
+    {id:6, date:'2026-04-06',description:'Amazon - Jenna bday - hair wrap',  cost:70.00,  paymentMethod:'Wells Fargo', discretionary:true, ben:true, jenna:false},
+    {id:7, date:'2026-04-07',description:'Gas for work trip (reimbursed)',   cost:128.74, paymentMethod:'Checking',    discretionary:false,ben:true, jenna:false},
+    {id:8, date:'2026-04-07',description:'Accidental autopay on auto loan',  cost:441.18, paymentMethod:'Checking',    discretionary:false,ben:true, jenna:false},
+    {id:9, date:'2026-04-07',description:'Cytopoint - Aria',                 cost:99.30,  paymentMethod:'Wells Fargo', discretionary:false,ben:true, jenna:true},
+    {id:10,date:'2026-04-08',description:'Jiffy Lube - Oil, Air Filter',     cost:208.96, paymentMethod:'Wells Fargo', discretionary:false,ben:true, jenna:true},
+    {id:11,date:'2026-04-09',description:'Costco - Patio Furniture',         cost:2861.99,paymentMethod:'Costco',      discretionary:true, ben:true, jenna:true},
+    {id:12,date:'2026-04-09',description:'EZ Pass Reload',                   cost:25.00,  paymentMethod:'Wells Fargo', discretionary:false,ben:true, jenna:false},
+    {id:13,date:'2026-04-09',description:'Amazon - Light bulbs',             cost:21.59,  paymentMethod:'Prime',       discretionary:false,ben:true, jenna:true},
+    {id:14,date:'2026-04-10',description:'Cork Monkey - Wine',               cost:27.00,  paymentMethod:'Costco',      discretionary:true, ben:true, jenna:true},
+    {id:15,date:'2026-04-10',description:'Deposit from Fidelity',            cost:-2078.76,paymentMethod:'Checking',   discretionary:true, ben:true, jenna:true},
+    {id:16,date:'2026-04-12',description:'Tree payment',                     cost:250.00, paymentMethod:'Checking',    discretionary:true, ben:true, jenna:true},
   ];
 }
 function demoFixed(){
   return {
     fixed:[
-      {rowIndex:61,source:'AMEX',    name:'Spotify',               cost:21.99,  paid:true, paidDate:'2026-04-09'},
-      {rowIndex:62,source:'',        name:'Netflix',               cost:19.43,  paid:false,paidDate:''},
-      {rowIndex:63,source:'',        name:'Hulu, Disney+',         cost:19.99,  paid:true, paidDate:'2026-04-02'},
-      {rowIndex:64,source:'',        name:'Disney Streaming Credit',cost:-10.00,paid:true, paidDate:'2026-04-02'},
-      {rowIndex:65,source:'WF',      name:'iCloud shared storage', cost:2.99,   paid:true, paidDate:'2026-04-06'},
-      {rowIndex:66,source:'',        name:'Apple TV',              cost:14.99,  paid:true, paidDate:'2026-04-07'},
-      {rowIndex:67,source:'',        name:'Peloton+',              cost:49.99,  paid:false,paidDate:''},
-      {rowIndex:68,source:'',        name:'Water',                 cost:216.36, paid:true, paidDate:'2026-04-15'},
-      {rowIndex:69,source:'Checking',name:'Student Loans',         cost:1562.50,paid:true, paidDate:'2026-04-03'},
-      {rowIndex:70,source:'',        name:'T-Mobile',              cost:50.00,  paid:true, paidDate:'2026-04-02'},
-      {rowIndex:71,source:'',        name:'Electricity + Gas',     cost:348.08, paid:true, paidDate:'2026-04-15'},
-      {rowIndex:72,source:'',        name:'Cell Phone',            cost:82.00,  paid:true, paidDate:'2026-04-03'},
-      {rowIndex:73,source:'',        name:'Wikipedia',             cost:5.00,   paid:true, paidDate:'2026-04-13'},
-      {rowIndex:74,source:'',        name:'Emergency Fund',        cost:500.00, paid:true, paidDate:'2026-04-12'},
-      {rowIndex:75,source:'',        name:'Wesley 529',            cost:500.00, paid:false,paidDate:''},
-      {rowIndex:76,source:'',        name:'Max 529',               cost:500.00, paid:false,paidDate:''},
-      {rowIndex:77,source:'',        name:'Daycare',               cost:2380.00,paid:true, paidDate:'2026-04-10'},
-      {rowIndex:78,source:'',        name:'Daycare Reimbursement', cost:-416.66,paid:false,paidDate:''},
-      {rowIndex:79,source:'',        name:'Car Payment - Betty',   cost:434.97, paid:true, paidDate:'2026-04-03'},
-      {rowIndex:80,source:'',        name:'Car Payment - Equinox', cost:735.64, paid:true, paidDate:'2026-04-03'},
-      {rowIndex:81,source:'',        name:'Mortgage',              cost:3314.95,paid:true, paidDate:'2026-04-21'},
-      {rowIndex:82,source:'',        name:'Extra loan payments',   cost:0,      paid:false,paidDate:''},
+      {id:61,source:'AMEX',    name:'Spotify',               cost:21.99,  paid:true, paidDate:'2026-04-09'},
+      {id:62,source:'',        name:'Netflix',               cost:19.43,  paid:false,paidDate:''},
+      {id:63,source:'',        name:'Hulu, Disney+',         cost:19.99,  paid:true, paidDate:'2026-04-02'},
+      {id:64,source:'',        name:'Disney Streaming Credit',cost:-10.00,paid:true, paidDate:'2026-04-02'},
+      {id:65,source:'WF',      name:'iCloud shared storage', cost:2.99,   paid:true, paidDate:'2026-04-06'},
+      {id:66,source:'',        name:'Apple TV',              cost:14.99,  paid:true, paidDate:'2026-04-07'},
+      {id:67,source:'',        name:'Peloton+',              cost:49.99,  paid:false,paidDate:''},
+      {id:68,source:'',        name:'Water',                 cost:216.36, paid:true, paidDate:'2026-04-15'},
+      {id:69,source:'Checking',name:'Student Loans',         cost:1562.50,paid:true, paidDate:'2026-04-03'},
+      {id:70,source:'',        name:'T-Mobile',              cost:50.00,  paid:true, paidDate:'2026-04-02'},
+      {id:71,source:'',        name:'Electricity + Gas',     cost:348.08, paid:true, paidDate:'2026-04-15'},
+      {id:72,source:'',        name:'Cell Phone',            cost:82.00,  paid:true, paidDate:'2026-04-03'},
+      {id:73,source:'',        name:'Wikipedia',             cost:5.00,   paid:true, paidDate:'2026-04-13'},
+      {id:74,source:'',        name:'Emergency Fund',        cost:500.00, paid:true, paidDate:'2026-04-12'},
+      {id:75,source:'',        name:'Wesley 529',            cost:500.00, paid:false,paidDate:''},
+      {id:76,source:'',        name:'Max 529',               cost:500.00, paid:false,paidDate:''},
+      {id:77,source:'',        name:'Daycare',               cost:2380.00,paid:true, paidDate:'2026-04-10'},
+      {id:78,source:'',        name:'Daycare Reimbursement', cost:-416.66,paid:false,paidDate:''},
+      {id:79,source:'',        name:'Car Payment - Betty',   cost:434.97, paid:true, paidDate:'2026-04-03'},
+      {id:80,source:'',        name:'Car Payment - Equinox', cost:735.64, paid:true, paidDate:'2026-04-03'},
+      {id:81,source:'',        name:'Mortgage',              cost:3314.95,paid:true, paidDate:'2026-04-21'},
+      {id:82,source:'',        name:'Extra loan payments',   cost:0,      paid:false,paidDate:''},
     ],
     variable:[
-      {rowIndex:84,name:'Groceries',      cost:585.03},
-      {rowIndex:85,name:'Gas',            cost:154.75},
-      {rowIndex:86,name:'Dogs',           cost:372.93},
-      {rowIndex:87,name:'Electricity + Gas',cost:348.08},
-      {rowIndex:88,name:'Water',          cost:216.36},
+      {id:84,name:'Groceries',      cost:585.03},
+      {id:85,name:'Gas',            cost:154.75},
+      {id:86,name:'Dogs',           cost:372.93},
+      {id:87,name:'Electricity + Gas',cost:348.08},
+      {id:88,name:'Water',          cost:216.36},
     ]
   };
 }
@@ -6084,11 +6101,11 @@ async function doAddMonth(){
   $('add-month-err').textContent = '';
 
   try {
-    await apiPost(SCRIPT_URL, { action: 'addMonth', monthName: monthName });
+    await apiPost(SCRIPT_URL, { action: 'ledgerSeedFixedMonth', idemKey: genIdemKey('seed'), month: mkey(monthName) });
     // Refresh all data so new month appears in selectors
     var fresh = await apiFetch(SCRIPT_URL, 'all');
     renderAll(fresh);
-    showBanner('"' + monthName + '" created from Template ✓', 'ok');
+    showBanner('"' + monthName + '" opened — fixed expenses seeded from prior month ✓', 'ok');
     hideAddMonth();
     // Switch to transactions tab and auto-select the new month
     var txnTab = Array.prototype.find.call(

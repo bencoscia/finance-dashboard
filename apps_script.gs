@@ -129,6 +129,7 @@ function dispatch(payload) {
     else if (action === 'ledgerAddFixed')     return _withIdem(payload, function(){ return ledgerAddFixed(payload); }); // invalidates ledger cache internally
     else if (action === 'ledgerUpdateFixed')  return _withIdem(payload, function(){ return ledgerUpdateFixed(payload); }); // invalidates ledger cache internally
     else if (action === 'ledgerSeedFixedMonth') return _withIdem(payload, function(){ return ledgerSeedFixedMonth(payload); }); // invalidates ledger cache internally
+    else if (action === 'ledgerAddIncome')      return _withIdem(payload, function(){ return ledgerAddIncome(payload); }); // invalidates ledger cache internally
     else return { error: 'Unknown action: ' + action };
   } catch(err) {
     return { error: err.message };
@@ -203,6 +204,7 @@ function doPost(e) {
     else if (p.action === 'ledgerAddFixed')     data = _withIdem(p, function(){ return ledgerAddFixed(p); }); // invalidates ledger cache internally
     else if (p.action === 'ledgerUpdateFixed')  data = _withIdem(p, function(){ return ledgerUpdateFixed(p); }); // invalidates ledger cache internally
     else if (p.action === 'ledgerSeedFixedMonth') data = _withIdem(p, function(){ return ledgerSeedFixedMonth(p); }); // invalidates ledger cache internally
+    else if (p.action === 'ledgerAddIncome')      data = _withIdem(p, function(){ return ledgerAddIncome(p); }); // invalidates ledger cache internally
     else data = { error: 'Unknown POST action: ' + p.action };
     // Invalidate caches for the affected month and card balances
     if (p.month) invalidateMonthCache(p.month);
@@ -210,7 +212,9 @@ function doPost(e) {
     var BALANCE_ACTIONS = ['updateTransaction','addTransaction','deleteTransaction',
       'splitTransaction','addVariableEntry','updateVariableEntry','deleteVariableEntry',
       'makeCardPayment','voidLastPayment','setSeedBalance','makeCheckingEntry',
-      'setFixedPaid','updateFixedCost'];
+      'setFixedPaid','updateFixedCost',
+      'ledgerAddTxn','ledgerUpdateTxn','ledgerDeleteTxn','ledgerSplitTxn',
+      'ledgerAddFixed','ledgerUpdateFixed'];
     if (BALANCE_ACTIONS.indexOf(p.action) >= 0) invalidateCardBalanceCache();
   } catch(err) {
     data = { error: err.message };
@@ -1383,7 +1387,34 @@ function _computeCardBalances() {
   // -- Step 4: Add all transaction charges from Jan 2025 onwards
   // (December 2024 is excluded because the seed balance already includes those charges)
   var SEED_MONTH = cfg().seedMonth; // earliest month sheet to scan (Config sheet: seed_month)
-  var monthNames = getMonthlySheetNames();
+  var useLedger = _ledgerCutoverOn();
+  if (useLedger) {
+    // Ledger path: steps 4-7 collapse into one pass over Txns + Fixed Log.
+    // Transfers carry method 'Checking' (no card key) and skip naturally.
+    var seedMk = _ledgerMonthKey(SEED_MONTH);
+    var ltr = readSheet(LEDGER_TXNS) || [[]];
+    for (var li = 1; li < ltr.length; li++) {
+      var lmk = _lmonth(ltr[li][2]) || _lmonth(ltr[li][1]);
+      if (!lmk || lmk === seedMk) continue;
+      var lamt = _ln(ltr[li][4]);
+      var lkey = pmToKey[String(ltr[li][5] || '').trim()];
+      if (lamt === null || !lkey || balances[lkey] === undefined) continue;
+      balances[lkey] += lamt;
+    }
+    var lfr = readSheet(LEDGER_FIXED) || [[]];
+    for (li = 1; li < lfr.length; li++) {
+      lmk = _lmonth(lfr[li][1]);
+      if (!lmk || lmk === seedMk) continue;
+      var lsrc = String(lfr[li][3] || '').trim();
+      if (!lsrc || lsrc === 'Checking') continue;
+      if (!_lb(lfr[li][5])) continue; // only paid rows have hit the card
+      lamt = _ln(lfr[li][4]);
+      lkey = pmToKey[lsrc];
+      if (lamt === null || !lkey || balances[lkey] === undefined) continue;
+      balances[lkey] += lamt;
+    }
+  }
+  var monthNames = useLedger ? [] : getMonthlySheetNames();
   monthNames.forEach(function(monthName) {
     if (monthName === SEED_MONTH) return; // skip -- already in seed
     var vals = readSheet(monthName);

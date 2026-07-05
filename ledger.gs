@@ -662,10 +662,17 @@ function ledgerComputeMonths() {
 }
 
 function ledgerMonthNames() { // newest-first old-style names, getMonthlySheetNames parity
+  // Union of Txns and Fixed Log months: a freshly seeded month has fixed
+  // rows but no transactions yet, and must still appear in the selectors.
+  var seen = {}, i, mk;
   var rows = readSheet(LEDGER_TXNS) || [[]];
-  var seen = {}, i;
   for (i = 1; i < rows.length; i++) {
-    var mk = _lmonth(rows[i][2]) || _lmonth(rows[i][1]);
+    mk = _lmonth(rows[i][2]) || _lmonth(rows[i][1]);
+    if (mk) seen[mk] = true;
+  }
+  var frows = readSheet(LEDGER_FIXED) || [[]];
+  for (i = 1; i < frows.length; i++) {
+    mk = _lmonth(frows[i][1]);
     if (mk) seen[mk] = true;
   }
   var keys = [];
@@ -850,6 +857,45 @@ function ledgerGetTransactionsByCard(pm, limitStr) {
   return { pm: pm, transactions: results, count: results.length };
 }
 
+// -- WRITE: ledgerAddIncome ---------------------------------------------------
+// Paychecks and other deposits-as-income (the old makeCheckingEntry wrote
+// these into the month sheet's Income section). Withdrawals are NOT negative
+// income here -- the frontend records those as transfer txns from checking.
+function ledgerAddIncome(p) {
+  var dateStr = _ldate(p.date) || _ledgerToday();
+  var mk = _lmonth(p.month) || _lmonth(dateStr);
+  if (!mk) return { error: 'ledgerAddIncome needs month=YYYY-MM or a date.' };
+  var amount = _ln(p.amount);
+  if (amount === null || amount <= 0)
+    return { error: 'Income amount must be a positive number (record withdrawals as transfer txns).' };
+  var source = String(p.source || p.description || '').trim();
+  if (!source) return { error: 'Income source/description is required.' };
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(LEDGER_INCOME);
+  if (!sheet) return { error: 'Sheet not found: ' + LEDGER_INCOME };
+  return _ledgerWithLock(function () {
+    invalidateSheet(LEDGER_INCOME);
+    var values = readSheet(sheet);
+    var newId = _ledgerNextId(values);
+    var row = Math.max(sheet.getLastRow() + 1, 2);
+    sheet.getRange(row, 1, 1, 5).setValues([[newId, mk, dateStr, source, amount]]);
+    SpreadsheetApp.flush();
+    invalidateLedgerCache();
+    invalidateSheet(LEDGER_INCOME);
+    return { ok: true, id: newId, month: mk };
+  });
+}
+
+// Income validation twin for tests (error string or null; no sheet access).
+function ledgerAddIncomeValidate(p) {
+  var mk = _lmonth(p.month) || _lmonth(_ldate(p.date) || '');
+  if (!mk) return 'bad month';
+  var amount = _ln(p.amount);
+  if (amount === null || amount <= 0) return 'bad amount';
+  if (!String(p.source || p.description || '').trim()) return 'bad source';
+  return null;
+}
+
 // -- Tests (compact, failure-first; pure fns on fixtures, write path on a
 //    hidden scratch sheet -- never the live Txns sheet) ---------------------
 function testLedger() {
@@ -964,6 +1010,11 @@ function testLedger() {
     LEDGER_TXNS = real;
     invalidateSheet('_TestScratchLedger_');
   }
+
+  // income validation (pure)
+  ok(!!ledgerAddIncomeValidate({ amount: -5, source: 'x', month: '2026-06' }), 'income rejects negative');
+  ok(!!ledgerAddIncomeValidate({ amount: 100, source: '', month: '2026-06' }), 'income rejects blank source');
+  ok(!ledgerAddIncomeValidate({ amount: 100, source: 'Paycheck', month: '2026-06' }), 'income accepts valid');
 
   // -- phase 2: fixed lifecycle --
   rehead(LEDGER_FIXED);
