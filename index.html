@@ -183,6 +183,15 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 .chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px}
 .chart-title{font-family:var(--mono);font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
 .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:11px;color:var(--muted)}
+.vt-row{display:grid;grid-template-columns:110px 1fr 150px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)}
+.vt-row:last-child{border-bottom:none}
+.vt-cat{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.vt-track{position:relative;height:14px;background:var(--surface2);border-radius:3px;overflow:visible}
+.vt-fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px}
+.vt-avg{position:absolute;top:100%;transform:translateX(-50%);font-size:9px;line-height:1;color:var(--text)}
+.vt-nums{font-family:var(--mono);font-size:12px;text-align:right;white-space:nowrap}
+.vt-delta{font-size:10px;color:var(--muted);display:block}
+@media (max-width:600px){ .vt-row{grid-template-columns:74px 1fr 118px} }
 .legend span{display:flex;align-items:center;gap:5px}
 .sw{width:8px;height:8px;border-radius:2px;flex-shrink:0}
 .sw.dash{background:transparent!important;border:1.5px dashed var(--terra);border-radius:1px}
@@ -712,6 +721,9 @@ tr:hover .racts,tr.editing .racts{opacity:1}
   .ts{ display:none; }
   .hdr .hide-mobile{ display:none; }
   .btn-lbl{ display:none; }
+
+  /* row action buttons (edit/delete/split checks) get a real touch target */
+  .rbtn{ min-width:34px; min-height:34px; }
 }
 </style>
 </head>
@@ -898,6 +910,34 @@ tr:hover .racts,tr.editing .racts{opacity:1}
           </div>
         </div>
         <div class="chart-wrap" style="height:270px"><canvas id="c-breakdown"></canvas></div>
+      </div>
+
+      <!-- Cashflow section -->
+      <div class="metrics" id="cf-metrics" style="margin-top:18px">
+        <div class="metric"><div class="mlabel">Net (latest)</div><div class="mval sk" style="height:26px;width:88px"> </div></div>
+        <div class="metric"><div class="mlabel">Savings rate</div><div class="mval sk" style="height:26px;width:72px"> </div></div>
+        <div class="metric"><div class="mlabel">TTM net</div><div class="mval sk" style="height:26px;width:96px"> </div></div>
+        <div class="metric"><div class="mlabel">Contributions</div><div class="mval sk" style="height:26px;width:88px"> </div></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-head">
+          <span class="chart-title">Cashflow — monthly net &amp; cumulative</span>
+          <div class="legend">
+            <span><span class="sw" style="background:var(--green)"></span>Net +</span>
+            <span><span class="sw" style="background:var(--terra)"></span>Net &minus;</span>
+            <span><span class="sw dash" style="border-color:var(--blue-lt)"></span>Cumulative (window)</span>
+          </div>
+        </div>
+        <div class="chart-wrap" style="height:270px"><canvas id="c-cashflow"></canvas></div>
+      </div>
+
+      <!-- This month vs typical -->
+      <div class="chart-card" style="margin-top:18px">
+        <div class="chart-head">
+          <span class="chart-title" id="vt-title">This month vs typical</span>
+          <span class="legend"><span>bar = this month &middot; ▲ = 12-mo avg</span></span>
+        </div>
+        <div id="vt-rows"></div>
       </div>
     </div>
 
@@ -1245,7 +1285,7 @@ function localDateStr(d){
 function localToday(){ return localDateStr(new Date()); }
 
 var SCRIPT_URL = (window.CONFIG && window.CONFIG.SCRIPT_URL) || '';  // endpoint from config.js (gitignored); localStorage 'fin_url' still overrides at init
-var cMonthly = null, cBreakdown = null, cNW = null, cCredit = null;
+var cMonthly = null, cBreakdown = null, cNW = null, cCredit = null, cCashflow = null;
 var allData = null;
 var txns = [], fixedData = { fixed: [], variable: [] }, varEntries = null, acctData = null;
 var activeFilters = { disc: false, ben: false, jenna: false, pend: false };
@@ -1608,6 +1648,8 @@ function renderAll(data){
   });
   renderMonthly(monthly,budget);
   renderBreakdown(monthly);
+  renderCashflow(monthly);
+  renderVsTypical(monthly);
   // auto-load most recent month for both tabs
   if(firstMonth){
     loadTxns(firstMonth,true);
@@ -1626,35 +1668,49 @@ function renderAll(data){
   }
 }
 
+// Phones can't fit 19 x-axis labels on a 350px canvas: window the budget
+// charts to the trailing 12 months below 768px, and let autoSkip thin ticks.
+function chartMonths(monthly){
+  return (window.innerWidth<=768) ? monthly.slice(0,12) : monthly;
+}
+function chartTickOpts(t){
+  return {color:t.tick,font:{size:11},autoSkip:(window.innerWidth<=768),maxRotation:45};
+}
+
 // ── monthly chart ──
 function renderMonthly(monthly,budget){
-  var rev=monthly.slice().reverse();
+  var win=chartMonths(monthly);
+  var rev=win.slice().reverse();
   var labels=rev.map(function(m){return smo(m.month);});
   var vals=rev.map(function(m){return Math.round(m.totalExpenses||0);});
+  // historical budgets vary by month (Aug 2025 onward); fall back to the
+  // global target for months that predate the Budget row
+  var budgetOf=function(m){ return (m && m.budget!=null) ? m.budget : budget; };
+  var budgets=rev.map(function(m){return Math.round(budgetOf(m));});
   var latest=monthly[0],prev=monthly[1];
   var avg12=monthly.slice(0,12).reduce(function(s,m){return s+(m.totalExpenses||0);},0)/Math.min(monthly.length,12);
-  var diff=(latest?latest.totalExpenses:0)-budget;
+  var diff=(latest?latest.totalExpenses:0)-budgetOf(latest);
   $('m-metrics').innerHTML=
-    '<div class="metric"><div class="mlabel">Monthly budget</div><div class="mval">'+fmt(budget)+'</div><div class="msub">target</div></div>'+
-    '<div class="metric"><div class="mlabel">'+(latest?latest.month:'')+'</div><div class="mval '+((latest&&latest.totalExpenses>budget)?'neg':'pos')+'">'+fmt(latest?latest.totalExpenses:null)+'</div><div class="msub">'+(diff>0?fmt(diff)+' over':fmt(-diff)+' under')+'</div></div>'+
-    '<div class="metric"><div class="mlabel">'+(prev?prev.month:'')+'</div><div class="mval '+((prev&&prev.totalExpenses>budget)?'neg':'pos')+'">'+fmt(prev?prev.totalExpenses:null)+'</div><div class="msub">'+(prev?((prev.totalExpenses-budget)>0?fmt(prev.totalExpenses-budget)+' over':fmt(budget-prev.totalExpenses)+' under'):'')+'</div></div>'+
+    '<div class="metric"><div class="mlabel">Monthly budget</div><div class="mval">'+fmt(budgetOf(latest))+'</div><div class="msub">'+(latest&&latest.budget!=null?'this month':'default target')+'</div></div>'+
+    '<div class="metric"><div class="mlabel">'+(latest?latest.month:'')+'</div><div class="mval '+((diff>0)?'neg':'pos')+'">'+fmt(latest?latest.totalExpenses:null)+'</div><div class="msub">'+(diff>0?fmt(diff)+' over':fmt(-diff)+' under')+'</div></div>'+
+    '<div class="metric"><div class="mlabel">'+(prev?prev.month:'')+'</div><div class="mval '+((prev&&prev.totalExpenses>budgetOf(prev))?'neg':'pos')+'">'+fmt(prev?prev.totalExpenses:null)+'</div><div class="msub">'+(prev?((prev.totalExpenses-budgetOf(prev))>0?fmt(prev.totalExpenses-budgetOf(prev))+' over':fmt(budgetOf(prev)-prev.totalExpenses)+' under'):'')+'</div></div>'+
     '<div class="metric"><div class="mlabel">12-mo average</div><div class="mval">'+fmt(avg12)+'</div><div class="msub">trailing avg</div></div>';
   if(cMonthly) cMonthly.destroy();
   var t=chartTheme();
-  var colors=vals.map(function(v){return v>budget?t.terra:t.green;});
+  var colors=rev.map(function(m){return (m.totalExpenses||0)>budgetOf(m)?t.terra:t.green;});
   cMonthly=new Chart($('c-monthly'),{
     type:'bar',
     data:{labels:labels,datasets:[
       {label:'Expenses',data:vals,backgroundColor:colors,borderWidth:0,borderRadius:3,order:2},
-      {label:'Budget',data:Array(labels.length).fill(Math.round(budget)),type:'line',borderColor:t.terra,borderWidth:1.5,borderDash:[5,4],pointRadius:0,fill:false,tension:0,order:1}
+      {label:'Budget',data:budgets,type:'line',borderColor:t.terra,borderWidth:1.5,borderDash:[5,4],pointRadius:0,fill:false,stepped:true,tension:0,order:1}
     ]},
     options:{responsive:true,maintainAspectRatio:false,
       plugins:{legend:{display:false},tooltip:{callbacks:{
         label:function(ctx){return ctx.dataset.label+': '+fmt(ctx.parsed.y);},
-        afterLabel:function(ctx){if(ctx.datasetIndex===0){var d=ctx.parsed.y-budget;return (d>0?'+':'')+fmt(d)+(d>0?' over':' under')+' budget';}}
+        afterLabel:function(ctx){if(ctx.datasetIndex===0){var d=ctx.parsed.y-budgets[ctx.dataIndex];return (d>0?'+':'')+fmt(d)+(d>0?' over':' under')+' budget';}}
       }}},
       scales:{
-        x:{ticks:{color:t.tick,font:{size:11},autoSkip:false,maxRotation:45},grid:{display:false},border:{display:false}},
+        x:{ticks:chartTickOpts(t),grid:{display:false},border:{display:false}},
         y:{ticks:{color:t.tick,font:{size:11},callback:function(v){return '$'+Math.round(v/1000)+'k';}},grid:{color:t.grid},border:{display:false}}
       }
     }
@@ -1663,7 +1719,7 @@ function renderMonthly(monthly,budget){
 
 // ── breakdown chart ──
 function renderBreakdown(monthly){
-  var rev=monthly.slice().reverse();
+  var rev=chartMonths(monthly).slice().reverse();
   var labels=rev.map(function(m){return smo(m.month);});
   var mk=function(key){return rev.map(function(m){return Math.round(Math.max(0,m[key]||0));});};
   var latest=monthly[0];
@@ -1685,11 +1741,102 @@ function renderBreakdown(monthly){
     options:{responsive:true,maintainAspectRatio:false,
       plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){return ctx.dataset.label+': '+fmt(ctx.parsed.y);}}}},
       scales:{
-        x:{stacked:true,ticks:{color:t.tick,font:{size:11},autoSkip:false,maxRotation:45},grid:{display:false},border:{display:false}},
+        x:{stacked:true,ticks:chartTickOpts(t),grid:{display:false},border:{display:false}},
         y:{stacked:true,ticks:{color:t.tick,font:{size:11},callback:function(v){return '$'+Math.round(v/1000)+'k';}},grid:{color:t.grid},border:{display:false}}
       }
     }
   });
+}
+
+// ── cashflow chart ──
+// Net = income − totalExpenses per month. Months whose income never got
+// recorded render as gaps (null), not fake losses. Cumulative line sums the
+// visible window only, so its zero-crossing is meaningful on mobile too.
+function renderCashflow(monthly){
+  var el=$('c-cashflow'); if(!el) return;
+  var win=chartMonths(monthly);
+  var rev=win.slice().reverse();
+  var labels=rev.map(function(m){return smo(m.month);});
+  var nets=rev.map(function(m){ return (m.income!=null)?Math.round(m.income-m.totalExpenses):null; });
+  var cum=0, cums=nets.map(function(v){ if(v==null) return cum||null; cum+=v; return cum; });
+
+  var latest=monthly[0]||{};
+  var latestNet=(latest.income!=null)?latest.income-latest.totalExpenses:null;
+  var rate=(latest.income>0&&latestNet!=null)?latestNet/latest.income:null;
+  var t12=monthly.slice(0,12).filter(function(m){return m.income!=null;});
+  var ttmNet=t12.reduce(function(s,m){return s+(m.income-m.totalExpenses);},0);
+  var ttmInc=t12.reduce(function(s,m){return s+m.income;},0);
+  var ttmRate=ttmInc>0?ttmNet/ttmInc:null;
+  $('cf-metrics').innerHTML=
+    '<div class="metric"><div class="mlabel">Net ('+(latest.month?smo(latest.month):'')+')</div><div class="mval '+(latestNet!=null&&latestNet<0?'neg':'pos')+'">'+fmt(latestNet)+'</div><div class="msub">income &minus; expenses</div></div>'+
+    '<div class="metric"><div class="mlabel">Savings rate</div><div class="mval">'+(rate!=null?(rate*100).toFixed(1)+'%':'&mdash;')+'</div><div class="msub">'+(ttmRate!=null?'TTM: '+(ttmRate*100).toFixed(1)+'%':'')+'</div></div>'+
+    '<div class="metric"><div class="mlabel">TTM net</div><div class="mval '+(ttmNet<0?'neg':'pos')+'">'+fmt(ttmNet)+'</div><div class="msub">'+t12.length+' months</div></div>'+
+    '<div class="metric"><div class="mlabel">Contributions</div><div class="mval">'+fmt(latest.fixedSavings!=null?latest.fixedSavings:null)+'</div><div class="msub">529 / IRA / EF, latest</div></div>';
+
+  if(cCashflow) cCashflow.destroy();
+  var t=chartTheme();
+  var barColors=nets.map(function(v){return (v!=null&&v<0)?t.terra:t.green;});
+  cCashflow=new Chart(el,{
+    type:'bar',
+    data:{labels:labels,datasets:[
+      {label:'Net',data:nets,backgroundColor:barColors,borderWidth:0,borderRadius:3,order:2},
+      {label:'Cumulative',data:cums,type:'line',borderColor:getComputedStyle(document.documentElement).getPropertyValue('--blue-lt').trim(),borderWidth:1.5,borderDash:[5,4],pointRadius:0,fill:false,tension:0,order:1}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{
+        label:function(ctx){return ctx.dataset.label+': '+fmt(ctx.parsed.y);},
+        afterLabel:function(ctx){
+          if(ctx.datasetIndex!==0) return;
+          var m=rev[ctx.dataIndex]||{};
+          if(m.income==null) return 'no income recorded';
+          return 'income '+fmt(m.income)+' / expenses '+fmt(m.totalExpenses);
+        }
+      }}},
+      scales:{
+        x:{ticks:chartTickOpts(t),grid:{display:false},border:{display:false}},
+        y:{ticks:{color:t.tick,font:{size:11},callback:function(v){return (v<0?'-':'')+'$'+Math.abs(Math.round(v/1000))+'k';}},
+           grid:{color:function(c){return c.tick.value===0?t.tick:t.grid;},lineWidth:function(c){return c.tick.value===0?1.5:1;}},
+           border:{display:false}}
+      }
+    }
+  });
+}
+
+// ── this month vs typical ──
+// HTML bars: position + numeric labels carry the meaning; category color is
+// decorative. ▲ marks the trailing-12-month average (excluding this month).
+function renderVsTypical(monthly){
+  var el=$('vt-rows'); if(!el) return;
+  var latest=monthly[0]; if(!latest){ el.innerHTML=''; return; }
+  $('vt-title').textContent=(latest.month||'This month')+' vs typical';
+  var t=chartTheme();
+  var cats=[
+    {k:'fixed',        label:'Fixed',        c:t.c1},
+    {k:'variable',     label:'Variable',     c:t.c2},
+    {k:'discretionary',label:'Discretionary',c:t.c3},
+    {k:'oneTime',      label:'One-time',     c:t.c4}
+  ];
+  var hist=monthly.slice(1,13); // TTM avg excludes the current month
+  var html='';
+  cats.forEach(function(cat){
+    var cur=Math.max(0,latest[cat.k]||0);
+    var avg=hist.length?hist.reduce(function(s,m){return s+Math.max(0,m[cat.k]||0);},0)/hist.length:0;
+    var maxv=Math.max(cur,avg,1);
+    var curPct=Math.min(100,cur/maxv*100);
+    var avgPct=Math.min(100,avg/maxv*100);
+    var d=cur-avg;
+    html+='<div class="vt-row">'+
+      '<span class="vt-cat">'+cat.label+'</span>'+
+      '<span class="vt-track">'+
+        '<span class="vt-fill" style="width:'+curPct.toFixed(1)+'%;background:'+cat.c+'"></span>'+
+        '<span class="vt-avg" style="left:'+avgPct.toFixed(1)+'%">&#9650;</span>'+
+      '</span>'+
+      '<span class="vt-nums">'+fmt(cur)+
+        '<span class="vt-delta">'+(d>=0?'+':'&minus;')+fmt(Math.abs(d)).replace('$','$')+' vs '+fmt(avg)+' avg</span>'+
+      '</span>'+
+    '</div>';
+  });
+  el.innerHTML=html;
 }
 
 // ── net worth ──
