@@ -5383,6 +5383,31 @@ function loadAccounts(){
       }
     }
 
+    // Statement balance + next due date (Card Trackers cols I/J; due day from col G
+    // via the cards payload, CARD_MAP hardcode as fallback). Never hue alone:
+    // urgency and staleness carry a symbol + explicit text, color is secondary.
+    var stmtHtml = '';
+    var dueDay = parseInt((sheetCard && sheetCard.due) || def.due) || 0;
+    if(dueDay){
+      var now = new Date();
+      var dueDate = new Date(now.getFullYear(), now.getMonth(), dueDay, 12);
+      if(dueDay < now.getDate()) dueDate = new Date(now.getFullYear(), now.getMonth()+1, dueDay, 12);
+      var daysLeft = Math.round((dueDate - new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12))/86400000);
+      var dueLabel = dueDate.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+      var stmtBal  = sheetCard && sheetCard.stmtBalance != null ? sheetCard.stmtBalance : null;
+      var stmtDt   = sheetCard && sheetCard.stmtDate ? new Date(sheetCard.stmtDate+'T12:00:00') : null;
+      var stale    = stmtDt != null && (now - stmtDt) > 40*86400000;
+      var urgent   = stmtBal != null && stmtBal > 0.005 && daysLeft <= 5 && !stale;
+      var line = 'Statement: ' + (stmtBal != null ? fmt(stmtBal,2) : '\u2014') +
+                 (stmtDt ? ' (closed '+stmtDt.toLocaleDateString('en-US',{month:'short',day:'numeric'})+')' : '') +
+                 ' \u00b7 due ' + dueLabel + ' \u00b7 ' + (daysLeft===0 ? 'today' : 'in '+daysLeft+'d');
+      if(stale)  line += ' \u00b7 \u26a0 stale \u2014 update Card Trackers';
+      if(urgent) line = '\u26a0 ' + line;
+      stmtHtml = '<div class="acct-updated"'+
+        ((urgent||stale) ? ' style="color:var(--amber);font-weight:600"' : '')+
+        '>'+line+'</div>';
+    }
+
     card.style.cursor = 'pointer';
     card.title = 'Click to view all transactions';
     card.onclick = function(ev){ if(ev.target.closest('[data-action]')) return; openCardDrawer(def.pm, def.name); };
@@ -5394,7 +5419,7 @@ function loadAccounts(){
       '<div class="acct-bal-row">'+balHtml+
       '<span class="acct-bal-label">'+(balance!=null?(balance<0?'credit balance':'current balance'):'not found')+'</span>'+
       '</div>'+
-      histHtml + utilHtml + lastPayHtml +
+      histHtml + utilHtml + stmtHtml + lastPayHtml +
       '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:0">' + payBtn + voidBtn + '</div>';
     grid.appendChild(card);
   });

@@ -324,7 +324,7 @@ var DAYCARE_FSA_ANNUAL = 24 * 312.50; // $7,500/yr -> $625/mo net benefit
 // This avoids re-scanning every month sheet on every quick refresh.
 
 var CACHE_VERSION      = 'monthly_v3'; // bump when getMonthlyData fields change
-var CARD_CACHE_VERSION = 'cards_v1';   // bump when getCardBalances fields change
+var CARD_CACHE_VERSION = 'cards_v2';   // bump when getCardBalances fields change (v2: due/stmtBalance/stmtDate)
 var CARD_CACHE_KEY     = CARD_CACHE_VERSION + '_balances';
 var CARD_CACHE_TTL     = 300;          // 5 minutes -- short since balances change often
 
@@ -1264,6 +1264,8 @@ var CT_COL_PAYMENT = 5;  // E: last payment amount
 var CT_COL_UTIL    = 6;  // F: utilization %
 var CT_COL_DUE     = 7;  // G: payment due date
 var CT_COL_SEED    = 8;  // H: seed balance at start of tracking period
+var CT_COL_STMT      = 9;  // I: statement balance (hand-entered when statement posts)
+var CT_COL_STMT_DATE = 10; // J: statement close date (hand-entered alongside I)
 
 var CP_COL_DATE    = 1;  // A: payment date
 var CP_COL_CARD    = 2;  // B: card name
@@ -1366,6 +1368,8 @@ function _computeCardBalances() {
         lastPaymentDate:   lastDate instanceof Date ? lastDate : (lastDate ? new Date(lastDate) : null),
         lastPaymentAmount: typeof ctVals[i][CT_COL_PAYMENT-1] === 'number' ? Math.round(ctVals[i][CT_COL_PAYMENT-1]*100)/100 : null,
         seed:              typeof seed === 'number' ? seed : (parseFloat(seed) || 0),
+        stmtBalance:       typeof ctVals[i][CT_COL_STMT-1] === 'number' ? Math.round(ctVals[i][CT_COL_STMT-1]*100)/100 : null,
+        stmtDate:          ctVals[i][CT_COL_STMT_DATE-1] instanceof Date ? ctVals[i][CT_COL_STMT_DATE-1].toISOString().split('T')[0] : null,
       };
     }
   }
@@ -1576,6 +1580,9 @@ function _computeCardBalances() {
       lastDate:    meta.lastPaymentDate
                    ? meta.lastPaymentDate.toISOString().split('T')[0] : null,
       lastPayment: meta.lastPaymentAmount || null,
+      due:         meta.due || def.due || null,
+      stmtBalance: meta.stmtBalance != null ? meta.stmtBalance : null,
+      stmtDate:    meta.stmtDate || null,
     };
   });
 
