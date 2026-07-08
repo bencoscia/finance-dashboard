@@ -2515,7 +2515,7 @@ function logCreditSnapshot(p) {
 
 // -- GET: net worth --------------------------------------------
 var NET_WORTH_SHEET      = 'Net Worth';
-var NW_CACHE_KEY         = 'nw_v3_data';
+var NW_CACHE_KEY         = 'nw_v4_data';
 var NW_CACHE_TTL         = 300; // 5 minutes
 
 function getNetWorth() {
@@ -2663,6 +2663,22 @@ function _computeNetWorth() {
     var loansVals = readSheet(loansSheet);
     if (loansVals.length > 25 && typeof loansVals[25][3] === 'number') studentLoans = loansVals[25][3];
   }
+  // Car loans: Physical Assets!J5 (a sheet formula =SUM(K3:K4) over the per-car
+  // Loan Balance column) -- same derived-cell pattern as the mortgage: the sheet
+  // formula is truth, code reads one cell. Fallback sums K3:K6 directly and logs
+  // loudly; a failed read must not silently book $0 of car debt.
+  var carLoans = 0;
+  if (paSheet) {
+    var paVals3 = readSheet(paSheet);
+    if (paVals3.length > 4 && typeof paVals3[4][9] === 'number') {
+      carLoans = paVals3[4][9];
+    } else {
+      for (var ci = 2; ci <= 5 && ci < paVals3.length; ci++) {
+        if (typeof paVals3[ci][10] === 'number') carLoans += paVals3[ci][10];
+      }
+      Logger.log('netWorth: Physical Assets!J5 not numeric; summed Loan Balance K3:K6 = ' + carLoans);
+    }
+  }
 
   // -- Snapshots from Net Worth sheet --
   var snapshots = [];
@@ -2693,7 +2709,7 @@ function _computeNetWorth() {
 
   // -- Compute current net worth --
   var totalAssets     = investments + cash + physicalAssets;
-  var totalLiabilities= mortgage + studentLoans;
+  var totalLiabilities= mortgage + studentLoans + carLoans;
   var netWorth        = Math.round((totalAssets - totalLiabilities) * 100) / 100;
 
   // -- 529 totals (separable accounts) --
@@ -2758,7 +2774,7 @@ function _computeNetWorth() {
     physicalAssets:  Math.round(physicalAssets * 100) / 100,
     mortgage:        Math.round(mortgage * 100) / 100,
     studentLoans:    Math.round(studentLoans * 100) / 100,
-    carLoans:        0, // not tracked in sheet yet
+    carLoans:        Math.round(carLoans * 100) / 100,
     fivetwonine:     fivetwonine,
     liquid:          Math.round(liquid * 100) / 100,
     totalAssets:     Math.round(totalAssets * 100) / 100,
@@ -2769,7 +2785,7 @@ function _computeNetWorth() {
     snapshots:       snapshots,
     projections:     projections,
     snapshotExists:  !!nwSheet,
-    codeVersion:     'nw-2026-06-16-mortgage-ledger',
+    codeVersion:     'nw-2026-07-07-car-loans',
   };
 }
 

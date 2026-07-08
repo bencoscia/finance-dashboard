@@ -2188,9 +2188,9 @@ async function loadNetWorth(force){
 function demoNetWorth(){
   return {
     investments: 430000, cash: 25000, physicalAssets: 480000,
-    mortgage: 310000, studentLoans: 150000, carLoans: 0,
-    fivetwonine: 32000, netWorth: 475000,
-    totalAssets: 935000, totalLiabilities: 460000,
+    mortgage: 310000, studentLoans: 150000, carLoans: 9500,
+    fivetwonine: 32000, netWorth: 465500,
+    totalAssets: 935000, totalLiabilities: 469500,
     accounts: { 'Fidelity 401K - Ben': 180000, 'Fidelity - 403b - Jenna': 74000,
                 'Fidelity Roth - Ben': 48000, 'Fidelity - Roth - Jenna': 22000,
                 'NY State 529 - Wesley': 25000, 'NY State 529 - Maxwell': 7000,
@@ -2433,7 +2433,7 @@ function renderSnapshotForm(nw, lastSnap){
   if(isDemo) return '';
   var defMortgage     = lastSnap ? Math.abs(lastSnap.mortgage||0)     : Math.abs(nw.mortgage||0);
   var defStudentLoans = lastSnap ? Math.abs(lastSnap.studentLoans||0) : Math.abs(nw.studentLoans||0);
-  var defCarLoans     = lastSnap ? Math.abs(lastSnap.carLoans||0)     : 0;
+  var defCarLoans     = lastSnap ? Math.abs(lastSnap.carLoans||0)     : Math.abs(nw.carLoans||0);
   var defFivetwonine  = lastSnap && lastSnap.fivetwonine ? lastSnap.fivetwonine : (nw.fivetwonine||'');
   var today = localToday();
   return '<div class="nw-snap-form">'+
