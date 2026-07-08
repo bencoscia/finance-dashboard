@@ -324,7 +324,7 @@ var DAYCARE_FSA_ANNUAL = 24 * 312.50; // $7,500/yr -> $625/mo net benefit
 // This avoids re-scanning every month sheet on every quick refresh.
 
 var CACHE_VERSION      = 'monthly_v3'; // bump when getMonthlyData fields change
-var CARD_CACHE_VERSION = 'cards_v2';   // bump when getCardBalances fields change (v2: due/stmtBalance/stmtDate)
+var CARD_CACHE_VERSION = 'cards_v2';   // bump when getCardBalances fields change (v2: due/stmtBalance)
 var CARD_CACHE_KEY     = CARD_CACHE_VERSION + '_balances';
 var CARD_CACHE_TTL     = 300;          // 5 minutes -- short since balances change often
 
@@ -1264,8 +1264,7 @@ var CT_COL_PAYMENT = 5;  // E: last payment amount
 var CT_COL_UTIL    = 6;  // F: utilization %
 var CT_COL_DUE     = 7;  // G: payment due date
 var CT_COL_SEED    = 8;  // H: seed balance at start of tracking period
-var CT_COL_STMT      = 9;  // I: statement balance (hand-entered when statement posts)
-var CT_COL_STMT_DATE = 10; // J: statement close date (hand-entered alongside I)
+var CT_COL_STMT    = 9;  // I: statement balance (hand-entered when statement posts)
 
 var CP_COL_DATE    = 1;  // A: payment date
 var CP_COL_CARD    = 2;  // B: card name
@@ -1329,6 +1328,19 @@ function _appendCardPayment(cardName, dateObj, amount, month) {
   cp.getRange(newRow, CP_COL_MONTH,  1, 1).setNumberFormat('@'); // plain text
 }
 
+// -- CACHE WARMER (optional) ----------------------------------
+// Run on a time-driven trigger (editor > Triggers > Add Trigger >
+// warmCaches > time-driven > every 10 minutes). Keeps CacheService hot so
+// user requests hit cache instead of paying the multi-second recompute --
+// biggest effect on the first open of the day and right after writes.
+// Calls only the same cached getters the dashboard uses; each is isolated
+// so one failure never blocks the others.
+function warmCaches(){
+  try { getCardBalances(); } catch(e) { Logger.log('warmCaches cards: ' + e.message); }
+  try { getNetWorth(); }     catch(e) { Logger.log('warmCaches networth: ' + e.message); }
+  try { getMonthlyData(); }  catch(e) { Logger.log('warmCaches monthly: ' + e.message); }
+}
+
 // -- GET: card balances -- reads flat table from Card Trackers --
 function getCardBalances() {
   // Try cache first (5-minute TTL)
@@ -1369,7 +1381,6 @@ function _computeCardBalances() {
         lastPaymentAmount: typeof ctVals[i][CT_COL_PAYMENT-1] === 'number' ? Math.round(ctVals[i][CT_COL_PAYMENT-1]*100)/100 : null,
         seed:              typeof seed === 'number' ? seed : (parseFloat(seed) || 0),
         stmtBalance:       typeof ctVals[i][CT_COL_STMT-1] === 'number' ? Math.round(ctVals[i][CT_COL_STMT-1]*100)/100 : null,
-        stmtDate:          ctVals[i][CT_COL_STMT_DATE-1] instanceof Date ? ctVals[i][CT_COL_STMT_DATE-1].toISOString().split('T')[0] : null,
       };
     }
   }
@@ -1582,7 +1593,6 @@ function _computeCardBalances() {
       lastPayment: meta.lastPaymentAmount || null,
       due:         meta.due || def.due || null,
       stmtBalance: meta.stmtBalance != null ? meta.stmtBalance : null,
-      stmtDate:    meta.stmtDate || null,
     };
   });
 

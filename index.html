@@ -1543,11 +1543,21 @@ function bootDashboard() {
     $('dashboard').style.display = 'block';
     $('src-badge').textContent = '● live';
     $('src-badge').className   = 'badge live';
-    showBanner('Loading data…', 'loading');
+    // Paint the last-known data instantly (stale-while-revalidate), then
+    // fetch fresh in the background. A bad snapshot must never brick boot:
+    // any paint failure clears it, logs loudly, and falls through to the
+    // normal blocking load.
+    var snap = lsGetJSON(SNAP_KEY, null);
+    var painted = false;
+    if(snap && snap.data && (Date.now() - (snap.t||0)) < SNAP_MAX_AGE_MS){
+      try { renderAll(snap.data, true); painted = true; }
+      catch(e){ try{ localStorage.removeItem(SNAP_KEY); }catch(_){} console.error('snapshot paint failed — cleared', e); }
+    }
+    showBanner(painted ? 'Showing last data — refreshing…' : 'Loading data…', 'loading');
     apiFetch(url, 'all').then(function(data){
       renderAll(data); showBanner('Ready', 'ok');
     }).catch(function(e){
-      showBanner('Could not load: ' + e.message, 'err');
+      showBanner((painted ? 'Refresh failed (showing last data): ' : 'Could not load: ') + e.message, 'err');
     });
   } else {
     // No URL available -- e.g. on GitHub Pages, where the gitignored config.js
@@ -1621,7 +1631,11 @@ async function refreshData(){
 }
 
 // ── render all ──
-function renderAll(data){
+// Snapshot of the last live 'all' payload, painted instantly on next boot.
+// Bump SNAP_KEY whenever renderAll's expected payload shape changes.
+var SNAP_KEY = 'fin_snapshot_v1';
+var SNAP_MAX_AGE_MS = 7*24*60*60*1000;
+function renderAll(data, fromSnapshot){
   allData=data;
   if(data.config) applyConfig(data.config); // apply server config first
   var monthly=data.monthly||[], budget=data.budget||13205;
@@ -1650,14 +1664,17 @@ function renderAll(data){
   renderBreakdown(monthly);
   renderCashflow(monthly);
   renderVsTypical(monthly);
-  // auto-load most recent month for both tabs
-  if(firstMonth){
+  // auto-load most recent month for both tabs.
+  // Snapshot paints skip these: the fresh renderAll seconds later triggers
+  // them, so fetching here would just double every month load.
+  if(firstMonth && !fromSnapshot){
     loadTxns(firstMonth,true);
     loadFixed(firstMonth,true);
   }
   loadAccounts();
   renderDaycareReminder();
   renderThisWeek();
+  if(!fromSnapshot && !isDemo && SCRIPT_URL) lsSetJSON(SNAP_KEY, {t: Date.now(), data: data});
   // Warm net worth in the background so the header band fills without a
   // tab visit (server caches it 5 min; nwData prevents refetch on tab click)
   if(!isDemo && SCRIPT_URL && !nwData){
@@ -2066,6 +2083,7 @@ async function submitQuickAdd(){
         method:$('qa-pm').value, category:'onetime', discretionary:$('qa-disc').checked,
         ben:$('qa-ben').checked, jenna:$('qa-jenna').checked});
       window._qaLastTxnId = txnResult && txnResult.id;
+      bumpForTxn($('qa-pm').value, amt);
       // HSA-eligible: create a needs-review draft so the HSA tab flags that a
       // receipt is needed. Second write; if it fails the txn is already saved,
       // so say exactly that rather than pretending the whole save failed.
@@ -2086,7 +2104,7 @@ async function submitQuickAdd(){
         openCardDrawer(_drawerPm, $('cdr-title').textContent);
       }
       if(curMonthTxn===month) loadTxns(month,true);
-      quickRefresh(); refreshCardBalances();
+      quickRefresh(); // includes cardBalances -- one recompute, not two
     } else if(qaType==='groceries'||qaType==='gas'){
       if(!$('qa-pm').value){ $('qa-err').textContent='Select a payment method.'; return; }
       await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('var'), month:mkey(month),
@@ -2094,6 +2112,7 @@ async function submitQuickAdd(){
         method:$('qa-pm').value,
         description:qaType==='groceries'?$('qa-store').value.trim():'Gas',
         discretionary:false, ben:true, jenna:true});
+      bumpForTxn($('qa-pm').value, Math.abs(amt));
       if(curMonthFx===month) loadFixed(month,true);
       refreshCardBalances();
     } else if(qaType==='checking'){
@@ -2110,7 +2129,9 @@ async function submitQuickAdd(){
           method:'Checking', amount:Math.abs(amt), date:$('qa-date').value,
           discretionary:false, ben:false, jenna:false});
       }
-      quickRefresh(); refreshCardBalances();
+      bumpCheckingBalance(isDep ? Math.abs(amt) : -Math.abs(amt));
+      refreshBalanceSurfaces();
+      quickRefresh(); // includes cardBalances -- one recompute, not two
     } else if(qaType==='hsa'){
       if(amt<=0){ $('qa-err').textContent='Enter a receipt amount greater than zero.'; return; }
       await apiPost(SCRIPT_URL,{action:'addHsaReceipt', idemKey:genIdemKey('hsaAdd'),
@@ -2127,11 +2148,12 @@ async function submitQuickAdd(){
         cardName:key, amount:amt, date:$('qa-date').value});
       if(allData&&allData.cardBalances&&allData.cardBalances.cards&&allData.cardBalances.cards[key]){
         var qc=allData.cardBalances.cards[key];
-        qc.balance=Math.round((qc.balance-amt)*100)/100;
         qc.lastPayment=-Math.abs(amt);
         qc.lastDate=$('qa-date').value;
-        loadAccounts();
       }
+      bumpCardBalance(key, -amt);      // card owes less
+      bumpCheckingBalance(-amt);       // paid from checking
+      refreshBalanceSurfaces();
       refreshCardBalances();
     }
     hideQuickAdd();
@@ -3123,15 +3145,66 @@ function demoLoans(){
 // Immediately update a card's balance in local allData and re-render tiles.
 // Called after any write that changes a card balance so UI updates without waiting for quickRefresh.
 
-async function refreshCardBalances(){
+// Trailing debounce on the post-write refetches: entering ten transactions
+// in a row used to trigger ten full server recomputes. Optimistic nudges
+// keep the display correct in the interim, so the authoritative reconcile
+// can wait for the burst to end. Both are fire-and-forget at every call
+// site (never awaited), so debouncing changes no control flow.
+var _rcbTimer = null, _qrTimer = null;
+function refreshCardBalances(){
+  clearTimeout(_rcbTimer);
+  _rcbTimer = setTimeout(_refreshCardBalancesNow, 2500);
+}
+async function _refreshCardBalancesNow(){
   if(!SCRIPT_URL || isDemo) return;
   try {
     var fresh = await apiFetch(SCRIPT_URL, 'cardBalances');
-    if(fresh && allData){ allData.cardBalances = fresh; loadAccounts(); twCards(); twChecking(); }
+    if(fresh && allData){ allData.cardBalances = fresh; refreshBalanceSurfaces(); }
   } catch(e) {}
 }
 
-async function quickRefresh(){
+// ── OPTIMISTIC BALANCE NUDGES ─────────────────────────────────
+// Apply the exact, known delta of a successful write to local balance state
+// and re-render every surface showing it, so numbers move the moment a save
+// lands instead of after the multi-second server recompute. Display-only
+// state, never written back: the background authoritative refetch
+// (quickRefresh/refreshCardBalances) reconciles moments later, so a wrong
+// nudge self-corrects on the next fetch.
+function bumpCardBalance(methodOrKey, delta){
+  if(!delta || !allData || !allData.cardBalances || !allData.cardBalances.cards) return;
+  var cb = allData.cardBalances;
+  var key = cb.cards[methodOrKey] ? methodOrKey : null;
+  if(!key){ // PM label ('Costco') → sheetKey ('Citi')
+    for(var i=0;i<CARD_MAP.length;i++) if(CARD_MAP[i].pm===methodOrKey){ key=CARD_MAP[i].sheetKey; break; }
+  }
+  if(!key || !cb.cards[key] || cb.cards[key].balance == null) return; // Gift Card etc: no-op
+  cb.cards[key].balance = Math.round((cb.cards[key].balance + delta)*100)/100;
+  if(cb.totalBalance != null) cb.totalBalance = Math.round((cb.totalBalance + delta)*100)/100;
+}
+function bumpCheckingBalance(delta){
+  if(!delta || !allData || !allData.cardBalances) return;
+  var cb = allData.cardBalances;
+  if(cb.checkingBalance != null) cb.checkingBalance = Math.round((cb.checkingBalance + delta)*100)/100;
+}
+// Route a signed transaction amount (+ = charge/spend) to the right balance.
+// Card charge raises what's owed; a Checking-method row lowers checking.
+function bumpForTxn(method, amount){
+  if(!amount) return;
+  if(method === 'Checking') bumpCheckingBalance(-amount);
+  else bumpCardBalance(method, amount);
+  refreshBalanceSurfaces();
+}
+function refreshBalanceSurfaces(){
+  try { loadAccounts(); } catch(e){}
+  try { twCards(); twChecking(); } catch(e){}
+  try { renderCardStrip(); } catch(e){}
+}
+
+function quickRefresh(){
+  clearTimeout(_qrTimer);
+  _qrTimer = setTimeout(_quickRefreshNow, 2500);
+}
+async function _quickRefreshNow(){
   if(!SCRIPT_URL || isDemo) return;
   try {
     var data = await apiFetch(SCRIPT_URL, 'quick');
@@ -3141,8 +3214,7 @@ async function quickRefresh(){
         allData.cardBalances.checkingBalance = data.cardBalances.checkingBalance;
     }
     if(data.updated) $('ts').textContent = 'updated '+new Date(data.updated).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    loadAccounts();
-    renderCardStrip(); // refresh strip on transactions tab too
+    refreshBalanceSurfaces();
   } catch(e){ /* silent fail — not critical */ }
 }
 // Stored in localStorage keyed by 'Month YYYY:<txn id>' (ids are stable; pre-cutover rowIndex-keyed tags are orphaned)
@@ -3647,8 +3719,9 @@ async function saveRow(i,isNew){
       var result = await apiPost(SCRIPT_URL, payload);
       if(action === 'ledgerAddTxn') updated.id = result.id;
       showBanner('Saved','ok');
-      quickRefresh();
-      refreshCardBalances();
+      if(action === 'ledgerUpdateTxn') bumpForTxn(txns[i].paymentMethod, -(parseFloat(txns[i].cost)||0));
+      bumpForTxn(updated.paymentMethod, parseFloat(updated.cost)||0);
+      quickRefresh(); // includes cardBalances -- one recompute, not two
     } catch(e){
       inputs.forEach(function(el){el.disabled=false;});
       if(saveBtn){saveBtn.textContent='save';}
@@ -3674,8 +3747,8 @@ async function delRow(i){
     await apiPost(SCRIPT_URL,{action:'ledgerDeleteTxn', idemKey:genIdemKey('del'), id:removed.id});
     showBanner('Deleted','ok');
     // No row-shift bookkeeping: rows are located by stable id, not position.
-    quickRefresh();
-    refreshCardBalances();
+    bumpForTxn(removed.paymentMethod, -(parseFloat(removed.cost)||0));
+    quickRefresh(); // includes cardBalances -- one recompute, not two
   } catch(e){
     // Restore the row -- the server still has it
     txns.splice(i,0,removed); renderTxnTable();
@@ -3898,6 +3971,7 @@ async function saveVarEntry(category){
   try {
     if(!isDemo && SCRIPT_URL){
       if(!payVal){ showBanner('Select a payment method','err'); if(saveBtn){saveBtn.disabled=false;saveBtn.textContent='Save';} return; }
+      var varResult = null;
       var varPayload = {
         action:   'ledgerAddTxn',
         idemKey:  genIdemKey('var'),
@@ -3909,23 +3983,28 @@ async function saveVarEntry(category){
         method:   payVal,
         discretionary: false, ben: true, jenna: true,
       };
-      await apiPost(SCRIPT_URL, varPayload);
+      varResult = await apiPost(SCRIPT_URL, varPayload);
     }
-    // Optimistically update local varEntries and render immediately
+    // Optimistically update local varEntries and render immediately.
+    // The id comes straight from the POST result so edit/delete work on
+    // this row without waiting for any reconciliation fetch.
     if(!varEntries) varEntries = { groceries:{ entries:[] }, gas:{ entries:[] } };
     var entry = { date:dateVal, cost:amtVal, payment:payVal };
+    if(varResult && varResult.id != null) entry.id = varResult.id;
     if(isGroc){ entry.store=storeVal; varEntries.groceries.entries.push(entry); }
     else { varEntries.gas.entries.push(entry); }
     renderFixedTab();
 
     showBanner((isGroc?'Grocery':'Gas')+' entry of '+fmt(amtVal,2)+' added to '+curMonthFx, 'ok');
+    bumpForTxn(payVal, amtVal);
     refreshCardBalances();
-    // Reconcile with server to pick up the assigned ids
+    // Background reconcile (server-computed estimates etc.) -- no longer
+    // blocks the save flow; the row is already correct and actionable.
     if(!isDemo && SCRIPT_URL && curMonthFx){
-      var fresh = await apiFetch(SCRIPT_URL, 'variableEntries', {month: curMonthFx});
-      if(fresh && !fresh.error) varEntries = fresh;
+      apiFetch(SCRIPT_URL, 'variableEntries', {month: curMonthFx}).then(function(fresh){
+        if(fresh && !fresh.error){ varEntries = fresh; renderFixedTab(); }
+      }).catch(function(e){});
     }
-    renderFixedTab();
   } catch(e){
     showBanner('Save failed: '+e.message,'err');
     if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='Save'; }
@@ -4250,6 +4329,7 @@ async function togglePaid(i){
   if(!isDemo&&SCRIPT_URL){
     try {
       await apiPost(SCRIPT_URL,{action:'ledgerUpdateFixed', idemKey:genIdemKey('fx'), id:f.id, paid:nowPaid, paid_date:paidDate});
+      bumpForTxn(f.source, nowPaid ? (f.cost||0) : -(f.cost||0));
       refreshCardBalances();
     } catch(e){
       // Revert on failure
@@ -4898,12 +4978,13 @@ async function voidPayment(sheetKey, displayName, amount, dateStr){
   try {
     var result = await apiPost(SCRIPT_URL, { action:'voidLastPayment', idemKey:genIdemKey('void'), cardName:sheetKey });
     showBanner('Voided '+fmt(Math.abs(result.voidedAmount),2)+'. New balance: '+fmt(result.newBalance,2),'ok');
-    // Optimistically update card balance locally -- add back the voided amount
-    if(allData && allData.cardBalances && allData.cardBalances.cards && allData.cardBalances.cards[sheetKey]){
-      allData.cardBalances.cards[sheetKey].balance =
-        Math.round((allData.cardBalances.cards[sheetKey].balance + Math.abs(result.voidedAmount)) * 100) / 100;
-      loadAccounts();
-    }
+    // Optimistically reverse both sides -- the card owes the amount again,
+    // and the money is back in checking
+    var vAmt = Math.abs(result.voidedAmount);
+    bumpCardBalance(sheetKey, vAmt);
+    bumpCheckingBalance(vAmt);
+    refreshBalanceSurfaces();
+    refreshCardBalances();
   } catch(e){
     showBanner('Void failed: '+e.message,'err');
   }
@@ -4952,11 +5033,12 @@ async function submitPayment(){
     // tile (incl. its Void button target) is correct immediately
     if(allData && allData.cardBalances && allData.cardBalances.cards && allData.cardBalances.cards[payCardKey]){
       var oc = allData.cardBalances.cards[payCardKey];
-      oc.balance     = Math.round((oc.balance - amount) * 100) / 100;
       oc.lastPayment = -Math.abs(amount);
       oc.lastDate    = date;
-      loadAccounts();
     }
+    bumpCardBalance(payCardKey, -amount); // card owes less
+    bumpCheckingBalance(-amount);         // paid from checking
+    refreshBalanceSurfaces();
     // Authoritative refresh in the background (cache was invalidated server-side)
     refreshCardBalances();
   } catch(e){
@@ -5383,9 +5465,9 @@ function loadAccounts(){
       }
     }
 
-    // Statement balance + next due date (Card Trackers cols I/J; due day from col G
+    // Statement balance (Card Trackers col I) + next due date (due day from col G
     // via the cards payload, CARD_MAP hardcode as fallback). Never hue alone:
-    // urgency and staleness carry a symbol + explicit text, color is secondary.
+    // urgency carries a symbol + explicit text, color is secondary.
     var stmtHtml = '';
     var dueDay = parseInt((sheetCard && sheetCard.due) || def.due) || 0;
     if(dueDay){
@@ -5395,16 +5477,12 @@ function loadAccounts(){
       var daysLeft = Math.round((dueDate - new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12))/86400000);
       var dueLabel = dueDate.toLocaleDateString('en-US',{month:'short',day:'numeric'});
       var stmtBal  = sheetCard && sheetCard.stmtBalance != null ? sheetCard.stmtBalance : null;
-      var stmtDt   = sheetCard && sheetCard.stmtDate ? new Date(sheetCard.stmtDate+'T12:00:00') : null;
-      var stale    = stmtDt != null && (now - stmtDt) > 40*86400000;
-      var urgent   = stmtBal != null && stmtBal > 0.005 && daysLeft <= 5 && !stale;
+      var urgent   = stmtBal != null && stmtBal > 0.005 && daysLeft <= 5;
       var line = 'Statement: ' + (stmtBal != null ? fmt(stmtBal,2) : '\u2014') +
-                 (stmtDt ? ' (closed '+stmtDt.toLocaleDateString('en-US',{month:'short',day:'numeric'})+')' : '') +
                  ' \u00b7 due ' + dueLabel + ' \u00b7 ' + (daysLeft===0 ? 'today' : 'in '+daysLeft+'d');
-      if(stale)  line += ' \u00b7 \u26a0 stale \u2014 update Card Trackers';
       if(urgent) line = '\u26a0 ' + line;
       stmtHtml = '<div class="acct-updated"'+
-        ((urgent||stale) ? ' style="color:var(--amber);font-weight:600"' : '')+
+        (urgent ? ' style="color:var(--amber);font-weight:600"' : '')+
         '>'+line+'</div>';
     }
 
