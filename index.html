@@ -1550,6 +1550,8 @@ function bootDashboard() {
     var snap = lsGetJSON(SNAP_KEY, null);
     var painted = false;
     if(snap && snap.data && (Date.now() - (snap.t||0)) < SNAP_MAX_AGE_MS){
+      // Clear BEFORE painting so a crash mid-paint can't re-serve bad data
+      try { localStorage.removeItem(SNAP_KEY); } catch(_){}
       try { renderAll(snap.data, true); painted = true; }
       catch(e){ try{ localStorage.removeItem(SNAP_KEY); }catch(_){} console.error('snapshot paint failed — cleared', e); }
     }
@@ -1674,7 +1676,10 @@ function renderAll(data, fromSnapshot){
   loadAccounts();
   renderDaycareReminder();
   renderThisWeek();
-  if(!fromSnapshot && !isDemo && SCRIPT_URL) lsSetJSON(SNAP_KEY, {t: Date.now(), data: data});
+  // Persist snapshot only from live authoritative data — never from a snapshot paint,
+  // never from demo, and never if cardBalances is missing (partial response).
+  if(!fromSnapshot && !isDemo && SCRIPT_URL && data && data.cardBalances)
+    lsSetJSON(SNAP_KEY, {t: Date.now(), data: data});
   // Warm net worth in the background so the header band fills without a
   // tab visit (server caches it 5 min; nwData prevents refetch on tab click)
   if(!isDemo && SCRIPT_URL && !nwData){
@@ -2104,7 +2109,7 @@ async function submitQuickAdd(){
         openCardDrawer(_drawerPm, $('cdr-title').textContent);
       }
       if(curMonthTxn===month) loadTxns(month,true);
-      quickRefresh(); // includes cardBalances -- one recompute, not two
+      quickRefresh(); refreshCardBalances();
     } else if(qaType==='groceries'||qaType==='gas'){
       if(!$('qa-pm').value){ $('qa-err').textContent='Select a payment method.'; return; }
       await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('var'), month:mkey(month),
@@ -2131,7 +2136,7 @@ async function submitQuickAdd(){
       }
       bumpCheckingBalance(isDep ? Math.abs(amt) : -Math.abs(amt));
       refreshBalanceSurfaces();
-      quickRefresh(); // includes cardBalances -- one recompute, not two
+      quickRefresh(); refreshCardBalances();
     } else if(qaType==='hsa'){
       if(amt<=0){ $('qa-err').textContent='Enter a receipt amount greater than zero.'; return; }
       await apiPost(SCRIPT_URL,{action:'addHsaReceipt', idemKey:genIdemKey('hsaAdd'),
@@ -3721,7 +3726,7 @@ async function saveRow(i,isNew){
       showBanner('Saved','ok');
       if(action === 'ledgerUpdateTxn') bumpForTxn(txns[i].paymentMethod, -(parseFloat(txns[i].cost)||0));
       bumpForTxn(updated.paymentMethod, parseFloat(updated.cost)||0);
-      quickRefresh(); // includes cardBalances -- one recompute, not two
+      quickRefresh(); refreshCardBalances();
     } catch(e){
       inputs.forEach(function(el){el.disabled=false;});
       if(saveBtn){saveBtn.textContent='save';}
@@ -3748,7 +3753,7 @@ async function delRow(i){
     showBanner('Deleted','ok');
     // No row-shift bookkeeping: rows are located by stable id, not position.
     bumpForTxn(removed.paymentMethod, -(parseFloat(removed.cost)||0));
-    quickRefresh(); // includes cardBalances -- one recompute, not two
+    quickRefresh(); refreshCardBalances();
   } catch(e){
     // Restore the row -- the server still has it
     txns.splice(i,0,removed); renderTxnTable();
@@ -4833,7 +4838,7 @@ async function submitSplit(){
     if(!isDemo && SCRIPT_URL){
       await loadTxns(curMonthTxn, true);
     } else renderTxnTable();
-    quickRefresh();
+    quickRefresh(); refreshCardBalances();
   } catch(e){
     $('split-modal-err').textContent   = 'Save failed: ' + e.message;
     $('split-submit-btn').disabled     = false;
@@ -4924,7 +4929,7 @@ async function submitChkEntry(){
       (amount>=0?'Deposit':'Withdrawal')+' of '+fmt(Math.abs(amount),2)+' recorded in '+month,
       'ok'
     );
-    quickRefresh();
+    quickRefresh(); refreshCardBalances();
   } catch(e){
     $('chk-modal-err').textContent  = 'Failed: ' + e.message;
     $('chk-submit-btn').disabled    = false;
