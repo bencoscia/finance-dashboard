@@ -42,7 +42,7 @@ var LEDGER_CACHE_KEY     = LEDGER_CACHE_VERSION + '_monthly';
 var LEDGER_CATEGORIES = ['onetime', 'groceries', 'gas', 'transfer'];
 
 var LEDGER_HEADERS = {};
-LEDGER_HEADERS[LEDGER_TXNS]    = ['id','date','month','description','amount','method','category','discretionary','ben','jenna'];
+LEDGER_HEADERS[LEDGER_TXNS]    = ['id','date','month','description','amount','method','category','discretionary','ben','jenna','tags'];
 LEDGER_HEADERS[LEDGER_FIXED]   = ['id','month','name','source','amount','paid','paid_date'];
 LEDGER_HEADERS[LEDGER_INCOME]  = ['id','month','date','source','amount'];
 LEDGER_HEADERS[LEDGER_VARHIST] = ['month','category','amount'];
@@ -52,7 +52,7 @@ LEDGER_HEADERS[LEDGER_VARHIST] = ['month','category','amount'];
 // Create four tabs by hand, paste the header row into row 1 of each,
 // View > Freeze > 1 row, then import the migration CSVs at A1 (the CSVs
 // include the header row; "Replace data at selected cell"):
-//   Txns:             id  date  month  description  amount  method  category  discretionary  ben  jenna
+//   Txns:             id  date  month  description  amount  method  category  discretionary  ben  jenna  tags
 //   Fixed Log:        id  month  name  source  amount  paid  paid_date
 //   Income Log:       id  month  date  source  amount
 //   Variable History: month  category  amount
@@ -180,6 +180,11 @@ function invalidateLedgerCache() {
 }
 
 // -- READ: ledgerTxns -- one month's transactions, by stable id -----------
+function _ltags(v) { // 'a, b' -> ['a','b']; tolerant of blanks
+  return String(v || '').split(',').map(function (s) { return s.trim().toLowerCase(); })
+    .filter(function (s) { return !!s; });
+}
+
 function getLedgerTxns(month) {
   var mk = _lmonth(month);
   if (!mk) return { error: 'ledgerTxns needs month=YYYY-MM' };
@@ -193,7 +198,8 @@ function getLedgerTxns(month) {
       id: parseInt(r[0], 10), date: _ldate(r[1]), month: mk,
       description: String(r[3] || ''), amount: _ln(r[4]),
       method: String(r[5] || ''), category: String(r[6] || 'onetime'),
-      discretionary: _lb(r[7]), ben: _lb(r[8]), jenna: _lb(r[9])
+      discretionary: _lb(r[7]), ben: _lb(r[8]), jenna: _lb(r[9]),
+      tags: _ltags(r[10])
     });
   }
   out.sort(function(a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id; });
@@ -701,7 +707,8 @@ function ledgerGetTransactions(monthName) {
       id: parseInt(r[0], 10), date: _ldate(r[1]),
       description: String(r[3] || ''), cost: _ln(r[4]),
       paymentMethod: String(r[5] || ''), category: cat,
-      discretionary: _lb(r[7]), ben: _lb(r[8]), jenna: _lb(r[9])
+      discretionary: _lb(r[7]), ben: _lb(r[8]), jenna: _lb(r[9]),
+      tags: _ltags(r[10])
     });
   }
   txns.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id; });
@@ -886,6 +893,48 @@ function ledgerAddIncome(p) {
   });
 }
 
+// -- WRITE: ledgerSetTags -----------------------------------------------------
+// Tags are a txn attribute (Txns col K, comma-separated, lowercase). Stored in
+// the Sheet -- NOT localStorage -- so they survive devices, browsers, and
+// evictions like every other piece of user data. Last-write-wins by design:
+// the client always sends the row's full tag list.
+function ledgerSetTags(p) {
+  if (!p.id) return { error: 'ledgerSetTags needs id.' };
+  var tags = p.tags;
+  if (typeof tags === 'string') { try { tags = JSON.parse(tags); } catch (e) { tags = String(p.tags).split(','); } }
+  if (!tags) tags = [];
+  var clean = [], i;
+  for (i = 0; i < tags.length; i++) {
+    var t = String(tags[i]).trim().toLowerCase();
+    if (t && t.indexOf(',') < 0 && clean.indexOf(t) < 0) clean.push(t);
+  }
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(LEDGER_TXNS);
+  if (!sheet) return { error: 'Sheet not found: ' + LEDGER_TXNS };
+  return _ledgerWithLock(function () {
+    invalidateSheet(LEDGER_TXNS);
+    var values = readSheet(sheet);
+    var row = _ledgerFindRowById(values, p.id);
+    if (row < 0) return { error: 'Txn id ' + p.id + ' not found.' };
+    sheet.getRange(row, 11).setValue(clean.join(', '));
+    SpreadsheetApp.flush();
+    invalidateSheet(LEDGER_TXNS);
+    return { ok: true, id: parseInt(p.id, 10), tags: clean };
+  });
+}
+
+// -- READ: ledgerTags -- global tag census for the picker's suggestion list --
+function getLedgerTags() {
+  var rows = readSheet(LEDGER_TXNS);
+  if (!rows) return { error: 'Sheet not found: ' + LEDGER_TXNS };
+  var counts = {};
+  for (var i = 1; i < rows.length; i++) {
+    var ts = _ltags(rows[i][10]);
+    for (var j = 0; j < ts.length; j++) counts[ts[j]] = (counts[ts[j]] || 0) + 1;
+  }
+  return { tags: counts };
+}
+
 // Income validation twin for tests (error string or null; no sheet access).
 function ledgerAddIncomeValidate(p) {
   var mk = _lmonth(p.month) || _lmonth(_ldate(p.date) || '');
@@ -1001,6 +1050,10 @@ function testLedger() {
     for (var si = 0; si < got.txns.length; si++) splitSum += got.txns[si].amount;
     ok(got.txns.length === 2 && near(splitSum, 12.5), 'split conserved the amount on-sheet: ' + splitSum);
     ok(!!ledgerSplitTxn({ id: 3, parts: [{ description: 'a', amount: 1 }, { description: 'b', amount: 1 }] }).error, 'non-conserving split rejected at the sheet');
+
+    var rt = ledgerSetTags({ id: 1, tags: ['Food', ' travel ', 'food'] });
+    ok(rt.ok && rt.tags.length === 2 && rt.tags[0] === 'food', 'setTags normalizes + dedupes: ' + JSON.stringify(rt.tags));
+    ok(getLedgerTxns('2026-06').txns[0].tags.length === 2, 'tags read back on txn rows');
 
     var rd = ledgerDeleteTxn({ id: 3 });
     ok(rd.ok, 'delete by id: ' + JSON.stringify(rd));

@@ -1651,6 +1651,8 @@ function renderAll(data){
   renderBreakdown(monthly);
   renderCashflow(monthly);
   renderVsTypical(monthly);
+  fetchKnownTags();
+  migrateLocalTags();
   // auto-load most recent month for both tabs
   if(firstMonth){
     loadTxns(firstMonth,true);
@@ -3162,40 +3164,76 @@ async function quickRefresh(){
     renderCardStrip(); // refresh strip on transactions tab too
   } catch(e){ /* silent fail — not critical */ }
 }
-// Stored in localStorage keyed by 'Month YYYY:<txn id>' (ids are stable; pre-cutover rowIndex-keyed tags are orphaned)
 // ── TAGS ─────────────────────────────────────────────────────
+// Tags live on the Txns sheet (col K) like every other txn attribute — NOT in
+// localStorage, which is per-device, per-browser, and evictable; that's why
+// they kept "disappearing". Same function signatures; the store changed.
+// TAGS_KEY survives only for the one-time migration flush below.
 var TAGS_KEY = 'fin_tags_v1';
+var _knownTagCounts = null; // cross-month census from ?action=ledgerTags
 
-function getAllTagData(){
-  return lsGetJSON(TAGS_KEY, {});
+function _txnById(id){
+  for(var i=0;i<txns.length;i++) if(txns[i].id===id) return txns[i];
+  return null;
 }
-function saveTagData(data){ lsSetJSON(TAGS_KEY, data); }
-function txnTagKey(month, rowIndex){ return month + ':' + rowIndex; }
-function getRowTags(month, rowIndex){
-  if(rowIndex == null) return [];
-  return getAllTagData()[txnTagKey(month, rowIndex)] || [];
+function getRowTags(month, id){
+  var t=_txnById(id);
+  return (t && t.tags) ? t.tags : [];
 }
 function getAllKnownTags(){
-  var data = getAllTagData(), counts = {};
-  Object.keys(data).forEach(function(k){
-    (data[k]||[]).forEach(function(tag){ counts[tag]=(counts[tag]||0)+1; });
-  });
+  var counts = {};
+  if(_knownTagCounts) Object.keys(_knownTagCounts).forEach(function(k){ counts[k]=_knownTagCounts[k]; });
+  txns.forEach(function(t){ (t.tags||[]).forEach(function(tag){ if(!counts[tag]) counts[tag]=1; }); });
   return counts;
 }
-function addTagToRow(month, rowIndex, tag){
-  if(!tag || rowIndex==null) return;
-  var data=getAllTagData(), k=txnTagKey(month,rowIndex);
-  if(!data[k]) data[k]=[];
-  tag=tag.trim().toLowerCase();
-  if(data[k].indexOf(tag)<0) data[k].push(tag);
-  saveTagData(data);
+function fetchKnownTags(){
+  if(isDemo || !SCRIPT_URL) return;
+  apiFetch(SCRIPT_URL,'ledgerTags').then(function(d){ if(d && d.tags) _knownTagCounts=d.tags; })
+    .catch(function(){ /* picker falls back to loaded-month tags */ });
 }
-function removeTagFromRow(month, rowIndex, tag){
-  var data=getAllTagData(), k=txnTagKey(month,rowIndex);
-  if(!data[k]) return;
-  data[k]=data[k].filter(function(t){return t!==tag;});
-  if(!data[k].length) delete data[k];
-  saveTagData(data);
+function persistTags(t){
+  if(isDemo || !SCRIPT_URL || t.id==null) return;
+  apiPost(SCRIPT_URL,{action:'ledgerSetTags', idemKey:genIdemKey('tag'), id:t.id, tags:t.tags||[]})
+    .catch(function(e){ showBanner('Tag not saved: '+e.message+' — refresh and retry','err'); });
+}
+function addTagToRow(month, id, tag){
+  var t=_txnById(id);
+  if(!t || !tag) return;
+  tag=tag.trim().toLowerCase();
+  if(!t.tags) t.tags=[];
+  if(t.tags.indexOf(tag)<0){ t.tags.push(tag); persistTags(t); }
+  if(_knownTagCounts && !_knownTagCounts[tag]) _knownTagCounts[tag]=1;
+}
+function removeTagFromRow(month, id, tag){
+  var t=_txnById(id);
+  if(!t || !t.tags) return;
+  t.tags=t.tags.filter(function(x){return x!==tag;});
+  persistTags(t);
+}
+// One-time flush: whatever tag data survives in this browser's localStorage
+// gets written to the sheet, then the local store is removed. Runs per device
+// until its store is empty; last-write-wins is acceptable for annotations.
+function migrateLocalTags(){
+  if(isDemo || !SCRIPT_URL) return;
+  var data = lsGetJSON(TAGS_KEY, null);
+  if(!data) return;
+  var keys = Object.keys(data).filter(function(k){ return (data[k]||[]).length; });
+  if(!keys.length){ try{ localStorage.removeItem(TAGS_KEY); }catch(e){} return; }
+  var i=0, okCount=0, failed=false;
+  function next(){
+    if(i>=keys.length){
+      if(!failed){ try{ localStorage.removeItem(TAGS_KEY); }catch(e){} }
+      if(okCount) showBanner('Migrated '+okCount+' tagged transaction'+(okCount===1?'':'s')+' to the sheet','ok');
+      return;
+    }
+    var k=keys[i++];
+    var id=parseInt(k.slice(k.lastIndexOf(':')+1),10);
+    if(isNaN(id)){ next(); return; }
+    apiPost(SCRIPT_URL,{action:'ledgerSetTags', idemKey:genIdemKey('tagmig'), id:id, tags:data[k]})
+      .then(function(){ okCount++; next(); })
+      .catch(function(){ failed=true; next(); });
+  }
+  next();
 }
 
 var TAG_COLORS=['#2b4fa8','#1e7a48','#a06010','#c0392b','#6a359c','#0e7490','#b45309'];
@@ -3304,10 +3342,10 @@ function refreshRowTags(i){
 var _tagSummaryOpen=true, _activeTagFilter='';
 function renderTagSummary(){
   var panel=$('tag-summary-panel'); if(!panel) return;
-  var tagData=getAllTagData(), tagTotals={};
-  txns.forEach(function(t,i){
+  var tagTotals={};
+  txns.forEach(function(t){
     if(t.id==null) return;
-    (tagData[txnTagKey(curMonthTxn,t.id)]||[]).forEach(function(tag){
+    (t.tags||[]).forEach(function(tag){
       if(!tagTotals[tag]) tagTotals[tag]={total:0,count:0};
       tagTotals[tag].total+=(t.cost||0); tagTotals[tag].count++;
     });

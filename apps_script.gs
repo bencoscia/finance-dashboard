@@ -99,6 +99,7 @@ function dispatch(payload) {
     else if (action === 'ledgerMonthly')   return getLedgerMonthly();
     else if (action === 'ledgerTxns')      return getLedgerTxns(payload.month);
     else if (action === 'ledgerFixed')     return getLedgerFixed(payload.month);
+    else if (action === 'ledgerTags')      return getLedgerTags();
     // Write actions
     else if (action === 'updateTransaction')  { var r = updateTransaction(payload);  if (payload.month) invalidateMonthCache(payload.month); invalidateCardBalanceCache(); return r; }
     else if (action === 'addTransaction')     { var r = _withIdem(payload, function(){ return addTransaction(payload); });     if (payload.month) invalidateMonthCache(payload.month); invalidateCardBalanceCache(); return r; }
@@ -122,14 +123,15 @@ function dispatch(payload) {
     else if (action === 'addHsaReceipt')      return _withIdem(payload, function(){ return addHsaReceipt(payload); });   // invalidates HSA cache internally
     else if (action === 'scanHsaFolder')      return scanHsaFolder(); // idempotent via fileId dedup, not _withIdem
     else if (action === 'updateHsaReceipt')   return _withIdem(payload, function(){ return updateHsaReceipt(payload); }); // invalidates HSA cache internally
-    else if (action === 'ledgerAddTxn')       return _withIdem(payload, function(){ return ledgerAddTxn(payload); }); // invalidates ledger cache internally
-    else if (action === 'ledgerUpdateTxn')    return _withIdem(payload, function(){ return ledgerUpdateTxn(payload); }); // invalidates ledger cache internally
-    else if (action === 'ledgerDeleteTxn')    return _withIdem(payload, function(){ return ledgerDeleteTxn(payload); }); // invalidates ledger cache internally
-    else if (action === 'ledgerSplitTxn')     return _withIdem(payload, function(){ return ledgerSplitTxn(payload); }); // invalidates ledger cache internally
-    else if (action === 'ledgerAddFixed')     return _withIdem(payload, function(){ return ledgerAddFixed(payload); }); // invalidates ledger cache internally
-    else if (action === 'ledgerUpdateFixed')  return _withIdem(payload, function(){ return ledgerUpdateFixed(payload); }); // invalidates ledger cache internally
-    else if (action === 'ledgerSeedFixedMonth') return _withIdem(payload, function(){ return ledgerSeedFixedMonth(payload); }); // invalidates ledger cache internally
-    else if (action === 'ledgerAddIncome')      return _withIdem(payload, function(){ return ledgerAddIncome(payload); }); // invalidates ledger cache internally
+    else if (action === 'ledgerAddTxn')         { var r = _withIdem(payload, function(){ return ledgerAddTxn(payload); });         invalidateCardBalanceCache(); return r; }
+    else if (action === 'ledgerUpdateTxn')      { var r = _withIdem(payload, function(){ return ledgerUpdateTxn(payload); });      invalidateCardBalanceCache(); return r; }
+    else if (action === 'ledgerDeleteTxn')      { var r = _withIdem(payload, function(){ return ledgerDeleteTxn(payload); });      invalidateCardBalanceCache(); return r; }
+    else if (action === 'ledgerSplitTxn')       { var r = _withIdem(payload, function(){ return ledgerSplitTxn(payload); });       invalidateCardBalanceCache(); return r; }
+    else if (action === 'ledgerAddFixed')       { var r = _withIdem(payload, function(){ return ledgerAddFixed(payload); });       invalidateCardBalanceCache(); return r; }
+    else if (action === 'ledgerUpdateFixed')    { var r = _withIdem(payload, function(){ return ledgerUpdateFixed(payload); });    invalidateCardBalanceCache(); return r; }
+    else if (action === 'ledgerSeedFixedMonth') { var r = _withIdem(payload, function(){ return ledgerSeedFixedMonth(payload); }); invalidateCardBalanceCache(); return r; }
+    else if (action === 'ledgerAddIncome')      { var r = _withIdem(payload, function(){ return ledgerAddIncome(payload); });      invalidateCardBalanceCache(); return r; }
+    else if (action === 'ledgerSetTags')        return _withIdem(payload, function(){ return ledgerSetTags(payload); }); // display data; no balance impact
     else return { error: 'Unknown action: ' + action };
   } catch(err) {
     return { error: err.message };
@@ -160,6 +162,7 @@ function doGet(e) {
     else if (action === 'ledgerMonthly')   data = getLedgerMonthly();
     else if (action === 'ledgerTxns')      data = getLedgerTxns(e.parameter.month);
     else if (action === 'ledgerFixed')     data = getLedgerFixed(e.parameter.month);
+    else if (action === 'ledgerTags')      data = getLedgerTags();
     else data = { error: 'Unknown action: ' + action };
   } catch(err) {
     data = { error: err.message };
@@ -205,6 +208,7 @@ function doPost(e) {
     else if (p.action === 'ledgerUpdateFixed')  data = _withIdem(p, function(){ return ledgerUpdateFixed(p); }); // invalidates ledger cache internally
     else if (p.action === 'ledgerSeedFixedMonth') data = _withIdem(p, function(){ return ledgerSeedFixedMonth(p); }); // invalidates ledger cache internally
     else if (p.action === 'ledgerAddIncome')      data = _withIdem(p, function(){ return ledgerAddIncome(p); }); // invalidates ledger cache internally
+    else if (p.action === 'ledgerSetTags')        data = _withIdem(p, function(){ return ledgerSetTags(p); });
     else data = { error: 'Unknown POST action: ' + p.action };
     // Invalidate caches for the affected month and card balances
     if (p.month) invalidateMonthCache(p.month);
@@ -324,7 +328,7 @@ var DAYCARE_FSA_ANNUAL = 24 * 312.50; // $7,500/yr -> $625/mo net benefit
 // This avoids re-scanning every month sheet on every quick refresh.
 
 var CACHE_VERSION      = 'monthly_v3'; // bump when getMonthlyData fields change
-var CARD_CACHE_VERSION = 'cards_v2';   // bump when getCardBalances fields change (v2: due/stmtBalance)
+var CARD_CACHE_VERSION = 'cards_v1';   // bump when getCardBalances fields change
 var CARD_CACHE_KEY     = CARD_CACHE_VERSION + '_balances';
 var CARD_CACHE_TTL     = 300;          // 5 minutes -- short since balances change often
 
@@ -1264,7 +1268,6 @@ var CT_COL_PAYMENT = 5;  // E: last payment amount
 var CT_COL_UTIL    = 6;  // F: utilization %
 var CT_COL_DUE     = 7;  // G: payment due date
 var CT_COL_SEED    = 8;  // H: seed balance at start of tracking period
-var CT_COL_STMT    = 9;  // I: statement balance (hand-entered when statement posts)
 
 var CP_COL_DATE    = 1;  // A: payment date
 var CP_COL_CARD    = 2;  // B: card name
@@ -1328,19 +1331,6 @@ function _appendCardPayment(cardName, dateObj, amount, month) {
   cp.getRange(newRow, CP_COL_MONTH,  1, 1).setNumberFormat('@'); // plain text
 }
 
-// -- CACHE WARMER (optional) ----------------------------------
-// Run on a time-driven trigger (editor > Triggers > Add Trigger >
-// warmCaches > time-driven > every 10 minutes). Keeps CacheService hot so
-// user requests hit cache instead of paying the multi-second recompute --
-// biggest effect on the first open of the day and right after writes.
-// Calls only the same cached getters the dashboard uses; each is isolated
-// so one failure never blocks the others.
-function warmCaches(){
-  try { getCardBalances(); } catch(e) { Logger.log('warmCaches cards: ' + e.message); }
-  try { getNetWorth(); }     catch(e) { Logger.log('warmCaches networth: ' + e.message); }
-  try { getMonthlyData(); }  catch(e) { Logger.log('warmCaches monthly: ' + e.message); }
-}
-
 // -- GET: card balances -- reads flat table from Card Trackers --
 function getCardBalances() {
   // Try cache first (5-minute TTL)
@@ -1380,7 +1370,6 @@ function _computeCardBalances() {
         lastPaymentDate:   lastDate instanceof Date ? lastDate : (lastDate ? new Date(lastDate) : null),
         lastPaymentAmount: typeof ctVals[i][CT_COL_PAYMENT-1] === 'number' ? Math.round(ctVals[i][CT_COL_PAYMENT-1]*100)/100 : null,
         seed:              typeof seed === 'number' ? seed : (parseFloat(seed) || 0),
-        stmtBalance:       typeof ctVals[i][CT_COL_STMT-1] === 'number' ? Math.round(ctVals[i][CT_COL_STMT-1]*100)/100 : null,
       };
     }
   }
@@ -1591,8 +1580,6 @@ function _computeCardBalances() {
       lastDate:    meta.lastPaymentDate
                    ? meta.lastPaymentDate.toISOString().split('T')[0] : null,
       lastPayment: meta.lastPaymentAmount || null,
-      due:         meta.due || def.due || null,
-      stmtBalance: meta.stmtBalance != null ? meta.stmtBalance : null,
     };
   });
 
@@ -2532,7 +2519,7 @@ function logCreditSnapshot(p) {
 
 // -- GET: net worth --------------------------------------------
 var NET_WORTH_SHEET      = 'Net Worth';
-var NW_CACHE_KEY         = 'nw_v4_data';
+var NW_CACHE_KEY         = 'nw_v3_data';
 var NW_CACHE_TTL         = 300; // 5 minutes
 
 function getNetWorth() {
@@ -2680,22 +2667,6 @@ function _computeNetWorth() {
     var loansVals = readSheet(loansSheet);
     if (loansVals.length > 25 && typeof loansVals[25][3] === 'number') studentLoans = loansVals[25][3];
   }
-  // Car loans: Physical Assets!J5 (a sheet formula =SUM(K3:K4) over the per-car
-  // Loan Balance column) -- same derived-cell pattern as the mortgage: the sheet
-  // formula is truth, code reads one cell. Fallback sums K3:K6 directly and logs
-  // loudly; a failed read must not silently book $0 of car debt.
-  var carLoans = 0;
-  if (paSheet) {
-    var paVals3 = readSheet(paSheet);
-    if (paVals3.length > 4 && typeof paVals3[4][9] === 'number') {
-      carLoans = paVals3[4][9];
-    } else {
-      for (var ci = 2; ci <= 5 && ci < paVals3.length; ci++) {
-        if (typeof paVals3[ci][10] === 'number') carLoans += paVals3[ci][10];
-      }
-      Logger.log('netWorth: Physical Assets!J5 not numeric; summed Loan Balance K3:K6 = ' + carLoans);
-    }
-  }
 
   // -- Snapshots from Net Worth sheet --
   var snapshots = [];
@@ -2726,7 +2697,7 @@ function _computeNetWorth() {
 
   // -- Compute current net worth --
   var totalAssets     = investments + cash + physicalAssets;
-  var totalLiabilities= mortgage + studentLoans + carLoans;
+  var totalLiabilities= mortgage + studentLoans;
   var netWorth        = Math.round((totalAssets - totalLiabilities) * 100) / 100;
 
   // -- 529 totals (separable accounts) --
@@ -2791,7 +2762,7 @@ function _computeNetWorth() {
     physicalAssets:  Math.round(physicalAssets * 100) / 100,
     mortgage:        Math.round(mortgage * 100) / 100,
     studentLoans:    Math.round(studentLoans * 100) / 100,
-    carLoans:        Math.round(carLoans * 100) / 100,
+    carLoans:        0, // not tracked in sheet yet
     fivetwonine:     fivetwonine,
     liquid:          Math.round(liquid * 100) / 100,
     totalAssets:     Math.round(totalAssets * 100) / 100,
@@ -2802,7 +2773,7 @@ function _computeNetWorth() {
     snapshots:       snapshots,
     projections:     projections,
     snapshotExists:  !!nwSheet,
-    codeVersion:     'nw-2026-07-07-car-loans',
+    codeVersion:     'nw-2026-06-16-mortgage-ledger',
   };
 }
 
