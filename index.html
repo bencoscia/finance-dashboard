@@ -623,7 +623,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .tag-summary-count{font-family:var(--mono);font-size:11px;color:var(--faint)}
 .tag-summary-amt{font-family:var(--mono);font-size:12px;font-weight:500;color:var(--text)}
 
-.split-modal{max-width:760px!important;max-height:90vh;overflow-y:auto;margin:auto}
+.split-modal{max-width:920px!important;max-height:90vh;overflow-y:auto;margin:auto}
 .split-original{background:var(--surface2);border-radius:var(--r);padding:10px 14px;margin-bottom:12px;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:12px}
 .split-original-desc{font-weight:500;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .split-original-amt{font-family:var(--mono);font-size:13px;font-weight:500;white-space:nowrap}
@@ -632,11 +632,30 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .split-tax-input{font-family:var(--mono);font-size:12px;padding:4px 7px;border:1px solid var(--blue-bd);border-radius:5px;background:var(--surface);color:var(--text);outline:none;width:70px;text-align:right}
 .split-tax-input:focus{border-color:var(--blue-lt)}
 .split-tax-hint{font-size:11px;color:var(--muted);margin-left:auto}
-.split-row-header{display:grid;grid-template-columns:1fr 82px 32px 78px 96px 100px 28px 28px 28px 28px 24px;gap:5px;margin-bottom:4px}
+.split-row-header{display:grid;grid-template-columns:minmax(150px,1fr) 82px 32px 78px 88px 96px 28px 28px 28px 28px 24px;gap:5px;margin-bottom:4px}
 .split-col-label{font-family:var(--mono);font-size:9px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em;text-align:center;padding:0 2px}
 .split-col-label:first-child{text-align:left}
 .split-rows{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
-.split-row{display:grid;grid-template-columns:1fr 82px 32px 78px 96px 100px 28px 28px 28px 28px 24px;gap:5px;align-items:center}
+.split-row{display:grid;grid-template-columns:minmax(150px,1fr) 82px 32px 78px 88px 96px 28px 28px 28px 28px 24px;gap:5px;align-items:center}
+.split-ck-lbl{display:flex;align-items:center;justify-content:center;gap:4px;font-family:var(--mono);font-size:10px;color:var(--muted)}
+.split-ck-lbl .ck-letter{display:none}
+@media (max-width:768px){
+  .split-modal{max-width:100vw!important;padding:14px 10px}
+  .split-row-header{display:none}
+  .split-row{grid-template-columns:repeat(12,1fr);row-gap:7px;padding:9px 0;border-bottom:1px solid var(--border)}
+  .split-row [data-field=desc]{grid-column:1/9;grid-row:1}
+  .split-row .split-computed{grid-column:9/13;grid-row:1}
+  .split-row [data-field=price]{grid-column:1/4}
+  .split-row .lbl-tax{grid-column:4/5}
+  .split-row .split-pm-sel{grid-column:5/9}
+  .split-row .split-var-sel{grid-column:9/13}
+  .split-row .lbl-disc{grid-column:1/4;justify-content:flex-start}
+  .split-row .lbl-ben{grid-column:4/7;justify-content:flex-start}
+  .split-row .lbl-jenna{grid-column:7/10;justify-content:flex-start}
+  .split-row .ia-sum-btn{grid-column:11/12}
+  .split-row .split-del{grid-column:12/13}
+  .split-ck-lbl .ck-letter{display:inline}
+}
 .split-row input[type=text],.split-row input[type=number],.split-pm-sel{font-family:var(--mono);font-size:12px;padding:5px 7px;border:1px solid var(--border2);border-radius:6px;background:var(--surface2);color:var(--text);outline:none;width:100%}
 .split-row input:focus,.split-pm-sel:focus{border-color:var(--blue-lt)}
 .split-row input[type=number]{text-align:right}
@@ -1118,7 +1137,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
       <span class="split-col-label" title="Apply tax rate">Tax?</span>
       <span class="split-col-label">Final $</span>
       <span class="split-col-label">Payment</span>
-      <span class="split-col-label" title="Route to variable expense tracker">→ Var</span>
+      <span class="split-col-label" title="Route to variable tracker, or create an HSA needs-review draft">→ Route</span>
       <span class="split-col-label" title="Discretionary">Disc</span>
       <span class="split-col-label">Ben</span>
       <span class="split-col-label">Jenna</span>
@@ -4481,18 +4500,18 @@ function addSplitRow(desc, price, taxed, pm, disc, ben, jenna){
   row.innerHTML =
     '<input type="text"   data-field="desc"  value="'+esc(desc||'')+'"  placeholder="Description">'+
     '<input type="number" data-field="price" value="'+(price||'')+'"  step="0.01" placeholder="0.00">'+
-    '<input type="checkbox" class="split-ck" data-field="taxed" '+(taxed?'checked':'')+
-      ' title="Apply tax">'+
+    '<label class="split-ck-lbl lbl-tax" title="Apply tax"><input type="checkbox" class="split-ck" data-field="taxed" '+(taxed?'checked':'')+'><span class="ck-letter">Tax</span></label>'+
     '<div class="split-computed '+(taxed?'taxed':'plain')+'" id="split-fin-'+id+'">'+fmt(fin,2)+'</div>'+
     pmSelect('split-pm-'+id, pm||'', 'split-pm-sel', 'pm')+
     '<select class="split-var-sel" data-field="varroute" id="split-var-'+id+'">'+
       '<option value="">— txn —</option>'+
       '<option value="groceries">→ Groceries</option>'+
       '<option value="gas">→ Gas</option>'+
+      '<option value="hsa">→ HSA draft</option>'+
     '</select>'+
-    '<input type="checkbox" class="split-ck" data-field="disc"  '+(disc? 'checked':'')+' title="Discretionary">'+
-    '<input type="checkbox" class="split-ck" data-field="ben"   '+(ben?  'checked':'')+' title="Ben">'+
-    '<input type="checkbox" class="split-ck" data-field="jenna" '+(jenna?'checked':'')+' title="Jenna">'+
+    '<label class="split-ck-lbl lbl-disc" title="Discretionary"><input type="checkbox" class="split-ck" data-field="disc"  '+(disc? 'checked':'')+'><span class="ck-letter">Disc</span></label>'+
+    '<label class="split-ck-lbl lbl-ben" title="Ben"><input type="checkbox" class="split-ck" data-field="ben"   '+(ben?  'checked':'')+'><span class="ck-letter">Ben</span></label>'+
+    '<label class="split-ck-lbl lbl-jenna" title="Jenna"><input type="checkbox" class="split-ck" data-field="jenna" '+(jenna?'checked':'')+'><span class="ck-letter">Jenna</span></label>'+
     '<button class="ia-sum-btn" data-action="toggleItemAdder" data-args="'+id+'" title="Item calculator">∑</button>'+
     '<button class="split-del" data-action="removeSplitRow" data-args="'+id+'" title="Remove">×</button>';
 
@@ -4679,7 +4698,7 @@ function getSplitRows(){
       discretionary: row.querySelector('[data-field="disc"]').checked,
       ben:           row.querySelector('[data-field="ben"]').checked,
       jenna:         row.querySelector('[data-field="jenna"]').checked,
-      varRoute:      varRoute,   // '' | 'groceries' | 'gas'
+      varRoute:      varRoute,   // '' | 'groceries' | 'gas' | 'hsa'
     };
   });
 }
@@ -4746,17 +4765,20 @@ async function submitSplit(){
   // Every line is a split part; var-routed lines are parts with a category.
   // Grocery/gas parts vanish from the txn list (they live in the trackers)
   // but the split stays ONE atomic server call that conserves the amount.
-  var varLines = lines.filter(function(l){ return l.varRoute; });
-  var txnLines = lines.filter(function(l){ return !l.varRoute; });
+  function isVar(l){ return l.varRoute==='groceries' || l.varRoute==='gas'; }
+  var varLines = lines.filter(isVar);
+  var txnLines = lines.filter(function(l){ return !isVar(l); }); // hsa-routed lines remain txns
+  var hsaLines = lines.filter(function(l){ return l.varRoute==='hsa'; });
   function asPart(l){
+    var vc = isVar(l) ? l.varRoute : '';
     return {
-      description: l.varRoute === 'gas' ? (l.description || 'Gas') : l.description,
+      description: vc === 'gas' ? (l.description || 'Gas') : l.description,
       amount: l.cost,
       method: l.paymentMethod || t.paymentMethod,
-      category: l.varRoute || (t.category === 'transfer' ? 'transfer' : 'onetime'),
-      discretionary: l.varRoute ? false : l.discretionary,
-      ben:   l.varRoute ? true  : l.ben,
-      jenna: l.varRoute ? true  : l.jenna,
+      category: vc || (t.category === 'transfer' ? 'transfer' : 'onetime'),
+      discretionary: vc ? false : l.discretionary,
+      ben:   vc ? true  : l.ben,
+      jenna: vc ? true  : l.jenna,
     };
   }
   var parts = lines.map(asPart);
@@ -4788,6 +4810,23 @@ async function submitSplit(){
           }, parts[i]));
         }
       }
+      // HSA-routed lines: the txn parts are already saved above; each also
+      // gets a needs-review draft on the HSA tab. Per-line failures are
+      // reported honestly (the split itself succeeded).
+      var hsaFailed = 0;
+      for(var hi = 0; hi < hsaLines.length; hi++){
+        try {
+          await apiPost(SCRIPT_URL,{action:'addHsaReceipt', idemKey:genIdemKey('hsaAdd'),
+            needsReview:true, dateIncurred:t.date, amount:Math.abs(hsaLines[hi].cost),
+            provider:'', description:hsaLines[hi].description, category:'',
+            funding:'OOP', receiptLink:''});
+        } catch(hsaErr){ hsaFailed++; }
+      }
+      if(hsaLines.length && hsaFailed){
+        showBanner('Split saved, but '+hsaFailed+' HSA draft'+(hsaFailed>1?'s':'')+' failed — add from the HSA tab.','err');
+      } else if(hsaLines.length){
+        loadHsa(true);
+      }
     }
     // Update local txns[] — remove source, insert only transaction lines (not var-routed)
     var insertAt = splitSourceIdx;
@@ -4804,6 +4843,7 @@ async function submitSplit(){
     hideSplitModal();
     var msg = txnLines.length > 0 ? 'Split into '+txnLines.length+' transaction'+(txnLines.length>1?'s':'') : 'Transaction removed';
     if(varLines.length) msg += ' · '+varLines.length+' line'+(varLines.length>1?'s':'')+' → variable tracker';
+    if(hsaLines.length) msg += ' · '+hsaLines.length+' HSA draft'+(hsaLines.length>1?'s':'');
     showBanner(msg, 'ok');
     if(!isDemo && SCRIPT_URL){
       await loadTxns(curMonthTxn, true);
