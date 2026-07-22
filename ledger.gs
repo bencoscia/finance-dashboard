@@ -520,7 +520,64 @@ function ledgerSeedFixedMonth(p) {
     SpreadsheetApp.flush();
     invalidateLedgerCache();
     invalidateSheet(LEDGER_FIXED);
-    return { ok: true, month: mk, seededFrom: srcMonth, count: newRows.length };
+    var result = { ok: true, month: mk, seededFrom: srcMonth, count: newRows.length };
+    // Best-effort: quarterly items (Water, etc.) don't exist in most prior
+    // months to copy forward, so seeding alone can't carry them. Never let a
+    // failure here mask the seed that already succeeded.
+    try {
+      var q = ledgerEnsureQuarterly({ month: mk });
+      if (q.ok && q.added.length) result.quarterlyAdded = q.added;
+    } catch (e) {}
+    return result;
+  });
+}
+
+// -- WRITE: ledgerEnsureQuarterly --------------------------------------------
+// Quarterly-cadence bills (Water, etc. -- Config key 'quarterly_expenses',
+// format 'Water:1,4,7,10; Sewer:2,5,8,11') don't fit "copy last month's rows
+// forward": a due month's bill doesn't exist in the prior (non-due) month to
+// copy, so it silently never reappears. This adds any item due THIS month
+// that isn't already present, defaulting amount/source to its most recent
+// historical occurrence (edit once the real invoice arrives). Idempotent --
+// safe to call every time the Recurring tab loads a month, not just once.
+function ledgerEnsureQuarterly(p) {
+  var mk = _lmonth(p.month);
+  if (!mk) return { error: 'ledgerEnsureQuarterly needs month=YYYY-MM.' };
+  var monthNum = parseInt(mk.slice(5, 7), 10);
+  var due = (cfg().quarterlyExpenses || []).filter(function (q) {
+    return q.months.indexOf(monthNum) >= 0;
+  });
+  if (!due.length) return { ok: true, added: [] };
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(LEDGER_FIXED);
+  if (!sheet) return { error: 'Sheet not found: ' + LEDGER_FIXED };
+
+  return _ledgerWithLock(function () {
+    invalidateSheet(LEDGER_FIXED);
+    var values = readSheet(sheet);
+    var added = [];
+    for (var d = 0; d < due.length; d++) {
+      var name = due[d].name;
+      var exists = false, lastAmt = null, lastSrc = '', lastMonth = '';
+      for (var i = 1; i < values.length; i++) {
+        if (String(values[i][2] || '').trim() !== name) continue;
+        var rmk = _lmonth(values[i][1]);
+        if (rmk === mk) { exists = true; break; }
+        if (rmk && rmk < mk && rmk > lastMonth) {
+          lastMonth = rmk; lastAmt = _ln(values[i][4]); lastSrc = String(values[i][3] || '').trim();
+        }
+      }
+      if (exists) continue;
+      var newId = _ledgerNextId(values);
+      var newRow = [newId, mk, name, lastSrc, lastAmt !== null ? lastAmt : 0, false, ''];
+      var r = Math.max(sheet.getLastRow() + 1, 2);
+      sheet.getRange(r, 1, 1, 7).setValues([newRow]);
+      values.push(newRow); // keep _ledgerNextId correct across loop iterations
+      added.push({ id: newId, name: name, amount: lastAmt, source: lastSrc, fromHistory: lastMonth || null });
+    }
+    if (added.length) { SpreadsheetApp.flush(); invalidateLedgerCache(); invalidateSheet(LEDGER_FIXED); }
+    return { ok: true, month: mk, added: added };
   });
 }
 
@@ -1092,6 +1149,18 @@ function testLedger() {
     gf = getLedgerFixed('2026-07');
     ok(gf.fixed.length === 2 && gf.fixed[0].paid === false && gf.fixed[0].paid_date === '', 'seeded rows are unpaid');
     ok(!!ledgerSeedFixedMonth({ month: '2026-07' }).error, 'double-seed refused');
+
+    // Quarterly ensure: a Water bill from 4 months back should surface again
+    // in a due month, even though it was absent from every month in between.
+    ledgerAddFixed({ month: '2026-04', name: 'Water', source: 'Checking', amount: 88.40, paid: true, paid_date: '2026-04-15' });
+    var eq1 = ledgerEnsureQuarterly({ month: '2026-05' }); // not due (May)
+    ok(eq1.ok && eq1.added.length === 0, 'quarterly ensure no-ops on a non-due month');
+    var eq2 = ledgerEnsureQuarterly({ month: '2026-07' }); // due (Jan/Apr/Jul/Oct)
+    ok(eq2.ok && eq2.added.length === 1 && eq2.added[0].name === 'Water' && near(eq2.added[0].amount, 88.40),
+       'quarterly ensure adds Water in a due month, defaulted from last occurrence: ' + JSON.stringify(eq2));
+    ok(getLedgerFixed('2026-07').fixed.some(function(f){return f.name==='Water' && !f.paid;}), 'Water lands unpaid, ready to edit');
+    var eq3 = ledgerEnsureQuarterly({ month: '2026-07' });
+    ok(eq3.ok && eq3.added.length === 0, 'quarterly ensure is idempotent -- no duplicate on a second call');
   } finally {
     LEDGER_FIXED = realF;
     invalidateSheet('_TestScratchLedger_');

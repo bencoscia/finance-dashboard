@@ -4157,10 +4157,28 @@ async function loadFixed(month, silent){
     varEntries = results[1];
     renderFixedTab();
     hideBanner();
+    ensureQuarterlyFor(month); // background self-heal; re-renders only if something appeared
   } catch(e){
     $('fx-content').innerHTML='<div class="tbl-empty">Error: '+esc(e.message)+'</div>';
     showBanner('Failed: '+e.message,'err');
   }
+}
+
+// Quarterly-cadence bills (Water, etc.) don't get copied forward by normal
+// month seeding, since they're absent from most prior months. This checks
+// the just-loaded month and adds anything due that's missing (server call
+// is idempotent -- safe every time this tab loads a month, not just once).
+function ensureQuarterlyFor(month){
+  if(isDemo || !SCRIPT_URL) return;
+  apiPost(SCRIPT_URL,{action:'ledgerEnsureQuarterly', idemKey:genIdemKey('qtr'), month:mkey(month)})
+    .then(function(r){
+      if(r && r.added && r.added.length && curMonthFx===month){
+        var names = r.added.map(function(a){return a.name;}).join(', ');
+        showBanner(names+' added to Recurring — enter the actual amount when the bill arrives','ok');
+        loadFixed(month, true);
+      }
+    })
+    .catch(function(){ /* silent -- non-critical background check */ });
 }
 
 function renderFixedTab(){

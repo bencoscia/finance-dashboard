@@ -130,6 +130,7 @@ function dispatch(payload) {
     else if (action === 'ledgerAddFixed')       { var r = _withIdem(payload, function(){ return ledgerAddFixed(payload); });       invalidateCardBalanceCache(); return r; }
     else if (action === 'ledgerUpdateFixed')    { var r = _withIdem(payload, function(){ return ledgerUpdateFixed(payload); });    invalidateCardBalanceCache(); return r; }
     else if (action === 'ledgerSeedFixedMonth') { var r = _withIdem(payload, function(){ return ledgerSeedFixedMonth(payload); }); invalidateCardBalanceCache(); return r; }
+    else if (action === 'ledgerEnsureQuarterly') return _withIdem(payload, function(){ return ledgerEnsureQuarterly(payload); }); // no balance impact: rows land unpaid
     else if (action === 'ledgerAddIncome')      { var r = _withIdem(payload, function(){ return ledgerAddIncome(payload); });      invalidateCardBalanceCache(); return r; }
     else if (action === 'ledgerSetTags')        return _withIdem(payload, function(){ return ledgerSetTags(payload); }); // display data; no balance impact
     else return { error: 'Unknown action: ' + action };
@@ -207,6 +208,7 @@ function doPost(e) {
     else if (p.action === 'ledgerAddFixed')     data = _withIdem(p, function(){ return ledgerAddFixed(p); }); // invalidates ledger cache internally
     else if (p.action === 'ledgerUpdateFixed')  data = _withIdem(p, function(){ return ledgerUpdateFixed(p); }); // invalidates ledger cache internally
     else if (p.action === 'ledgerSeedFixedMonth') data = _withIdem(p, function(){ return ledgerSeedFixedMonth(p); }); // invalidates ledger cache internally
+    else if (p.action === 'ledgerEnsureQuarterly') data = _withIdem(p, function(){ return ledgerEnsureQuarterly(p); });
     else if (p.action === 'ledgerAddIncome')      data = _withIdem(p, function(){ return ledgerAddIncome(p); }); // invalidates ledger cache internally
     else if (p.action === 'ledgerSetTags')        data = _withIdem(p, function(){ return ledgerSetTags(p); });
     else data = { error: 'Unknown POST action: ' + p.action };
