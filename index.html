@@ -3172,15 +3172,17 @@ async function refreshCardBalances(){
 async function quickRefresh(){
   if(!SCRIPT_URL || isDemo) return;
   try {
+    // NOTE: action=quick's response has never included cardBalances (checked
+    // 2026-07 while chasing a stale-checking-balance report) -- fetch it
+    // directly so quickRefresh is a real refresh on its own, and no future
+    // call site can reintroduce this by forgetting refreshCardBalances().
     var data = await apiFetch(SCRIPT_URL, 'quick');
-    if(data.cardBalances){
-      allData.cardBalances = data.cardBalances;
-      if(data.cardBalances.checkingBalance != null)
-        allData.cardBalances.checkingBalance = data.cardBalances.checkingBalance;
-    }
     if(data.updated) $('ts').textContent = 'updated '+new Date(data.updated).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    var fresh = await apiFetch(SCRIPT_URL, 'cardBalances');
+    if(fresh) allData.cardBalances = fresh;
     loadAccounts();
     renderCardStrip(); // refresh strip on transactions tab too
+    twCards(); twChecking();
   } catch(e){ /* silent fail — not critical */ }
 }
 // ── TAGS ─────────────────────────────────────────────────────
@@ -4939,7 +4941,7 @@ async function submitChkEntry(){
       (amount>=0?'Deposit':'Withdrawal')+' of '+fmt(Math.abs(amount),2)+' recorded in '+month,
       'ok'
     );
-    quickRefresh();
+    quickRefresh(); refreshCardBalances();
   } catch(e){
     $('chk-modal-err').textContent  = 'Failed: ' + e.message;
     $('chk-submit-btn').disabled    = false;
