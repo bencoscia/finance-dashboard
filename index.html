@@ -1175,6 +1175,12 @@ tr:hover .racts,tr.editing .racts{opacity:1}
       <label>Date</label>
       <input type="date" id="chk-date">
     </div>
+    <div class="pay-field" id="chk-transfer-row" style="display:none">
+      <label style="display:flex;align-items:center;gap:7px;font-weight:400">
+        <input type="checkbox" id="chk-is-transfer">
+        Transfer from another account (not income — e.g. savings to checking)
+      </label>
+    </div>
     <div class="pay-field">
       <label>Apply to month</label>
       <select id="chk-month" class="msel" style="width:100%"></select>
@@ -2043,9 +2049,9 @@ function qaRenderFields(){
       '<label><input type="checkbox" id="qa-fx-paid"> Already paid this month</label></div>';
   } else if(qaType==='checking'){
     f.innerHTML=
-      field('Type','<select id="qa-chk-type" class="msel" style="width:100%"><option value="deposit">Deposit / paycheck</option><option value="withdrawal">Withdrawal</option></select>')+
+      field('Type','<select id="qa-chk-type" class="msel" style="width:100%"><option value="deposit">Deposit / paycheck</option><option value="transfer_in">Transfer in (from savings, etc.)</option><option value="withdrawal">Withdrawal</option></select>')+
       field('Date','<input type="date" id="qa-date" value="'+today+'">')+
-      field('Description','<input type="text" id="qa-desc" value="Paycheck">')+
+      field('Description','<input type="text" id="qa-desc" placeholder="e.g. Paycheck, or Transfer from savings">')+
       field('Amount ($)','<input type="number" id="qa-amt" step="0.01" placeholder="0.00">');
   } else if(qaType==='hsa'){
     f.innerHTML=
@@ -2135,13 +2141,21 @@ async function submitQuickAdd(){
       loadFixed(month, true);          // refresh the Recurring tab list
       refreshCardBalances();           // a paid card-source row changes that card's balance
     } else if(qaType==='checking'){
-      var isDep=$('qa-chk-type').value==='deposit';
-      // Deposits/paychecks are income; withdrawals are transfer txns from
-      // checking (the old system stored them as negative income rows).
-      if(isDep){
+      var chkType=$('qa-chk-type').value;
+      // Paychecks are income. Transfers between your own accounts are
+      // neither income nor an expense: category 'transfer' + a Checking-
+      // method row excludes both directions from income/expense totals
+      // while still moving the checking balance (which does balance -= amount
+      // for every Checking row, so a NEGATIVE amount credits checking).
+      if(chkType==='deposit'){
         await apiPost(SCRIPT_URL,{action:'ledgerAddIncome', idemKey:genIdemKey('chk'), month:mkey(month),
           source:$('qa-desc').value.trim()||'Paycheck',
           amount:Math.abs(amt), date:$('qa-date').value});
+      } else if(chkType==='transfer_in'){
+        await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('chk'), month:mkey(month),
+          description:$('qa-desc').value.trim()||'Transfer in', category:'transfer',
+          method:'Checking', amount:-Math.abs(amt), date:$('qa-date').value,
+          discretionary:false, ben:false, jenna:false});
       } else {
         await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('chk'), month:mkey(month),
           description:$('qa-desc').value.trim()||'Withdrawal', category:'transfer',
@@ -4874,6 +4888,11 @@ function showChkModal(type){
   $('chk-amount').value  = '';
   $('chk-amount').min    = isDeposit ? '0.01' : undefined;
   $('chk-date').value    = localToday();
+  // The transfer checkbox only matters on the deposit side: a withdrawal
+  // already records as a transfer-category txn (money leaving checking),
+  // symmetric to what this checkbox does for money arriving.
+  $('chk-transfer-row').style.display = isDeposit ? '' : 'none';
+  $('chk-is-transfer').checked = false;
   $('chk-submit-btn').disabled     = false;
   $('chk-submit-btn').textContent  = 'Record entry';
 
@@ -4920,8 +4939,20 @@ async function submitChkEntry(){
     return;
   }
 
+  var isTransferIn = amount >= 0 && $('chk-is-transfer').checked;
   try {
-    if(amount >= 0){
+    if(isTransferIn){
+      // Money arriving from another of your own accounts: not income, not an
+      // expense. category:'transfer' + a NEGATIVE checking-method amount is
+      // what excludes it from both totals while still crediting checking
+      // (ledgerCheckingBalance does balance -= amount for every Checking row).
+      await apiPost(SCRIPT_URL, {
+        action:  'ledgerAddTxn', idemKey: genIdemKey('chk'),
+        month:   mkey(month), description: desc || 'Transfer in',
+        category:'transfer', method: 'Checking', amount: -Math.abs(amount),
+        date:    date, discretionary: false, ben: false, jenna: false
+      });
+    } else if(amount >= 0){
       await apiPost(SCRIPT_URL, {
         action:  'ledgerAddIncome', idemKey: genIdemKey('chk'),
         month:   mkey(month), source: desc, amount: amount, date: date
@@ -4938,7 +4969,7 @@ async function submitChkEntry(){
     }
     hideChkModal();
     showBanner(
-      (amount>=0?'Deposit':'Withdrawal')+' of '+fmt(Math.abs(amount),2)+' recorded in '+month,
+      (isTransferIn?'Transfer':amount>=0?'Deposit':'Withdrawal')+' of '+fmt(Math.abs(amount),2)+' recorded in '+month,
       'ok'
     );
     quickRefresh(); refreshCardBalances();
