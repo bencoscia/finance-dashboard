@@ -610,6 +610,11 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .tag-picker-new input:focus{border-color:var(--blue-lt)}
 .tag-picker-new button{font-family:var(--mono);font-size:11px;padding:4px 9px;background:var(--blue);color:#fff;border:none;border-radius:6px;cursor:pointer;white-space:nowrap}
 .tag-picker-new button:hover{opacity:.85}
+.qa-tags-chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px}
+.qa-tags-chips:empty{margin-bottom:0}
+.qa-tag-chip{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;padding:3px 5px 3px 9px;border-radius:10px;color:#fff;white-space:nowrap}
+.qa-tag-chip .x{cursor:pointer;opacity:.8;font-size:13px;line-height:1;padding:0 2px}
+.qa-tag-chip .x:hover{opacity:1}
 /* tag summary panel */
 .tag-summary{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);overflow:hidden;margin-bottom:14px;box-shadow:var(--shadow)}
 .tag-summary-head{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:var(--surface2);border-bottom:1px solid var(--border);cursor:pointer;user-select:none}
@@ -1427,6 +1432,7 @@ function initEventListeners(){
     'qaSetType':          qaSetType,
     'submitQuickAddSplit': submitQuickAddSplit,
     'qaAddFromDrawer':    qaAddFromDrawer,
+    'qaRemoveStagedTag':  function(e){ var el=e.target.closest('[data-args]'); if(el) qaRemoveStagedTag(el.dataset.args); },
     'gotoAccounts':       gotoAccounts,
     'gotoNetWorth':       gotoNetWorth,
     'loadSaved':          loadSaved,
@@ -1977,9 +1983,12 @@ function gotoNetWorth(){ var b=document.querySelector('.tab-btn[data-tab="networ
 // ── QUICK ADD ─────────────────────────────────────────────────
 var qaType='txn';
 
+var qaStagedTags = [];
+
 function showQuickAdd(e){
   var el = e && e.target && e.target.closest ? e.target.closest('[data-action]') : null;
   qaType = (el && el.dataset.qaType) || 'txn';
+  qaStagedTags = [];
   qaRenderSeg(); qaRenderFields();
   $('qa-err').textContent='';
   $('qa-modal-backdrop').style.display='flex';
@@ -2007,7 +2016,7 @@ async function submitQuickAddSplit(){
 
 function qaSetType(e){
   var el=e.target.closest('[data-qa-type]'); if(!el) return;
-  qaType=el.dataset.qaType; qaRenderSeg(); qaRenderFields();
+  qaType=el.dataset.qaType; qaStagedTags=[]; qaRenderSeg(); qaRenderFields();
 }
 function qaRenderSeg(){
   document.querySelectorAll('.qa-seg-btn').forEach(function(b){
@@ -2033,7 +2042,13 @@ function qaRenderFields(){
       '<label><input type="checkbox" id="qa-ben" checked> Ben</label>'+
       '<label><input type="checkbox" id="qa-jenna" checked> Jenna</label></div>'+
       '<div class="qa-check-row">'+
-      '<label><input type="checkbox" id="qa-hsa-flag"> HSA-eligible (creates a needs-review draft on the HSA tab)</label></div>';
+      '<label><input type="checkbox" id="qa-hsa-flag"> HSA-eligible (creates a needs-review draft on the HSA tab)</label></div>'+
+      field('Tags','<div class="qa-tags-chips" id="qa-tags-chips"></div>'+
+        '<input type="text" id="qa-tag-input" list="qa-tag-suggest" placeholder="Type a tag, press Enter">'+
+        '<datalist id="qa-tag-suggest">'+Object.keys(getAllKnownTags()).sort().map(function(t){return '<option value="'+esc(t)+'">';}).join('')+'</datalist>');
+    renderQaTagChips();
+    var tagInp = $('qa-tag-input');
+    if(tagInp) tagInp.onkeydown = qaTagInputKeydown;
   } else if(qaType==='groceries'||qaType==='gas'){
     f.innerHTML=
       field('Date','<input type="date" id="qa-date" value="'+today+'">')+
@@ -2113,6 +2128,19 @@ async function submitQuickAdd(){
           loadHsa(true);
         } catch(hsaErr){
           showBanner('Transaction saved, but the HSA draft failed: '+hsaErr.message+' — add it from the HSA tab.','err');
+        }
+      }
+      // Staged tags: same pattern as the HSA draft above -- a second write
+      // after the txn has an id, since tags attach to a row that didn't
+      // exist a moment ago. Honest partial failure: the txn is already saved
+      // either way.
+      if(qaStagedTags.length && txnResult && txnResult.id != null){
+        try {
+          await apiPost(SCRIPT_URL,{action:'ledgerSetTags', idemKey:genIdemKey('tag'),
+            id:txnResult.id, tags:qaStagedTags});
+          if(_knownTagCounts) qaStagedTags.forEach(function(t){ if(!_knownTagCounts[t]) _knownTagCounts[t]=1; });
+        } catch(tagErr){
+          showBanner('Transaction saved, but tags failed to save: '+tagErr.message+' — add them from the transaction list.','err');
         }
       }
       // If the card drawer is open on this card, refresh it so the new txn appears
@@ -3853,6 +3881,34 @@ function cancelAdd(){ txns.shift(); renderTxnTable(); }
 // ── CARD TRANSACTION DRAWER ──────────────────────────────────
 var _drawerTxns = [];   // all transactions for current card
 var _drawerPm   = '';
+
+// Staged tags for Quick Add's txn form -- committed to the sheet only after
+// the transaction itself is saved (mirrors the HSA-eligible checkbox: tags
+// have nowhere to attach until the row has an id).
+function renderQaTagChips(){
+  var el=$('qa-tags-chips'); if(!el) return;
+  el.innerHTML = qaStagedTags.map(function(tag){
+    return '<span class="qa-tag-chip" style="background:'+getTagColor(tag)+'">'+esc(tag)+
+      '<span class="x" data-action="qaRemoveStagedTag" data-args="'+esc(tag)+'">×</span></span>';
+  }).join('');
+}
+function qaAddStagedTag(raw){
+  var tag=(raw||'').trim().toLowerCase();
+  if(!tag) return;
+  if(qaStagedTags.indexOf(tag)<0) qaStagedTags.push(tag);
+  var inp=$('qa-tag-input'); if(inp) inp.value='';
+  renderQaTagChips();
+}
+function qaRemoveStagedTag(tag){
+  qaStagedTags = qaStagedTags.filter(function(t){ return t!==tag; });
+  renderQaTagChips();
+}
+function qaTagInputKeydown(ev){
+  if(ev.key==='Enter' || ev.key===','){
+    ev.preventDefault();
+    qaAddStagedTag(ev.target.value);
+  }
+}
 
 function qaAddFromDrawer(){
   if(typeof _drawerPm==='undefined' || !_drawerPm) return;

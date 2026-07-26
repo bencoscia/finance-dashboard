@@ -845,7 +845,7 @@ function ledgerGetVariableEntries(monthName) {
 // The chain is anchored by two Config keys set once at cutover (sheet-level):
 //   checking_seed        -- the balance at the start of checking_seed_month
 //   checking_seed_month  -- YYYY-MM; months before it live in the frozen sheets
-function ledgerCheckingBalance() {
+function _ledgerCheckingSeed() {
   var seed = null, seedMonth = '';
   var conf = readSheet('Config') || [[]];
   for (var i = 0; i < conf.length; i++) {
@@ -853,17 +853,29 @@ function ledgerCheckingBalance() {
     if (k === 'checking_seed') seed = _ln(conf[i][1]);
     if (k === 'checking_seed_month') seedMonth = _lmonth(conf[i][1]);
   }
-  if (seed === null || !seedMonth)
-    return { error: 'Set Config keys checking_seed and checking_seed_month (YYYY-MM) to enable the ledger checking balance.' };
+  return { seed: seed, seedMonth: seedMonth };
+}
 
-  var bal = seed, mk;
+// Every event that ever moves the checking balance, as balance-CHANGE amounts
+// (positive = credit, negative = debit) -- one place, so the metric strip
+// (ledgerCheckingBalance) and the register (getLedgerCheckingHistory) are
+// built from identical data and can never disagree.
+function _ledgerCheckingEvents(seedMonth) {
+  var events = [], i, mk;
   var txnRows = readSheet(LEDGER_TXNS) || [[]];
   for (i = 1; i < txnRows.length; i++) {
     mk = _lmonth(txnRows[i][2]) || _lmonth(txnRows[i][1]);
     if (!mk || mk < seedMonth) continue;
     if (String(txnRows[i][5]) !== 'Checking') continue;
     var amt = _ln(txnRows[i][4]);
-    if (amt !== null) bal -= amt;
+    if (amt === null) continue;
+    var cat = String(txnRows[i][6] || '');
+    events.push({
+      date: _ldate(txnRows[i][1]) || (mk + '-01'),
+      amount: -amt,
+      description: String(txnRows[i][3] || '') || (cat === 'gas' ? 'Gas' : 'Transaction'),
+      source: cat === 'transfer' ? 'transfer' : 'txn'
+    });
   }
   var fixedRows = readSheet(LEDGER_FIXED) || [[]];
   for (i = 1; i < fixedRows.length; i++) {
@@ -872,23 +884,78 @@ function ledgerCheckingBalance() {
     if (String(fixedRows[i][3] || '').trim() !== 'Checking') continue;
     if (!_lb(fixedRows[i][5])) continue;
     var famt = _ln(fixedRows[i][4]);
-    if (famt !== null) bal -= famt;
+    if (famt === null) continue;
+    events.push({
+      date: _ldate(fixedRows[i][6]) || (mk + '-01'),
+      amount: -famt,
+      description: String(fixedRows[i][2] || '') + ' (recurring)',
+      source: 'fixed'
+    });
   }
   var incRows = readSheet(LEDGER_INCOME) || [[]];
   for (i = 1; i < incRows.length; i++) {
     mk = _lmonth(incRows[i][1]) || _lmonth(incRows[i][2]);
     if (!mk || mk < seedMonth) continue;
     var iamt = _ln(incRows[i][4]);
-    if (iamt !== null) bal += iamt;
+    if (iamt === null) continue;
+    events.push({
+      date: _ldate(incRows[i][2]) || (mk + '-01'),
+      amount: iamt,
+      description: String(incRows[i][3] || 'Income'),
+      source: 'income'
+    });
   }
   var cpRows = readSheet('Card Payments') || [[]];
   for (i = 0; i < cpRows.length; i++) {
     var cpmk = _ledgerMonthKey(String(cpRows[i][3] || ''));
     if (!cpmk || cpmk < seedMonth) continue;
     var pamt = _ln(cpRows[i][2]);
-    if (pamt !== null) bal += pamt; // payments stored negative
+    if (pamt === null) continue;
+    events.push({
+      date: cpmk + '-01', // Card Payments has no per-payment date, only month
+      amount: pamt,        // stored negative; adding it is the correct sign
+      description: 'Card payment — ' + String(cpRows[i][1] || ''),
+      source: 'cardPayment'
+    });
   }
-  return { balance: Math.round(bal * 100) / 100, since: seedMonth };
+  events.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+  return events;
+}
+
+function ledgerCheckingBalance() {
+  var s = _ledgerCheckingSeed();
+  if (s.seed === null || !s.seedMonth)
+    return { error: 'Set Config keys checking_seed and checking_seed_month (YYYY-MM) to enable the ledger checking balance.' };
+  var events = _ledgerCheckingEvents(s.seedMonth);
+  var bal = s.seed;
+  for (var i = 0; i < events.length; i++) bal += events[i].amount;
+  return { balance: Math.round(bal * 100) / 100, since: s.seedMonth };
+}
+
+// Checking register: every event since the seed, newest first, with a
+// running balance per row (built by walking the SAME events oldest-to-newest
+// then reversing, so the top row's balance always equals ledgerCheckingBalance()).
+function getLedgerCheckingHistory(limitStr) {
+  var s = _ledgerCheckingSeed();
+  if (s.seed === null || !s.seedMonth)
+    return { error: 'Set Config keys checking_seed and checking_seed_month (YYYY-MM) to enable checking history.' };
+  var events = _ledgerCheckingEvents(s.seedMonth);
+  var running = s.seed, rows = [];
+  for (var i = 0; i < events.length; i++) {
+    running += events[i].amount;
+    rows.push({
+      date: events[i].date, description: events[i].description,
+      amount: Math.round(events[i].amount * 100) / 100,
+      balance: Math.round(running * 100) / 100,
+      source: events[i].source
+    });
+  }
+  rows.reverse();
+  var limit = parseInt(limitStr, 10) || 200;
+  var total = rows.length;
+  if (rows.length > limit) rows = rows.slice(0, limit);
+  return { since: s.seedMonth, seed: s.seed, currentBalance: Math.round(running * 100) / 100,
+           count: total, entries: rows };
 }
 
 // Card drawer, ledger world: one pass over Txns (all categories -- the old

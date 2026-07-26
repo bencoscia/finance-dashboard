@@ -32,6 +32,43 @@ function invalidateSheet(name) {
   delete _sheetCache[name];
 }
 
+// Simple trigger: Apps Script auto-fires any top-level function literally
+// named onEdit on every spreadsheet edit -- no manual trigger setup needed.
+// PURPOSE: app-driven writes already call invalidateCardBalanceCache /
+// invalidateLedgerCache / invalidateConfigCache themselves, but a manual
+// edit made directly in the Sheet (typing a value, deleting a row, ticking
+// a checkbox) bypasses the app entirely and none of those get called --
+// the 5-minute CacheService TTLs would otherwise serve stale numbers
+// (checking balance, card balances, monthly totals) until they expire on
+// their own. This busts the relevant caches so the next read is fresh.
+// CAVEAT (be honest about the limit): onEdit is known to fire reliably for
+// cell-value edits and checkbox toggles; whether it fires for a full
+// right-click "Delete row" varies by Sheets version/edit path -- if a
+// manual edit still looks stale after this, the 5-minute TTL is the
+// guaranteed fallback (just wait), or call the four invalidate* functions
+// from the Apps Script editor's Run menu directly.
+// TRAP: this must be the ONLY function named onEdit across every .gs file
+// in the project -- Apps Script silently keeps just one definition if
+// there are duplicates (same class of bug as the stray doGet in tests.gs,
+// see the traps section). Grep the whole project for 'function onEdit'
+// before relying on this.
+var ONEDIT_WATCH_SHEETS = ['Txns', 'Fixed Log', 'Income Log', 'Variable History',
+  'Config', 'Card Payments', 'Card Trackers'];
+
+function onEdit(e) {
+  try {
+    if (!e || !e.range) return;
+    var name = e.range.getSheet().getName();
+    if (ONEDIT_WATCH_SHEETS.indexOf(name) < 0) return;
+    invalidateLedgerCache();
+    invalidateCardBalanceCache();
+    if (name === 'Config') invalidateConfigCache();
+  } catch (err) {
+    // Simple triggers must never throw -- a bad edit should never block
+    // the user's typing or corrupt the edit they were making.
+  }
+}
+
 // -- Month sheet discovery ------------------------------------
 var MONTH_PATTERN = /^(January|February|March|April|May|June|July|August|September|October|November|December) \d{4}$/;
 
