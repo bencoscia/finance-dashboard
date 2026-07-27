@@ -137,6 +137,7 @@ function dispatch(payload) {
     else if (action === 'ledgerTxns')      return getLedgerTxns(payload.month);
     else if (action === 'ledgerFixed')     return getLedgerFixed(payload.month);
     else if (action === 'ledgerTags')      return getLedgerTags();
+    else if (action === 'ledgerCheckingHistory') return getLedgerCheckingHistory(payload.limit);
     // Write actions
     else if (action === 'updateTransaction')  { var r = updateTransaction(payload);  if (payload.month) invalidateMonthCache(payload.month); invalidateCardBalanceCache(); return r; }
     else if (action === 'addTransaction')     { var r = _withIdem(payload, function(){ return addTransaction(payload); });     if (payload.month) invalidateMonthCache(payload.month); invalidateCardBalanceCache(); return r; }
@@ -201,6 +202,7 @@ function doGet(e) {
     else if (action === 'ledgerTxns')      data = getLedgerTxns(e.parameter.month);
     else if (action === 'ledgerFixed')     data = getLedgerFixed(e.parameter.month);
     else if (action === 'ledgerTags')      data = getLedgerTags();
+    else if (action === 'ledgerCheckingHistory') data = getLedgerCheckingHistory(e.parameter.limit);
     else data = { error: 'Unknown action: ' + action };
   } catch(err) {
     data = { error: err.message };

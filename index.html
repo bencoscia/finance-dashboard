@@ -561,6 +561,13 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .cdr-source{font-family:var(--mono);font-size:9px;padding:2px 5px;border-radius:3px;flex-shrink:0;text-transform:uppercase}
 .cdr-source.groceries{background:var(--green-bg);color:var(--green)}
 .cdr-source.gas{background:var(--amber-bg);color:var(--amber)}
+.cdr-source.income{background:var(--green-bg);color:var(--green)}
+.cdr-source.transfer{background:var(--surface3);color:var(--muted)}
+.cdr-source.fixed{background:var(--c2-bg,var(--surface3));color:var(--c2)}
+.cdr-source.cardPayment{background:var(--terra-bg);color:var(--terra)}
+.cdr-amt.positive{color:var(--green)}
+.cdr-amt.negative{color:var(--terra)}
+.cdr-running{font-family:var(--mono);font-size:11px;color:var(--faint);white-space:nowrap;flex-shrink:0;width:82px;text-align:right}
 .cdr-amt{font-family:var(--mono);font-size:12px;font-weight:500;color:var(--text);white-space:nowrap;flex-shrink:0}
 .cdr-disc{font-size:10px;color:var(--amber);flex-shrink:0}
 .card-drawer-empty{padding:40px;text-align:center;color:var(--faint);font-size:13px}
@@ -1096,6 +1103,16 @@ tr:hover .racts,tr.editing .racts{opacity:1}
   </main>
 </div>
 
+<!-- Canonical income-source names. 'Schrodinger' and 'St. Joe's' must match
+     EXACTLY: ledgerComputeMonths attributes income to ben/jenna by testing
+     for these substrings, so a typo here silently drops that attribution
+     without erroring. Datalist suggests, doesn't restrict -- other one-off
+     income (tax refund, gift, interest) still types freely. -->
+<datalist id="income-sources">
+  <option value="Schrodinger">
+  <option value="St. Joe's">
+</datalist>
+
 <!-- CARD TRANSACTION DRAWER -->
 <div id="card-drawer-backdrop" class="card-drawer-backdrop" ></div>
 <div id="card-drawer" class="card-drawer">
@@ -1169,7 +1186,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     <div class="pay-modal-sub" id="chk-modal-sub">Record a paycheck, deposit, or withdrawal</div>
     <div class="pay-field">
       <label>Description</label>
-      <input type="text" id="chk-desc" placeholder="e.g. Schrodinger paycheck" style="text-align:right">
+      <input type="text" id="chk-desc" list="income-sources" placeholder="e.g. Schrodinger paycheck" style="text-align:right">
     </div>
     <div class="pay-field">
       <label>Amount (USD)</label>
@@ -1432,6 +1449,7 @@ function initEventListeners(){
     'qaSetType':          qaSetType,
     'submitQuickAddSplit': submitQuickAddSplit,
     'qaAddFromDrawer':    qaAddFromDrawer,
+    'openCheckingDrawer': openCheckingDrawer,
     'qaRemoveStagedTag':  function(e){ var el=e.target.closest('[data-args]'); if(el) qaRemoveStagedTag(el.dataset.args); },
     'gotoAccounts':       gotoAccounts,
     'gotoNetWorth':       gotoNetWorth,
@@ -2066,7 +2084,7 @@ function qaRenderFields(){
     f.innerHTML=
       field('Type','<select id="qa-chk-type" class="msel" style="width:100%"><option value="deposit">Deposit / paycheck</option><option value="transfer_in">Transfer in (from savings, etc.)</option><option value="withdrawal">Withdrawal</option></select>')+
       field('Date','<input type="date" id="qa-date" value="'+today+'">')+
-      field('Description','<input type="text" id="qa-desc" placeholder="e.g. Paycheck, or Transfer from savings">')+
+      field('Description','<input type="text" id="qa-desc" list="income-sources" placeholder="e.g. Paycheck, or Transfer from savings">')+
       field('Amount ($)','<input type="number" id="qa-amt" step="0.01" placeholder="0.00">');
   } else if(qaType==='hsa'){
     f.innerHTML=
@@ -3911,6 +3929,7 @@ function qaTagInputKeydown(ev){
 }
 
 function qaAddFromDrawer(){
+  if(_drawerMode==='checking'){ closeCardDrawer(); showChkModal('deposit'); return; }
   if(typeof _drawerPm==='undefined' || !_drawerPm) return;
   qaType='txn'; qaRenderSeg(); qaRenderFields();
   var pmSel=$('qa-pm'); if(pmSel) pmSel.value=_drawerPm;
@@ -3918,7 +3937,10 @@ function qaAddFromDrawer(){
   $('qa-modal-backdrop').style.display='flex';
 }
 
+var _drawerMode = 'card'; // 'card' | 'checking' -- same drawer element, two data sources
+
 function openCardDrawer(pm, displayName){
+  _drawerMode = 'card';
   _drawerPm   = pm;
   _drawerTxns = [];
   $('cdr-title').textContent = displayName;
@@ -3963,6 +3985,14 @@ function _drawerKeyHandler(e){ if(e.key === 'Escape') closeCardDrawer(); }
 
 function filterCardDrawer(){
   var q = ($('cdr-search').value || '').trim().toLowerCase();
+  if(_drawerMode === 'checking'){
+    if(!q){ renderCheckingDrawer(_drawerTxns); return; }
+    var cfiltered = _drawerTxns.filter(function(t){
+      return (t.description||'').toLowerCase().includes(q) || (t.date||'').includes(q);
+    });
+    renderCheckingDrawer(cfiltered);
+    return;
+  }
   if(!q){ renderCardDrawer(_drawerTxns); return; }
   var filtered = _drawerTxns.filter(function(t){
     return (t.description||'').toLowerCase().includes(q) ||
@@ -3970,6 +4000,77 @@ function filterCardDrawer(){
            (t.date||'').includes(q);
   });
   renderCardDrawer(filtered);
+}
+
+// ── CHECKING ACCOUNT DRAWER ─────────────────────────────────
+// Same drawer element as the card drawer (_drawerMode toggles which render
+// function and dataset apply). Backed by getLedgerCheckingHistory, which
+// shares its event list with the balance shown on the account tile, so the
+// top row's running balance always equals what's already on screen.
+function openCheckingDrawer(){
+  _drawerMode = 'checking';
+  _drawerTxns = [];
+  $('cdr-title').textContent = 'Chase Checking';
+  $('cdr-sub').textContent   = 'Loading…';
+  $('cdr-search').value      = '';
+  $('cdr-body').innerHTML    = '<div class="card-drawer-loading">Fetching history…</div>';
+  $('cdr-count').textContent = '';
+  $('cdr-total').textContent = '';
+
+  var bd = $('card-drawer-backdrop'), dr = $('card-drawer');
+  bd.classList.add('open'); dr.classList.add('open');
+  setTimeout(function(){ $('cdr-search').focus(); }, 300);
+  document.addEventListener('keydown', _drawerKeyHandler);
+
+  if(isDemo){
+    _drawerTxns = demoCheckingHistory();
+    renderCheckingDrawer(_drawerTxns);
+    return;
+  }
+  if(!SCRIPT_URL){ $('cdr-body').innerHTML='<div class="card-drawer-empty">Not connected</div>'; return; }
+
+  apiFetch(SCRIPT_URL, 'ledgerCheckingHistory', {limit: 500}).then(function(data){
+    if(data.error){ $('cdr-body').innerHTML='<div class="card-drawer-empty">'+esc(data.error)+'</div>'; return; }
+    _drawerTxns = data.entries || [];
+    $('cdr-sub').textContent = 'Since '+data.since+' \u00b7 '+data.count+' entries';
+    renderCheckingDrawer(_drawerTxns);
+  }).catch(function(e){
+    $('cdr-body').innerHTML = '<div class="card-drawer-empty">Error: '+esc(e.message)+'</div>';
+  });
+}
+
+function renderCheckingDrawer(entries){
+  if(!entries || !entries.length){
+    $('cdr-body').innerHTML = '<div class="card-drawer-empty">No checking activity found</div>';
+    $('cdr-count').textContent = '0 entries';
+    $('cdr-total').textContent = '';
+    return;
+  }
+  var byMonth = {}, monthOrder = [];
+  entries.forEach(function(e){
+    var mo = (e.date||'').slice(0,7);
+    if(!byMonth[mo]){ byMonth[mo] = []; monthOrder.push(mo); }
+    byMonth[mo].push(e);
+  });
+  var html = '';
+  monthOrder.forEach(function(mo){
+    html += '<div class="card-drawer-month-hdr">'+esc(smo(mo)||mo)+'</div>';
+    byMonth[mo].forEach(function(e){
+      var srcTag = '<span class="cdr-source '+esc(e.source)+'">'+esc(e.source)+'</span>';
+      var neg = e.amount < 0;
+      html +=
+        '<div class="card-drawer-row">'+
+        '<span class="cdr-date">'+(e.date||'').slice(5)+'</span>'+
+        '<span class="cdr-desc" title="'+esc(e.description)+'">'+esc(e.description)+'</span>'+
+        srcTag+
+        '<span class="cdr-amt '+(neg?'negative':'positive')+'">'+(neg?'':'+')+fmt(e.amount,2)+'</span>'+
+        '<span class="cdr-running" title="Balance after this entry">'+fmt(e.balance,2)+'</span>'+
+        '</div>';
+    });
+  });
+  $('cdr-body').innerHTML = html;
+  $('cdr-count').textContent = entries.length + ' entr'+(entries.length===1?'y':'ies');
+  $('cdr-total').textContent = 'Balance: '+fmt(entries[0].balance,2);
 }
 
 function renderCardDrawer(txns){
@@ -5507,6 +5608,9 @@ function loadAccounts(){
       '</div>';
   }
 
+  chkCard.style.cursor = 'pointer';
+  chkCard.title = 'Click to view checking history';
+  chkCard.onclick = function(ev){ if(ev.target.closest('[data-action]')) return; openCheckingDrawer(); };
   chkCard.innerHTML =
     '<div class="acct-card-head">'+
     '<span class="acct-card-name">Chase Checking</span>'+
@@ -6344,6 +6448,19 @@ function demoTxns(){
     {id:16,date:'2026-04-12',description:'Tree payment',                     cost:250.00, paymentMethod:'Checking',    discretionary:true, ben:true, jenna:true},
   ];
 }
+function demoCheckingHistory(){
+  var bal = 7512.01;
+  var raw = [
+    {date:'2026-07-05', description:'Schrodinger paycheck', amount:4237.93, source:'income'},
+    {date:'2026-07-03', description:'Card payment \u2014 Wells Fargo', amount:-1197.56, source:'cardPayment'},
+    {date:'2026-06-15', description:'Mortgage (recurring)', amount:-2000.00, source:'fixed'},
+    {date:'2026-06-10', description:'Move to 529', amount:-500.00, source:'transfer'},
+    {date:'2026-06-03', description:'Beach chairs', amount:-107.99, source:'txn'}
+  ];
+  var running = bal;
+  return raw.map(function(e){ var row=Object.assign({balance:Math.round(running*100)/100}, e); running -= e.amount; return row; });
+}
+
 function demoFixed(){
   return {
     fixed:[
