@@ -2019,6 +2019,7 @@ function showQuickAdd(e){
   var el = e && e.target && e.target.closest ? e.target.closest('[data-action]') : null;
   qaType = (el && el.dataset.qaType) || 'txn';
   qaStagedTags = [];
+  _qaDrawerReturn = null;
   qaRenderSeg(); qaRenderFields();
   $('qa-err').textContent='';
   $('qa-modal-backdrop').style.display='flex';
@@ -2078,7 +2079,10 @@ function qaRenderFields(){
         '<datalist id="qa-tag-suggest">'+Object.keys(getAllKnownTags()).sort().map(function(t){return '<option value="'+esc(t)+'">';}).join('')+'</datalist>');
     renderQaTagChips();
     var tagInp = $('qa-tag-input');
-    if(tagInp) tagInp.onkeydown = qaTagInputKeydown;
+    if(tagInp){
+      tagInp.onkeydown = qaTagInputKeydown;
+      tagInp.onblur = function(){ if(this.value.trim()) qaAddStagedTag(this.value); };
+    }
   } else if(qaType==='groceries'||qaType==='gas'){
     f.innerHTML=
       field('Date','<input type="date" id="qa-date" value="'+today+'">')+
@@ -2164,6 +2168,10 @@ async function submitQuickAdd(){
       // after the txn has an id, since tags attach to a row that didn't
       // exist a moment ago. Honest partial failure: the txn is already saved
       // either way.
+      // Flush a tag typed but never Enter-ed -- silently dropping it is the
+      // kind of quiet data loss this dashboard shouldn't do.
+      var _pendTag = $('qa-tag-input');
+      if(_pendTag && _pendTag.value.trim()) qaAddStagedTag(_pendTag.value);
       if(qaStagedTags.length && txnResult && txnResult.id != null){
         try {
           await apiPost(SCRIPT_URL,{action:'ledgerSetTags', idemKey:genIdemKey('tag'),
@@ -2174,10 +2182,14 @@ async function submitQuickAdd(){
         }
       }
       // If the card drawer is open on this card, refresh it so the new txn appears
-      if(typeof _drawerPm!=='undefined' && _drawerPm===$('qa-pm').value &&
-         $('card-drawer') && $('card-drawer').classList.contains('open')){
+      var _dr = $('card-drawer');
+      if(_qaDrawerReturn && _qaDrawerReturn.pm===$('qa-pm').value){
+        openCardDrawer(_qaDrawerReturn.pm, _qaDrawerReturn.title);
+      } else if(typeof _drawerPm!=='undefined' && _drawerPm===$('qa-pm').value &&
+         _dr && _dr.classList.contains('open')){
         openCardDrawer(_drawerPm, $('cdr-title').textContent);
       }
+      _qaDrawerReturn = null;
       if(curMonthTxn===month) loadTxns(month,true);
       quickRefresh(); refreshCardBalances();
     } else if(qaType==='groceries'||qaType==='gas'){
@@ -3940,11 +3952,17 @@ function qaTagInputKeydown(ev){
   }
 }
 
+var _qaDrawerReturn = null; // {pm,title} when Quick Add was launched from the drawer
+
 function qaAddFromDrawer(){
   if(_drawerMode==='checking'){ closeCardDrawer(); showChkModal('deposit'); return; }
   if(typeof _drawerPm==='undefined' || !_drawerPm) return;
-  qaType='txn'; qaRenderSeg(); qaRenderFields();
-  var pmSel=$('qa-pm'); if(pmSel) pmSel.value=_drawerPm;
+  // Close the drawer first -- stacking it beside the modal is visual noise,
+  // and it reopens after a successful save so the new row is visible.
+  _qaDrawerReturn = { pm: _drawerPm, title: $('cdr-title').textContent };
+  closeCardDrawer();
+  qaType='txn'; qaStagedTags=[]; qaRenderSeg(); qaRenderFields();
+  var pmSel=$('qa-pm'); if(pmSel) pmSel.value=_qaDrawerReturn.pm;
   $('qa-err').textContent='';
   $('qa-modal-backdrop').style.display='flex';
 }
