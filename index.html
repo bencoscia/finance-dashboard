@@ -1345,7 +1345,19 @@ var esc = function(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'
 // Accounting notation: negatives in parentheses -- ($1,234.56) -- so
 // credit/debit never depends on distinguishing red from green (CVD-safe).
 var fmt = function(n,d){ d=d||0; if(n==null) return '—'; var s='$'+Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}); return n<0 ? '('+s+')' : s; };
-var smo = function(s){ var p=s.split(' '); return p[0].slice(0,3)+' '+p[1].slice(2); };
+var smo = function(s){
+  // 'June 2026' -> 'Jun 26'. Degrades to the input rather than throwing:
+  // it used to assume p[1] existed, so a 'YYYY-MM' key crashed the caller.
+  var p=String(s||'').split(' ');
+  if(p.length<2 || !p[1]) return String(s||'');
+  return p[0].slice(0,3)+' '+p[1].slice(2);
+};
+// '2026-07' -> 'Jul 26'. The ledger speaks YYYY-MM; smo speaks 'Month YYYY'.
+function mkeyLabel(mk){
+  var m=/^(\d{4})-(\d{2})$/.exec(String(mk||''));
+  if(!m) return String(mk||'');
+  return MKEY_NAMES[parseInt(m[2],10)-1].slice(0,3)+' '+m[1].slice(2);
+}
 
 // ── Theme helpers — read CSS vars at render time ──
 function chartTheme(){
@@ -4054,7 +4066,7 @@ function renderCheckingDrawer(entries){
   });
   var html = '';
   monthOrder.forEach(function(mo){
-    html += '<div class="card-drawer-month-hdr">'+esc(smo(mo)||mo)+'</div>';
+    html += '<div class="card-drawer-month-hdr">'+esc(mkeyLabel(mo))+'</div>';
     byMonth[mo].forEach(function(e){
       var srcTag = '<span class="cdr-source '+esc(e.source)+'">'+esc(e.source)+'</span>';
       var neg = e.amount < 0;
