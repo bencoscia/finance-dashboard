@@ -2028,7 +2028,7 @@ function hideQuickAdd(){ var b=$('qa-modal-backdrop'); if(b) b.style.display='no
 async function submitQuickAddSplit(){
   // Same save as submitQuickAdd's txn branch, then jump into the split modal.
   if(qaType!=='txn') return;
-  var month = qaCurMonth();
+  var month = qaResolvedMonth();
   await submitQuickAdd();                      // validates, saves, closes on success
   var newId = window._qaLastTxnId;
   if(newId == null) return;                    // save failed; submitQuickAdd showed the error
@@ -2056,6 +2056,50 @@ function qaRenderSeg(){
 }
 function qaCurMonth(){ return (allData&&allData.months&&allData.months[0])||curMonthTxn||''; }
 
+// '2026-07-15' -> 'July 2026'. A transaction belongs to the month it happened
+// in, NOT whichever month happens to be newest -- that was the bug: adding a
+// July-dated charge after opening August filed it under August.
+function monthNameFromDate(dstr){
+  var m=/^(\d{4})-(\d{2})/.exec(String(dstr||''));
+  if(!m) return '';
+  return MKEY_NAMES[parseInt(m[2],10)-1]+' '+m[1];
+}
+// Books-month picker: defaults to the date's month, but stays overridable --
+// a July-1 charge can still be assigned to June's books on purpose.
+function qaMonthSelect(dstr){
+  var derived=monthNameFromDate(dstr);
+  var opts=(allData&&allData.months?allData.months.slice():[]);
+  if(derived && opts.indexOf(derived)<0) opts.push(derived);
+  opts.sort(function(a,b){ return mkey(a)<mkey(b)?1:mkey(a)>mkey(b)?-1:0; });
+  return '<select id="qa-month" class="msel" style="width:100%">'+
+    opts.map(function(m){
+      return '<option value="'+esc(m)+'"'+(m===derived?' selected':'')+'>'+esc(m)+'</option>';
+    }).join('')+'</select>';
+}
+// Keep the picker in step with the date unless the user changed it themselves.
+function qaSyncMonthFromDate(){
+  var sel=$('qa-month'), d=$('qa-date');
+  if(!sel||!d) return;
+  if(sel.dataset.touched==='1') return;
+  var derived=monthNameFromDate(d.value);
+  if(!derived) return;
+  var found=false;
+  for(var i=0;i<sel.options.length;i++) if(sel.options[i].value===derived){ found=true; break; }
+  if(!found){ var o=document.createElement('option'); o.value=o.textContent=derived; sel.insertBefore(o, sel.firstChild); }
+  sel.value=derived;
+}
+function qaWireMonthSync(){
+  var d=$('qa-date'), sel=$('qa-month');
+  if(d) d.onchange=qaSyncMonthFromDate;
+  if(sel) sel.onchange=function(){ this.dataset.touched='1'; };
+}
+// Submit-time resolver: the picker when present, else newest month (types
+// without a date, e.g. Recurring, still belong to the working month).
+function qaResolvedMonth(){
+  var sel=$('qa-month');
+  return (sel && sel.value) ? sel.value : qaCurMonth();
+}
+
 function qaRenderFields(){
   var f=$('qa-fields'); var today=localToday();
   var sb=$('qa-split-btn'); if(sb) sb.style.display = (qaType==='txn') ? '' : 'none';
@@ -2065,6 +2109,7 @@ function qaRenderFields(){
   if(qaType==='txn'){
     f.innerHTML=
       field('Date','<input type="date" id="qa-date" value="'+today+'">')+
+      field('Books month',qaMonthSelect(today))+
       field('Description','<input type="text" id="qa-desc" placeholder="e.g. Target">')+
       field('Amount ($)','<input type="number" id="qa-amt" step="0.01" placeholder="0.00">')+
       field('Payment method',pmSel)+
@@ -2078,6 +2123,7 @@ function qaRenderFields(){
         '<input type="text" id="qa-tag-input" list="qa-tag-suggest" placeholder="Type a tag, press Enter">'+
         '<datalist id="qa-tag-suggest">'+Object.keys(getAllKnownTags()).sort().map(function(t){return '<option value="'+esc(t)+'">';}).join('')+'</datalist>');
     renderQaTagChips();
+    qaWireMonthSync();
     var tagInp = $('qa-tag-input');
     if(tagInp){
       tagInp.onkeydown = qaTagInputKeydown;
@@ -2086,9 +2132,11 @@ function qaRenderFields(){
   } else if(qaType==='groceries'||qaType==='gas'){
     f.innerHTML=
       field('Date','<input type="date" id="qa-date" value="'+today+'">')+
+      field('Books month',qaMonthSelect(today))+
       (qaType==='groceries'?field('Store','<input type="text" id="qa-store" placeholder="e.g. Wegmans">'):'')+
       field('Amount ($)','<input type="number" id="qa-amt" step="0.01" placeholder="0.00">')+
       field('Payment method',pmSel);
+    qaWireMonthSync();
   } else if(qaType==='fixed'){
     f.innerHTML=
       field('Name','<input type="text" id="qa-fx-name" placeholder="e.g. Peloton+">')+
@@ -2100,8 +2148,10 @@ function qaRenderFields(){
     f.innerHTML=
       field('Type','<select id="qa-chk-type" class="msel" style="width:100%"><option value="deposit">Deposit / paycheck</option><option value="transfer_in">Transfer in (from savings, etc.)</option><option value="withdrawal">Withdrawal</option></select>')+
       field('Date','<input type="date" id="qa-date" value="'+today+'">')+
+      field('Books month',qaMonthSelect(today))+
       field('Description','<input type="text" id="qa-desc" list="income-sources" placeholder="e.g. Paycheck, or Transfer from savings">')+
       field('Amount ($)','<input type="number" id="qa-amt" step="0.01" placeholder="0.00">');
+    qaWireMonthSync();
   } else if(qaType==='hsa'){
     f.innerHTML=
       field('Date incurred','<input type="date" id="qa-date" value="'+today+'">')+
@@ -2133,7 +2183,7 @@ function mkey(name){
 async function submitQuickAdd(){
   window._qaLastTxnId = null;
   var btn=$('qa-submit-btn');
-  var month=qaCurMonth();
+  var month=qaResolvedMonth();
   var amtEl=$('qa-amt');
   var amt=amtEl?parseFloat(amtEl.value):NaN;
   $('qa-err').textContent='';
