@@ -565,6 +565,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .cdr-source.transfer{background:var(--surface3);color:var(--muted)}
 .cdr-source.fixed{background:var(--c2-bg,var(--surface3));color:var(--c2)}
 .cdr-source.cardPayment{background:var(--terra-bg);color:var(--terra)}
+.cdr-source.payment{background:var(--green-bg);color:var(--green)}
 .cdr-amt.positive{color:var(--green)}
 .cdr-amt.negative{color:var(--terra)}
 .cdr-running{font-family:var(--mono);font-size:11px;color:var(--faint);white-space:nowrap;flex-shrink:0;width:82px;text-align:right}
@@ -4170,13 +4171,22 @@ function renderCardDrawer(txns){
   });
 
   var html = '';
-  var grandTotal = 0;
+  var grandTotal = 0, grandPayments = 0;
   monthOrder.forEach(function(month){
     var rows = byMonth[month];
-    var monthTotal = rows.reduce(function(s,r){return s+r.cost;},0);
-    grandTotal += monthTotal;
-    html += '<div class="card-drawer-month-hdr">'+esc(month)+'<span style="float:right;font-weight:normal">'+fmt(monthTotal,2)+'</span></div>';
+    // Charges and payments are different quantities: the month header shows
+    // SPEND (charges only), so adding a payment can never make a month look
+    // like you spent less. Payments are summarised separately.
+    var monthCharges = rows.reduce(function(s,r){return s+(r.source==='payment'?0:r.cost);},0);
+    var monthPays    = rows.reduce(function(s,r){return s+(r.source==='payment'?r.cost:0);},0);
+    grandTotal += monthCharges;
+    grandPayments += monthPays;
+    html += '<div class="card-drawer-month-hdr">'+esc(month)+
+      '<span style="float:right;font-weight:normal">'+fmt(monthCharges,2)+
+      (monthPays ? ' <span style="color:var(--green)" title="Payments this month">'+fmt(monthPays,2)+'</span>' : '')+
+      '</span></div>';
     rows.forEach(function(t){
+      var isPay = t.source==='payment';
       var sourceTag = t.source && t.source !== 'transaction'
         ? '<span class="cdr-source '+esc(t.source)+'">'+esc(t.source)+'</span>' : '';
       var discTag = t.discretionary ? '<span class="cdr-disc" title="Discretionary">disc</span>' : '';
@@ -4185,14 +4195,17 @@ function renderCardDrawer(txns){
         '<span class="cdr-date">'+(t.date||'').slice(5)+'</span>'+  // show MM-DD
         '<span class="cdr-desc" title="'+esc(t.description)+'">'+esc(t.description)+'</span>'+
         sourceTag + discTag +
-        '<span class="cdr-amt">'+fmt(t.cost,2)+'</span>'+
+        '<span class="cdr-amt'+(isPay?' positive':'')+'">'+fmt(t.cost,2)+'</span>'+
         '</div>';
     });
   });
 
   $('cdr-body').innerHTML = html;
-  $('cdr-count').textContent = txns.length + ' transaction'+(txns.length===1?'':'s');
-  $('cdr-total').textContent = 'Total: '+fmt(grandTotal,2);
+  var payCount = txns.filter(function(t){return t.source==='payment';}).length;
+  $('cdr-count').textContent = (txns.length-payCount) + ' charge'+((txns.length-payCount)===1?'':'s')+
+    (payCount ? ' \u00b7 '+payCount+' payment'+(payCount===1?'':'s') : '');
+  $('cdr-total').textContent = 'Charges: '+fmt(grandTotal,2)+
+    (grandPayments ? ' \u00b7 Paid: '+fmt(grandPayments,2) : '');
   $('cdr-sub').textContent   = txns.length + ' of ' + (_drawerTxns.length||txns.length);
 }
 
