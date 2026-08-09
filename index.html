@@ -365,6 +365,9 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .acct-bal.positive{color:var(--green)}
 .acct-bal-label{font-size:11px;color:var(--faint)}
 .acct-updated{font-size:11px;color:var(--faint);margin-bottom:10px}
+.acct-stmt{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:6px 0 4px;margin-bottom:6px;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.acct-stmt-lbl{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.acct-stmt-val{font-family:var(--mono);font-size:14px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums}
 .acct-util-bar{height:5px;background:var(--surface2);border-radius:3px;overflow:hidden;margin-bottom:6px}
 .acct-util-fill{height:100%;border-radius:3px;transition:width .4s}
 .acct-util-fill.low{background:var(--green)}
@@ -5803,6 +5806,29 @@ function loadAccounts(){
         (txnCount?'<span>'+txnCount+' txns all-time</span>':'')+'</div>';
     }
 
+    // Statement balance: what was owed at the last close (what you actually
+    // pay), vs the live balance which includes charges made since. Shown only
+    // when Card Trackers col I has a closing day -- never guessed.
+    var stmtHtml = '';
+    if(sheetCard && sheetCard.statementBalance != null){
+      var stD = sheetCard.statementDate
+        ? new Date(sheetCard.statementDate+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})
+        : '';
+      var since = sheetCard.sinceStatement || 0;
+      stmtHtml =
+        '<div class="acct-stmt">'+
+          '<span class="acct-stmt-lbl">Statement bal'+(stD?' (closed '+esc(stD)+')':'')+'</span>'+
+          '<span class="acct-stmt-val">'+fmt(sheetCard.statementBalance,2)+'</span>'+
+        '</div>'+
+        (since ? '<div class="acct-updated" style="color:var(--faint)">'+
+                 fmt(since,2)+' charged since close</div>' : '')+
+        (sheetCard.statementNote ? '<div class="acct-updated" style="color:var(--amber)">\u26a0 '+
+                 esc(sheetCard.statementNote)+'</div>' : '');
+    } else if(sheetCard && sheetCard.closeDay == null && balance != null){
+      stmtHtml = '<div class="acct-updated" style="color:var(--faint)">'+
+        'Statement bal: set closing day in Card Trackers col I</div>';
+    }
+
     var histHtml = '';
     if(histTotal != null){
       var ttmAvg = monthsCount > 0 ? histTotal / monthsCount : 0;
@@ -5847,7 +5873,7 @@ function loadAccounts(){
       '<div class="acct-bal-row">'+balHtml+
       '<span class="acct-bal-label">'+(balance!=null?(balance<0?'credit balance':'current balance'):'not found')+'</span>'+
       '</div>'+
-      histHtml + utilHtml + lastPayHtml +
+      stmtHtml + histHtml + utilHtml + lastPayHtml +
       '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:0">' + payBtn + voidBtn + '</div>';
     grid.appendChild(card);
   });
