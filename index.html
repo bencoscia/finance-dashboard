@@ -566,6 +566,9 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .cdr-source.fixed{background:var(--c2-bg,var(--surface3));color:var(--c2)}
 .cdr-source.cardPayment{background:var(--terra-bg);color:var(--terra)}
 .cdr-source.payment{background:var(--green-bg);color:var(--green)}
+.card-drawer-row.editable{cursor:pointer}
+.card-drawer-row.editable:hover{background:var(--surface2)}
+.card-drawer-row.editable:hover .cdr-desc{text-decoration:underline}
 .cdr-amt.positive{color:var(--green)}
 .cdr-amt.negative{color:var(--terra)}
 .cdr-running{font-family:var(--mono);font-size:11px;color:var(--faint);white-space:nowrap;flex-shrink:0;width:82px;text-align:right}
@@ -1463,6 +1466,12 @@ function initEventListeners(){
     'submitQuickAddSplit': submitQuickAddSplit,
     'qaAddFromDrawer':    qaAddFromDrawer,
     'openCheckingDrawer': openCheckingDrawer,
+    'drawerEditTxn':      function(e){
+      var el=e.target.closest('[data-args]'); if(!el) return;
+      var raw=el.dataset.args, k=raw.indexOf(',');
+      if(k<0) return;
+      drawerEditTxn(raw.slice(0,k), raw.slice(k+1));
+    },
     'qaRemoveStagedTag':  function(e){ var el=e.target.closest('[data-args]'); if(el) qaRemoveStagedTag(el.dataset.args); },
     'gotoAccounts':       gotoAccounts,
     'gotoNetWorth':       gotoNetWorth,
@@ -3850,13 +3859,31 @@ async function saveRow(i,isNew){
     try {
       var hasId = txns[i].id != null;
       var action = (isNew || !hasId) ? 'ledgerAddTxn' : 'ledgerUpdateTxn';
-      var payload = { action: action, idemKey: genIdemKey('txn'), month: mkey(curMonthTxn),
+      // A row's books month follows its date -- UNLESS it was deliberately
+      // filed against a different month (e.g. a Jul-1 charge kept in June's
+      // books). Detect that by whether the row was in sync BEFORE the edit:
+      // if it was, follow the new date; if it wasn't, leave the assignment
+      // alone rather than silently undoing an intentional choice.
+      var wasInSync = monthNameFromDate(txns[i].date) === curMonthTxn;
+      var datedMonth = monthNameFromDate(updated.date);
+      var targetMonth = (isNew || (wasInSync && datedMonth)) ? datedMonth : curMonthTxn;
+      if(!targetMonth) targetMonth = curMonthTxn;
+      var payload = { action: action, idemKey: genIdemKey('txn'), month: mkey(targetMonth),
         date: updated.date, description: updated.description, amount: updated.cost,
         method: updated.paymentMethod, category: txns[i].category || 'onetime',
         discretionary: updated.discretionary, ben: updated.ben, jenna: updated.jenna };
       if(!isNew && hasId) payload.id = txns[i].id;
       var result = await apiPost(SCRIPT_URL, payload);
       if(action === 'ledgerAddTxn') updated.id = result.id;
+      if(targetMonth !== curMonthTxn){
+        // The row no longer belongs to the month on screen: drop it locally
+        // rather than leaving a ghost that edits the wrong month next time.
+        showBanner('Moved to '+targetMonth+' \u2014 no longer shown in '+curMonthTxn,'ok');
+        txns.splice(i,1);
+        renderTxnTable(); updateSum();
+        quickRefresh(); refreshCardBalances();
+        return;
+      }
       showBanner('Saved','ok');
       quickRefresh();
       refreshCardBalances();
@@ -4120,6 +4147,30 @@ function openCheckingDrawer(){
   });
 }
 
+// Editing from the drawer jumps to the row in the Transactions tab rather
+// than duplicating the inline editor here. One edit path means one place for
+// validation, month-refiling, and the row-identity handling -- a second
+// editor would be a second surface for exactly the bugs already fixed once.
+function drawerEditTxn(id, month){
+  closeCardDrawer();
+  var txnTab = Array.prototype.find.call(
+    document.querySelectorAll('.tab-btn'),
+    function(b){ return b.textContent.trim() === 'Transactions'; }
+  );
+  if(txnTab) showTab('txns', txnTab);
+  var sel = $('msel-txn');
+  if(sel) sel.value = month;
+  Promise.resolve(loadTxns(month, true)).then(function(){
+    var idx = -1;
+    for(var i=0;i<txns.length;i++){ if(String(txns[i].id)===String(id)){ idx=i; break; } }
+    if(idx<0){ showBanner('Could not find that transaction in '+month,'err'); return; }
+    editRow(idx);
+    var tr = document.querySelector('#tbody tr[data-i="'+idx+'"]');
+    if(tr && tr.scrollIntoView) tr.scrollIntoView({block:'center'});
+    var d = $('desc-'+idx); if(d) d.focus();
+  });
+}
+
 function renderCheckingDrawer(entries){
   if(!entries || !entries.length){
     $('cdr-body').innerHTML = '<div class="card-drawer-empty">No checking activity found</div>';
@@ -4190,8 +4241,11 @@ function renderCardDrawer(txns){
       var sourceTag = t.source && t.source !== 'transaction'
         ? '<span class="cdr-source '+esc(t.source)+'">'+esc(t.source)+'</span>' : '';
       var discTag = t.discretionary ? '<span class="cdr-disc" title="Discretionary">disc</span>' : '';
+      var editable = !isPay && t.id != null;
       html +=
-        '<div class="card-drawer-row">'+
+        '<div class="card-drawer-row'+(editable?' editable':'')+'"'+
+          (editable?' data-action="drawerEditTxn" data-args="'+t.id+','+esc(t.month)+'"'+
+                    ' title="Edit this transaction"':'')+'>'+
         '<span class="cdr-date">'+(t.date||'').slice(5)+'</span>'+  // show MM-DD
         '<span class="cdr-desc" title="'+esc(t.description)+'">'+esc(t.description)+'</span>'+
         sourceTag + discTag +
