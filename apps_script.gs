@@ -1309,6 +1309,7 @@ var CT_COL_PAYMENT = 5;  // E: last payment amount
 var CT_COL_UTIL    = 6;  // F: utilization %
 var CT_COL_DUE     = 7;  // G: payment due date
 var CT_COL_SEED    = 8;  // H: seed balance at start of tracking period
+var CT_COL_CLOSE   = 9;  // I: statement closing DAY of month (1-31), entered by hand
 
 var CP_COL_DATE    = 1;  // A: payment date
 var CP_COL_CARD    = 2;  // B: card name
@@ -1411,6 +1412,14 @@ function _computeCardBalances() {
         lastPaymentDate:   lastDate instanceof Date ? lastDate : (lastDate ? new Date(lastDate) : null),
         lastPaymentAmount: typeof ctVals[i][CT_COL_PAYMENT-1] === 'number' ? Math.round(ctVals[i][CT_COL_PAYMENT-1]*100)/100 : null,
         seed:              typeof seed === 'number' ? seed : (parseFloat(seed) || 0),
+        // Statement closing day of month. NOT derivable from the due date --
+        // grace periods vary by issuer (and by card within an issuer), so a
+        // guessed close date would produce a confidently wrong statement
+        // balance. Blank column I => statement balance reported as null.
+        closeDay:          (function(v){
+          var d = parseInt(v, 10);
+          return (isFinite(d) && d >= 1 && d <= 31) ? d : null;
+        })(ctVals[i][CT_COL_CLOSE-1]),
       };
     }
   }
@@ -1611,9 +1620,15 @@ function _computeCardBalances() {
   }
 
   // -- Step 10: Build response
+  // Statement balances: derived by rolling the CURRENT balance backwards over
+  // everything dated after the last statement close, so the two figures are
+  // consistent by construction and can never drift apart.
+  var stmts = _cardStatementBalances(balances, ctMeta, pmToKey);
+
   var cards = {};
   CARD_DEFS.forEach(function(def) {
     var meta = ctMeta[def.name] || {};
+    var st   = stmts[def.name] || {};
     cards[def.name] = {
       balance:     Math.round((balances[def.name] || 0) * 100) / 100,
       limit:       meta.limit        || null,
@@ -1621,6 +1636,11 @@ function _computeCardBalances() {
       lastDate:    meta.lastPaymentDate
                    ? meta.lastPaymentDate.toISOString().split('T')[0] : null,
       lastPayment: meta.lastPaymentAmount || null,
+      closeDay:        meta.closeDay != null ? meta.closeDay : null,
+      statementDate:   st.closeDate || null,
+      statementBalance: st.statement != null ? st.statement : null,
+      sinceStatement:  st.sinceClose != null ? st.sinceClose : null,
+      statementNote:   st.note || null,
     };
   });
 
@@ -2560,7 +2580,7 @@ function logCreditSnapshot(p) {
 
 // -- GET: net worth --------------------------------------------
 var NET_WORTH_SHEET      = 'Net Worth';
-var NW_CACHE_KEY         = 'nw_v3_data';
+var NW_CACHE_KEY         = 'nw_v4_data'; // v4: added investmentsSource/investmentsWarning (bump on every shape change)
 var NW_CACHE_TTL         = 300; // 5 minutes
 
 function getNetWorth() {
@@ -2640,8 +2660,46 @@ function _computeNetWorth() {
       accounts[key] = Math.round(val * 100) / 100;
     }
   });
-  // C18 = total investments
-  investments = typeof values[17][2] === 'number' ? values[17][2] : parseFloat(values[17][2]) || 0;
+  // Total investments. Was hardcoded to C18 (values[17][2]) -- a positional
+  // read that silently returns 0 the moment a row is inserted or removed in
+  // Portfolio Management, which is exactly what happened (accounts rendered
+  // fine, the total showed $0). Now derived from the SAME account rows the
+  // UI lists, so the total and its parts can never disagree, with a labelled
+  // total used only as a cross-check.
+  //
+  // Cash-like accounts are excluded: Discover Savings is reported separately
+  // as `cash`, so summing it here would double-count it in totalAssets.
+  var investmentsDerived = 0, acctKey;
+  for (acctKey in accounts) {
+    if (/discover\s*savings/i.test(acctKey)) continue;
+    investmentsDerived += accounts[acctKey];
+  }
+  investmentsDerived = Math.round(investmentsDerived * 100) / 100;
+
+  // Cross-check against a labelled total row if one exists (searched by
+  // label, never by row number).
+  var investmentsStated = null;
+  values.slice(0, 24).forEach(function(r) {
+    var lbl = String(r[1]||'').trim();
+    if (investmentsStated === null && /^total/i.test(lbl)) {
+      var v = typeof r[2] === 'number' ? r[2] : parseFloat(r[2]);
+      if (!isNaN(v)) investmentsStated = Math.round(v * 100) / 100;
+    }
+  });
+
+  investments = investmentsDerived;
+  var investmentsSource = 'derived from ' + Object.keys(accounts).length + ' account rows';
+  var investmentsWarning = null;
+  if (investmentsStated !== null && Math.abs(investmentsStated - investmentsDerived) > 1) {
+    investmentsWarning = 'Portfolio Management total (' + investmentsStated +
+      ') disagrees with the sum of its account rows (' + investmentsDerived +
+      ') by ' + Math.round((investmentsStated - investmentsDerived) * 100) / 100 +
+      '. Showing the summed rows; check for a stale total formula or a row outside its range.';
+  }
+  if (investmentsDerived <= 0) {
+    investmentsWarning = 'No investment account rows were readable in Portfolio Management ' +
+      '(expected labels in col B, values in col C, rows 1-20).';
+  }
 
   // -- Weekly investment history (Portfolio Management rows 25+, cols B=date, C=value) --
   var history = [], inTracker = false;
@@ -2799,6 +2857,8 @@ function _computeNetWorth() {
 
   return {
     investments:     Math.round(investments * 100) / 100,
+    investmentsSource:  investmentsSource,
+    investmentsWarning: investmentsWarning,
     cash:            Math.round(cash * 100) / 100,
     physicalAssets:  Math.round(physicalAssets * 100) / 100,
     mortgage:        Math.round(mortgage * 100) / 100,

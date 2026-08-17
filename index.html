@@ -365,6 +365,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .acct-bal.positive{color:var(--green)}
 .acct-bal-label{font-size:11px;color:var(--faint)}
 .acct-updated{font-size:11px;color:var(--faint);margin-bottom:10px}
+.nw-warn{font-size:11px;line-height:1.45;color:var(--amber);background:var(--amber-bg);border:1px solid var(--amber-bd);border-radius:4px;padding:6px 8px;margin:4px 0 8px}
 .acct-stmt{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:6px 0 4px;margin-bottom:6px;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
 .acct-stmt-lbl{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
 .acct-stmt-val{font-family:var(--mono);font-size:14px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums}
@@ -2568,6 +2569,10 @@ function renderNetWorth(nw){
     '<div class="nw-section" style="margin-bottom:14px">'+
     '<div class="nw-section-title">Assets</div>'+
     nwRow('Investments (incl. 529s)', investments)+
+    // A $0 or contradicted investments figure must announce itself rather than
+    // sitting there looking like a real number.
+    (nw.investmentsWarning
+      ? '<div class="nw-warn">\u26a0 '+esc(nw.investmentsWarning)+'</div>' : '')+
     nwRow('Cash (Discover, ex-NHSC)', cash)+
     nwRow('Physical assets (house + cars)', physicalAssets)+
     '<div class="nw-total-row"><span>Total assets</span><span>'+fmt(totalAssets)+'</span></div>'+
