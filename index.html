@@ -150,6 +150,22 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 .ts{font-family:var(--mono);font-size:11px;color:var(--faint)}
 .icon-btn{font-family:var(--mono);font-size:12.5px;padding:6px 12px;background:transparent;border:1px solid var(--border2);border-radius:6px;color:var(--muted);cursor:pointer;transition:color .15s,border-color .15s,background .15s}
 .icon-btn:hover{color:var(--text);border-color:var(--muted);background:var(--surface2)}
+/* Calculator popover. z 250 > modal backdrops (180) and drawer (200) so it's usable mid-split. */
+.calc-pop{position:fixed;top:64px;right:28px;width:300px;z-index:250;background:var(--surface);border:1px solid var(--border2);border-radius:var(--rl);box-shadow:var(--shadow),0 8px 28px rgba(0,0,0,.18);padding:12px 14px;font-family:var(--mono)}
+.calc-head{display:flex;justify-content:space-between;align-items:center;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px}
+.calc-x{background:none;border:none;font-size:16px;color:var(--muted);cursor:pointer;padding:0 4px}
+.calc-hist{max-height:110px;overflow-y:auto;font-size:11.5px;color:var(--muted);margin-bottom:6px}
+.calc-hist div{display:flex;justify-content:space-between;gap:10px;padding:2px 0;border-bottom:1px dotted var(--border)}
+.calc-hist div span:last-child{color:var(--text);font-variant-numeric:tabular-nums}
+#calc-in{width:100%;box-sizing:border-box;font-family:var(--mono);font-size:14px;padding:7px 9px;border:1px solid var(--border2);border-radius:6px;background:var(--surface2);color:var(--text);outline:none}
+#calc-in:focus{border-color:var(--blue-lt)}
+.calc-out{display:flex;justify-content:flex-end;align-items:baseline;gap:8px;margin:8px 0 6px;font-size:20px;font-variant-numeric:tabular-nums;color:var(--text)}
+.calc-out.err{font-size:12px;font-style:italic;color:var(--muted)}
+.calc-eq{font-size:13px;color:var(--faint)}
+.calc-foot{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.calc-hint{font-size:9.5px;color:var(--faint);line-height:1.3}
+.calc-use{font-family:var(--mono);font-size:11px;padding:5px 9px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;white-space:nowrap}
+.calc-use:disabled{opacity:.35;cursor:not-allowed}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 /* ── LAYOUT ── */
@@ -769,6 +785,9 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 
   /* row action buttons (edit/delete/split checks) get a real touch target */
   .rbtn{ min-width:34px; min-height:34px; }
+
+  /* calculator: full-width under the header */
+  .calc-pop{ left:12px; right:12px; width:auto; top:56px; }
 }
 </style>
 </head>
@@ -810,6 +829,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     <div class="hdr-r">
       <span class="ts" id="ts"></span>
       <button class="hdr-add" data-action="showQuickAdd">+ Add</button>
+      <button class="icon-btn" data-action="toggleCalc" title="Calculator (Alt+C)">÷<span class="btn-lbl"> calc</span></button>
       <button class="icon-btn" data-action="refreshData"><span id="ri">↻</span><span class="btn-lbl"> refresh</span></button>
       <button class="icon-btn hide-mobile" data-action="showAddMonth">+ month</button>
       <button class="icon-btn" data-action="showSetup">⚙<span class="btn-lbl"> settings</span></button>
@@ -1181,7 +1201,10 @@ tr:hover .racts,tr.editing .racts{opacity:1}
       <span class="split-col-label"></span>
     </div>
     <div class="split-rows" id="split-rows"></div>
-    <button class="split-add-row-btn" data-action="addSplitRow">+ Add line</button>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="split-add-row-btn" data-action="addSplitRow">+ Add line</button>
+      <button class="split-add-row-btn" data-action="toggleCalc" title="Calculator (Alt+C)">÷ calc</button>
+    </div>
     <div class="split-remainder ok" id="split-remainder">
       <span>Unallocated</span><span id="split-remainder-amt">$0.00</span>
     </div>
@@ -1190,6 +1213,18 @@ tr:hover .racts,tr.editing .racts{opacity:1}
       <button class="btn-primary" id="split-submit-btn" data-action="submitSplit">Save split</button>
       <button class="btn-cancel" data-action="hideSplitModal">Cancel</button>
     </div>
+  </div>
+</div>
+
+<!-- CALCULATOR (non-modal popover; floats above modals so it works mid-split) -->
+<div id="calc-pop" class="calc-pop" style="display:none" role="dialog" aria-label="Calculator">
+  <div class="calc-head"><span>Calculator</span><button class="calc-x" data-action="toggleCalc" title="Close (Esc)">×</button></div>
+  <div class="calc-hist" id="calc-hist"></div>
+  <input id="calc-in" type="text" autocomplete="off" spellcheck="false" placeholder="e.g. 45.20*1.08 + 12">
+  <div class="calc-out"><span class="calc-eq">=</span><span id="calc-res">—</span></div>
+  <div class="calc-foot">
+    <span class="calc-hint" id="calc-hint">+ − × ÷ ( ) % · Enter keeps · start with an operator to chain</span>
+    <button class="calc-use" id="calc-use" data-action="calcInsert" disabled title="Insert the rounded result into the field you last clicked">Insert ↵ field</button>
   </div>
 </div>
 
@@ -1515,6 +1550,8 @@ function initEventListeners(){
     'submitHsaReimburse': submitHsaReimburse,
     'hideHsaModal':       hideHsaModal,
     'toggleHsaOpen':      toggleHsaOpen,
+    'toggleCalc':         function(){ toggleCalc(); },
+    'calcInsert':         function(){ calcInsert(); },
   };
 
   // Tab buttons — use existing data-tab attribute
@@ -1561,6 +1598,154 @@ function initEventListeners(){
 
 // All utilities defined at top of script. Call initEventListeners now that DOM is ready.
 initEventListeners();
+
+// ── calculator ──
+// Pure recursive-descent evaluator (no eval). Grammar:
+//   expr := term (('+'|'-') term)*        a bare-percent term in +/- is a percent OF the left side
+//   term := unary (('*'|'/') unary)*      ('x' '×' '÷' accepted)
+//   unary := ('-'|'+') unary | post ;  post := primary '%'* ;  primary := number | '(' expr ')'
+// So 100+8% = 108, 100-15% = 85, 100*8% = 8, 8% = 0.08 (phone-calculator semantics).
+// Returns a finite number or throws Error with a human message.
+function calcEval(src){
+  var s = String(src).replace(/[\s,$]/g,'').replace(/[x×]/gi,'*').replace(/÷/g,'/').replace(/−/g,'-');
+  if(!s) throw new Error('empty');
+  var i = 0;
+  function fail(m){ throw new Error(m); }
+  function primary(){
+    if(s[i] === '('){
+      i++; var v = expr();
+      if(s[i] !== ')') fail('missing )');
+      i++; return v;
+    }
+    var m = /^(\d+\.?\d*|\.\d+)/.exec(s.slice(i));
+    if(!m) fail(i < s.length ? 'unexpected "'+s[i]+'"' : 'incomplete');
+    i += m[0].length; return parseFloat(m[0]);
+  }
+  function post(){
+    var v = primary(), pct = false;
+    while(s[i] === '%'){ i++; v = v / 100; pct = true; }
+    return { v: v, pct: pct };
+  }
+  function unary(){
+    if(s[i] === '-'){ i++; var u = unary(); return { v: -u.v, pct: u.pct }; }
+    if(s[i] === '+'){ i++; return unary(); }
+    return post();
+  }
+  function term(){
+    var a = unary(), v = a.v, pct = a.pct;
+    while(s[i] === '*' || s[i] === '/'){
+      var op = s[i++], b = unary().v;
+      if(op === '/' && b === 0) fail('divide by zero');
+      v = op === '*' ? v * b : v / b; pct = false;
+    }
+    return { v: v, pct: pct };
+  }
+  function expr(){
+    var v = term().v;
+    while(s[i] === '+' || s[i] === '-'){
+      var op = s[i++], t = term();
+      var rhs = t.pct ? v * t.v : t.v;
+      v = op === '+' ? v + rhs : v - rhs;
+    }
+    return v;
+  }
+  var out = expr();
+  if(i !== s.length) fail(s[i] === ')' ? 'unmatched )' : 'unexpected "'+s[i]+'"');
+  if(!isFinite(out)) fail('not a finite number');
+  return Math.round(out * 1e10) / 1e10;   // kill float dust (0.1+0.2)
+}
+
+var calcLast = null;      // last kept result, for operator-first chaining
+var calcCur  = null;      // live result of the current input (null = invalid/empty)
+var calcField = null;     // last focused input OUTSIDE the calculator (Insert target)
+
+function calcFmt(v){
+  var two = Math.round(v * 100) / 100;
+  var main = fmt(two, 2);
+  return two === v ? main : main + '  (' + v + ')';   // show full precision when rounding hides some
+}
+
+function calcExprFor(raw){
+  // Leading * / + chains onto the last kept result, like a desk calculator. A leading '-'
+  // stays a negative number (ambiguous otherwise).
+  var t = raw.trim();
+  if(calcLast != null && /^[*\/+x×÷]/.test(t)) return String(calcLast) + t;
+  return t;
+}
+
+function calcUpdate(){
+  var raw = $('calc-in').value, out = $('calc-res'), box = out.parentNode;
+  if(!raw.trim()){ calcCur = null; out.textContent = '—'; box.classList.remove('err'); calcSyncUse(); return; }
+  try {
+    calcCur = calcEval(calcExprFor(raw));
+    out.textContent = calcFmt(calcCur); box.classList.remove('err');
+  } catch(e){
+    calcCur = null; out.textContent = e.message === 'incomplete' ? '…' : '⚠ ' + e.message; box.classList.add('err');
+  }
+  calcSyncUse();
+}
+
+function calcSyncUse(){
+  var ok = calcCur != null && calcField && document.contains(calcField) && !calcField.disabled;
+  $('calc-use').disabled = !ok;
+}
+
+function calcKeep(){
+  if(calcCur == null) return;
+  var expr = calcExprFor($('calc-in').value);
+  var row = document.createElement('div');
+  var a = document.createElement('span'); a.textContent = expr;
+  var b = document.createElement('span'); b.textContent = fmt(Math.round(calcCur*100)/100, 2);
+  row.appendChild(a); row.appendChild(b);
+  var h = $('calc-hist'); h.appendChild(row);
+  while(h.children.length > 8) h.removeChild(h.firstChild);
+  h.scrollTop = h.scrollHeight;
+  calcLast = calcCur;
+  $('calc-in').value = ''; calcUpdate();
+}
+
+function calcInsert(){
+  // Money fields take cents; value goes in rounded to 2dp and fires 'input' so dependent
+  // logic (split remainder / auto line) reacts exactly as if typed.
+  var v = calcCur != null ? calcCur : calcLast;
+  if(v == null) return;
+  if(!calcField || !document.contains(calcField)){ showBanner('Click the field you want to fill first','err'); calcSyncUse(); return; }
+  calcField.value = (Math.round(v * 100) / 100).toFixed(2);
+  calcField.dispatchEvent(new Event('input',  { bubbles: true }));
+  calcField.dispatchEvent(new Event('change', { bubbles: true }));
+  if(calcCur != null) calcKeep();
+  calcField.focus();
+}
+
+function toggleCalc(force){
+  var pop = $('calc-pop');
+  var open = typeof force === 'boolean' ? force : pop.style.display === 'none';
+  if(open && pop.parentNode !== document.body) document.body.appendChild(pop);
+  pop.style.display = open ? 'block' : 'none';
+  if(open){ calcSyncUse(); var inp = $('calc-in'); inp.focus(); inp.select(); }
+  else if(calcField && document.contains(calcField)) calcField.focus();
+}
+
+(function initCalc(){
+  var inp = $('calc-in');
+  if(!inp) return;
+  inp.oninput = calcUpdate;
+  inp.onkeydown = function(e){
+    if(e.key === 'Enter'){ e.preventDefault(); calcKeep(); }
+    else if(e.key === 'Escape'){ e.stopPropagation(); toggleCalc(false); }   // don't also close an open modal
+  };
+  // Track the Insert target: last number input the user focused outside the calculator.
+  document.addEventListener('focusin', function(e){
+    var t = e.target;
+    if(!t || t.tagName !== 'INPUT' || t.closest('#calc-pop')) return;
+    if(t.type !== 'number') return;   // money fields only -- never clobber a description
+    calcField = t; calcSyncUse();
+  });
+  // Alt+C anywhere (e.code is layout-independent; preventDefault stops Mac's 'ç').
+  document.addEventListener('keydown', function(e){
+    if(e.altKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyC'){ e.preventDefault(); toggleCalc(); }
+  });
+})();
 
 // ── banner ──
 function showBanner(msg, type) {
