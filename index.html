@@ -495,7 +495,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .bj-total-row .bj-label{font-weight:600;color:var(--text)}
 .bj-total-row .bj-val{color:var(--blue);font-size:13px}
 
-.var-section{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);overflow:hidden;margin-bottom:14px;box-shadow:var(--shadow)}
+.var-section{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);overflow-x:auto;margin-bottom:14px;box-shadow:var(--shadow)}
 .var-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;align-items:start}
 .var-grid .var-section{margin-bottom:0}
 @media (max-width: 1100px){ .var-grid{grid-template-columns:1fr} }
@@ -511,6 +511,11 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .var-entry-table td.vdate{font-family:var(--mono);font-size:12px;color:var(--muted);white-space:nowrap}
 .var-entry-table td.vcost{font-family:var(--mono);font-size:12px;text-align:right}
 .var-entry-table td.vpay{font-size:12px;color:var(--muted)}
+/* Edit row: inputs shrink to the column instead of forcing the table wider than its
+   1/3-width card (which used to clip the save/cancel cell off the right edge). */
+.var-entry-table tr.editing td{padding:6px 4px}
+.var-entry-table tr.editing .ei{width:100%;min-width:0;box-sizing:border-box}
+.var-entry-table tr.editing td:last-child{width:1%;white-space:nowrap}
 .var-empty-row{padding:18px 16px;font-size:13px;color:var(--faint);text-align:center}
 /* add-entry inline form */
 .var-add-form{display:none;padding:10px 14px;background:var(--amber-bg);border-top:1px solid var(--amber-bd);gap:8px;flex-wrap:wrap;align-items:flex-end}
@@ -679,6 +684,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .split-row input[type=text],.split-row input[type=number],.split-pm-sel{font-family:var(--mono);font-size:12px;padding:5px 7px;border:1px solid var(--border2);border-radius:6px;background:var(--surface2);color:var(--text);outline:none;width:100%}
 .split-row input:focus,.split-pm-sel:focus{border-color:var(--blue-lt)}
 .split-row input[type=number]{text-align:right}
+.split-row.split-auto input[data-field="price"]{font-style:italic;border-style:dashed}
 .split-computed{font-family:var(--mono);font-size:12px;text-align:right;padding:5px 7px;border-radius:6px;font-weight:500;white-space:nowrap;border:1px solid var(--border)}
 .split-computed.plain{background:var(--surface2);color:var(--text)}
 .split-computed.taxed{background:var(--blue-bg);color:var(--blue);border-color:var(--blue-bd)}
@@ -1447,6 +1453,7 @@ function initEventListeners(){
       if(!row) return;
       var sid = parseFloat(row.dataset.sid);
       var f = t.dataset.field;
+      if(f === 'price' && e.type === 'input') row.dataset.auto = (t.value === '') ? '1' : '0';
       if(f === 'price' || f === 'taxed') updateRowAmount(sid);
       else if(f === 'varroute')          onVarRouteChange(sid);
     };
@@ -1486,7 +1493,8 @@ function initEventListeners(){
     'showAddMonth':       showAddMonth,
     'showSetup':          showSetup,
     'closeCardDrawer':    closeCardDrawer,
-    'addSplitRow':        addSplitRow,
+    // Wrapped: a bare reference would pass the click event as `desc` ([object PointerEvent]).
+    'addSplitRow':        function(){ var t=txns[splitSourceIdx]; addSplitRow('', null, false, t?t.paymentMethod:'', false, false, false); },
     'submitSplit':        submitSplit,
     'hideSplitModal':     hideSplitModal,
     'submitChkEntry':     submitChkEntry,
@@ -4350,10 +4358,16 @@ function editVarEntry(prefix, idx){
     '<td><input class="ei" type="number" id="vedit-amt-'+idx+'" step="0.01" value="'+(e.cost||'')+'"></td>'+
     '<td><select class="ei" id="vedit-pay-'+idx+'"><option value="">—</option>'+pmOpts+'</select></td>'+
     '<td style="white-space:nowrap">'+
-    '<button class="rbtn save-btn" data-action="saveVarEdit" data-args="'+prefix+','+idx+','+e.id+'">✓</button>'+
-    '<button class="rbtn cancel-btn" data-action="cancelVarEdit">✕</button>'+
+    '<button class="rbtn save" data-action="saveVarEdit" data-args="'+prefix+','+idx+','+e.id+'" title="Save (Enter)">✓ save</button>'+
+    '<button class="rbtn" data-action="cancelVarEdit" title="Cancel (Esc)">✕</button>'+
     '</td>';
   row.className = 'editing';
+  // Keyboard path: Enter saves, Esc cancels -- works even if the buttons are off-screen.
+  row.onkeydown = function(ev){
+    if(ev.key === 'Enter'){ ev.preventDefault(); saveVarEdit(prefix, idx, e.id); }
+    else if(ev.key === 'Escape'){ ev.stopPropagation(); cancelVarEdit(); }
+  };
+  var amtIn = $('vedit-amt-'+idx); if(amtIn){ amtIn.focus(); amtIn.select(); }
 }
 
 function cancelVarEdit(){
@@ -4818,7 +4832,7 @@ function showSplitModal(i){
   $('split-rows').innerHTML = '';
   splitRowCount = 0;
   _adderItems = {};
-  addSplitRow(t.description, t.cost||0, false, t.paymentMethod, t.discretionary, t.ben, t.jenna);
+  addSplitRow(t.description, t.cost||0, false, t.paymentMethod, t.discretionary, t.ben, t.jenna, true);
   addSplitRow('', 0, false, t.paymentMethod, false, false, false);
 
   updateSplitRemainder();
@@ -4836,13 +4850,16 @@ function hideSplitModal(){
   if($('split-tax-rate')) lsSet(TAX_RATE_KEY, $('split-tax-rate').value);
 }
 
-function addSplitRow(desc, price, taxed, pm, disc, ben, jenna){
+// manual=true pins the row's price; otherwise the row is 'auto' and, while it is the
+// LAST row, syncPlugRow() keeps its price equal to the remaining balance.
+function addSplitRow(desc, price, taxed, pm, disc, ben, jenna, manual){
   try {
   var id  = ++splitRowCount;
   var fin = computeFinal(price||0, taxed);
   var row = document.createElement('div');
   row.className  = 'split-row';
   row.dataset.sid = id;
+  row.dataset.auto = manual ? '0' : '1';
   row.innerHTML =
     '<input type="text"   data-field="desc"  value="'+esc(desc||'')+'"  placeholder="Description">'+
     '<input type="number" data-field="price" value="'+(price||'')+'"  step="0.01" placeholder="0.00">'+
@@ -4960,6 +4977,7 @@ function applyItems(sid){
   if(splitRow){
     var priceField = splitRow.querySelector('[data-field="price"]');
     if(priceField){
+      splitRow.dataset.auto = '0';
       priceField.value = total;
       updateRowAmount(sid);
     }
@@ -5049,9 +5067,56 @@ function getSplitRows(){
   });
 }
 
+// Pre-tax price whose computeFinal() lands exactly on target (taxed rows can miss by a
+// cent after rounding; search the neighbours and keep the closest).
+function plugPreTax(target, taxed){
+  if(!taxed) return target;
+  var base = Math.round(target / (1 + getTaxRate()) * 100) / 100;
+  var best = base, bestErr = Infinity;
+  [-0.01, 0, 0.01].forEach(function(d){
+    var p = Math.round((base + d) * 100) / 100;
+    var err = Math.abs(computeFinal(p, true) - target);
+    if(err < bestErr - 1e-9){ best = p; bestErr = err; }
+  });
+  return best;
+}
+
+// If the LAST row is still auto (never typed into), set its price to the remaining
+// balance. Over-allocation clamps it to blank rather than a sign-flipped line, so the
+// 'Over by' indicator stays visible instead of being silently absorbed.
+function syncPlugRow(t){
+  var rows = $('split-rows').querySelectorAll('.split-row[data-sid]');
+  if(rows.length < 2) return;
+  var last = rows[rows.length - 1];
+  var isPlug = last.dataset.auto === '1';
+  rows.forEach(function(r){
+    var on = (r === last && isPlug);
+    r.classList.toggle('split-auto', on);
+    var pi = r.querySelector('[data-field="price"]');
+    if(pi) pi.title = on ? 'Auto: remaining balance. Type to override; clear to re-enable.' : '';
+  });
+  if(!isPlug) return;
+  var total = t.cost || 0, others = 0;
+  for(var i = 0; i < rows.length - 1; i++){
+    var p = parseFloat(rows[i].querySelector('[data-field="price"]').value) || 0;
+    others += computeFinal(p, rows[i].querySelector('[data-field="taxed"]').checked);
+  }
+  var target = Math.round((total - others) * 100) / 100;
+  if(target * total < 0) target = 0;
+  var taxed = last.querySelector('[data-field="taxed"]').checked;
+  var pre   = plugPreTax(target, taxed);
+  last.querySelector('[data-field="price"]').value = pre ? pre.toFixed(2) : '';
+  var el = $('split-fin-' + last.dataset.sid);
+  if(el){
+    el.textContent = fmt(computeFinal(pre, taxed), 2);
+    el.className   = 'split-computed ' + (taxed ? 'taxed' : 'plain');
+  }
+}
+
 function updateSplitRemainder(){
   var t = splitSourceIdx >= 0 ? txns[splitSourceIdx] : null;
   if(!t) return;
+  syncPlugRow(t);
   var total     = t.cost || 0;
   var allocated = getSplitRows().reduce(function(s,r){ return s + r.cost; }, 0);
   allocated     = Math.round(allocated * 100) / 100;
