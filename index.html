@@ -1826,41 +1826,109 @@ function bootDashboard() {
   }
 }
 
-async function apiFetch(base, action, params){
-  params = params || {};
-  var url = base + '?action=' + action;
-  Object.keys(params).forEach(function(k){ url += '&' + k + '=' + encodeURIComponent(params[k]); });
-  // Cache-buster + no-store: the browser otherwise serves stale cached
-  // responses for repeated identical GETs (e.g. refetching variableEntries
-  // right after adding an entry), making fresh writes invisible until a
-  // hard refresh.
-  url += '&_ts=' + Date.now();
-  var res = await fetch(url, { cache: 'no-store' });
-  if(!res.ok) throw new Error('HTTP ' + res.status);
-  var data = await res.json();
-  if(data.error) throw new Error(data.error);
+// ── network layer: bounded retry + failure log ──
+// Transient Google-side failures (HTTP 404/429/5xx, dropped connections, an HTML error page
+// served with 200) clear on their own -- that's why a manual refresh "fixes" them. Reads are
+// always safe to retry. Writes are retried ONLY when they carry an idemKey (the server dedups
+// by key, so a retry after a write that landed returns the cached result instead of writing twice).
+var NET_RETRY_STATUS = { 404:1, 408:1, 429:1, 500:1, 502:1, 503:1, 504:1 };
+var NET_BACKOFF_MS   = [700, 1800];          // 3 attempts total, ~2.5 s worst case (+ jitter)
+var NET_LOG_KEY      = 'fin_netlog';
+
+function netSleep(ms){ return new Promise(function(r){ setTimeout(r, ms + Math.random()*300); }); }
+
+// Where did the failing response come from? Redact the script id (SCRIPT_URL is a bearer secret).
+function netWhere(u){
+  if(!u) return '(no response)';
+  try { var x = new URL(u); return x.host + x.pathname.replace(/\/s\/[^\/]+/, '/s/<id>'); }
+  catch(e){ return '?'; }
+}
+
+// Local ring buffer (last 60) so an intermittent failure leaves evidence. Inspect with netLog()
+// in the browser console. Never sent anywhere.
+function netRecord(kind, action, attempt, status, where, recovered){
+  var log = lsGetJSON(NET_LOG_KEY, []);
+  log.push({ t: new Date().toISOString(), kind: kind, action: action, attempt: attempt,
+             status: status, where: where, recovered: !!recovered });
+  if(log.length > 60) log = log.slice(-60);
+  lsSetJSON(NET_LOG_KEY, log);
+}
+function netMarkRecovered(){
+  var log = lsGetJSON(NET_LOG_KEY, []);
+  if(log.length){ log[log.length-1].recovered = true; lsSetJSON(NET_LOG_KEY, log); }
+}
+window.netLog = function(){ var l = lsGetJSON(NET_LOG_KEY, []); console.table(l); return l.length + ' entries'; };
+window.netLogClear = function(){ lsSetJSON(NET_LOG_KEY, []); return 'cleared'; };
+
+// One attempt. Returns {data} on success, throws an Error tagged with .retryable/.status/.where.
+async function netAttempt(url, opts){
+  var res;
+  try { res = await fetch(url, opts); }
+  catch(e){ var ne = new Error('network error (' + e.message + ')'); ne.retryable = true; ne.status = 0; ne.where = '(no response)'; throw ne; }
+  if(!res.ok){
+    var he = new Error('HTTP ' + res.status); he.status = res.status; he.where = netWhere(res.url);
+    he.retryable = !!NET_RETRY_STATUS[res.status]; throw he;
+  }
+  var data;
+  try { data = await res.json(); }
+  catch(e){ var je = new Error('bad response (not JSON)'); je.status = res.status; je.where = netWhere(res.url); je.retryable = true; throw je; }
+  if(data && data.error){ var ae = new Error(data.error); ae.retryable = false; ae.app = true; throw ae; }  // server said no: never retry
   return data;
 }
+
+async function netWithRetry(kind, action, makeReq, canRetry){
+  var last;
+  for(var attempt = 0; attempt <= NET_BACKOFF_MS.length; attempt++){
+    try {
+      var req = makeReq();
+      var data = await netAttempt(req.url, req.opts);
+      if(attempt > 0) netMarkRecovered();
+      return data;
+    } catch(e){
+      last = e;
+      if(e.app) throw e;
+      netRecord(kind, action, attempt + 1, e.status, e.where, false);
+      if(!e.retryable || !canRetry || attempt === NET_BACKOFF_MS.length) break;
+      await netSleep(NET_BACKOFF_MS[attempt]);
+    }
+  }
+  throw last;
+}
+
+async function apiFetch(base, action, params){
+  params = params || {};
+  var q = '?action=' + action;
+  Object.keys(params).forEach(function(k){ q += '&' + k + '=' + encodeURIComponent(params[k]); });
+  try {
+    return await netWithRetry('GET', action, function(){
+      // Fresh cache-buster per attempt + no-store: the browser otherwise serves stale cached
+      // responses for repeated identical GETs, making fresh writes invisible until a hard refresh.
+      return { url: base + q + '&_ts=' + Date.now(), opts: { cache: 'no-store' } };
+    }, true);
+  } catch(e){
+    if(!e.app) e.message += ' after retries';
+    throw e;
+  }
+}
+
 // Unique key per write operation -- lets the server detect and ignore
 // duplicate requests, which makes automatic retries safe.
 function genIdemKey(action){
   return 'idem_'+action+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,10);
 }
 
-async function apiPost(base, payload, _retried){
+async function apiPost(base, payload){
+  var action = (payload && payload.action) || '?';
+  var safe   = !!(payload && payload.idemKey);
   try {
-    var res = await fetch(base, { method:'POST', body:JSON.stringify(payload) });
-    if(!res.ok) throw new Error('HTTP ' + res.status);
-    var data = await res.json();
-    if(data.error) throw new Error(data.error);
-    return data;
-  } catch(e) {
-    // Retry ONLY when the payload carries an idemKey -- the server will
-    // recognize the key and skip the write if the first attempt landed.
-    if(payload && payload.idemKey && !_retried && (e.message||'').indexOf('HTTP') !== 0){
-      await new Promise(function(r){ setTimeout(r, 2000); });
-      return apiPost(base, payload, true);
-    }
+    return await netWithRetry('POST', action, function(){
+      return { url: base, opts: { method:'POST', body: JSON.stringify(payload) } };
+    }, safe);
+  } catch(e){
+    // A failed POST response does NOT mean the write failed: Apps Script runs doPost, then
+    // redirects to a result URL -- a 404 there loses the answer, not the write. Say so, in the
+    // message every caller already shows (they match 'fetch' for the network-error branch).
+    if(!e.app) e.message += ' \u2014 it may have saved; refresh to check before retrying (fetch uncertain)';
     throw e;
   }
 }
