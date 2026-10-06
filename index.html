@@ -399,21 +399,6 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .acct-log-btn{font-family:var(--mono);font-size:10px;padding:4px 8px;background:transparent;border:1px solid var(--border2);border-radius:6px;color:var(--muted);cursor:pointer;margin-top:6px;width:100%}
 .acct-log-btn:hover{background:var(--surface2);color:var(--text)}
 
-.dc-reminder{display:flex;align-items:flex-start;gap:14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:16px 18px;margin-bottom:16px;box-shadow:var(--shadow)}
-.dc-reminder.urgent{background:var(--terra-bg);border-color:var(--terra-bd)}
-.dc-reminder.soon{background:var(--amber-bg);border-color:var(--amber-bd)}
-.dc-reminder.ok{background:var(--green-bg);border-color:var(--green-bd)}
-.dc-icon{font-size:24px;line-height:1;flex-shrink:0;margin-top:1px}
-.dc-body{flex:1;min-width:0}
-.dc-title{font-weight:600;font-size:14px;margin-bottom:3px}
-.dc-reminder.urgent .dc-title{color:var(--terra)}
-.dc-reminder.soon .dc-title{color:var(--amber)}
-.dc-reminder.ok .dc-title{color:var(--green)}
-.dc-detail{font-size:12px;color:var(--muted);line-height:1.5}
-.dc-detail strong{color:var(--text)}
-.dc-schedule{margin-top:12px;border-top:1px solid var(--border);padding-top:10px}
-.dc-schedule-title{font-family:var(--mono);font-size:10px;font-weight:500;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;cursor:pointer}
-.dc-schedule-title:hover{color:var(--muted)}
 .dc-schedule-rows{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:6px}
 .dc-pay-row{display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 8px;border-radius:6px;background:var(--surface2)}
 .dc-pay-row.past{opacity:.45}
@@ -876,6 +861,10 @@ tr:hover .racts,tr.editing .racts{opacity:1}
         <div class="tw-card tw-stat" id="tw-cards"><div class="tw-eyebrow">Cards owed</div><div class="tw-stat-val">—</div></div>
         <div class="tw-card tw-stat" id="tw-daycare"><div class="tw-eyebrow">Daycare</div><div class="tw-stat-val">—</div></div>
       </div>
+      <div class="tw-card" id="tw-dc-sched" style="display:none;margin-bottom:14px">
+        <div class="tw-eyebrow">Daycare payment schedule</div>
+        <div class="dc-schedule-rows" id="dc-sched-rows"></div>
+      </div>
       <div class="tw-grid">
         <div class="tw-card" id="tw-budget"><div class="tw-eyebrow">This month</div><div class="tw-big sk" style="height:24px;width:120px"> </div></div>
         <div class="tw-card" id="tw-networth"><div class="tw-eyebrow">Net worth</div><div class="tw-big sk" style="height:24px;width:120px"> </div></div>
@@ -925,7 +914,6 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 
     <!-- FIXED EXPENSES -->
     <div id="tab-fixed" class="tab-panel">
-      <div id="daycare-reminder"></div>
       <div class="fx-bar">
         <select class="msel" id="msel-fx">
           <option value="">— select month —</option>
@@ -1796,7 +1784,6 @@ function useDemoData(){
   d.cardTotals    = demoCardTotals();
   d.cardBalances  = demoCardBalances();
   renderAll(d);
-  renderDaycareReminder();
 }
 
 // ── api ──
@@ -1995,7 +1982,6 @@ function renderAll(data){
     loadFixed(firstMonth,true);
   }
   loadAccounts();
-  renderDaycareReminder();
   renderThisWeek();
   // Warm net worth in the background so the header band fills without a
   // tab visit (server caches it 5 min; nwData prevents refetch on tab click)
@@ -2228,25 +2214,35 @@ function twCards(){
 
 function twDaycare(){
   var el=$('tw-daycare'); if(!el) return;
-  var today=new Date(localToday()+'T12:00:00');
+  // Compare calendar days, not instants: schedule Fridays are built by adding
+  // 24h steps from DC_LAST_PAID, so across a DST change they drift to 11:00/13:00
+  // and an instant compare against noon drops the payment on its own due day.
+  var today=dcDay(new Date());
   var rows=daycareSchedule();
-  var nextPay=null, closedBefore=[];
+  var nextPay=null, nextIdx=-1, closedBefore=[];
   for(var i=0;i<rows.length;i++){
     var r=rows[i];
-    if(r.friday < today) continue;
+    if(dcDay(r.friday) < today) continue;
     if(r.skipped){ if(!nextPay) closedBefore.push(r); continue; }
-    nextPay=r; break;
+    nextPay=r; nextIdx=i; break;
   }
+  var md={month:'short',day:'numeric'};
   var h='<div class="tw-eyebrow">Daycare</div>';
   if(nextPay){
-    var days=Math.round((nextPay.friday-today)/86400000);
-    h+='<div class="tw-stat-val">'+nextPay.friday.toLocaleDateString('en-US',{month:'short',day:'numeric'})+'</div>'+
-       '<div class="tw-stat-sub">'+fmt(DC_AMOUNT)+' · '+(days<=0?'today':'in '+days+'d')+
-       (closedBefore.length?' · <span style="color:var(--gold)">◇ closed '+closedBefore[0].monday.toLocaleDateString('en-US',{month:'short',day:'numeric'})+'</span>':'')+'</div>';
+    var days=Math.round((dcDay(nextPay.friday)-today)/86400000);
+    // Urgency carried by glyph + wording + weight, never hue (protan)
+    var when=days<=0?'due today':'in '+days+'d';
+    if(days<=3) when='<strong>⚠ '+when+'</strong>';
+    h+='<div class="tw-stat-val">'+nextPay.friday.toLocaleDateString('en-US',md)+'</div>'+
+       '<div class="tw-stat-sub">'+fmt(DC_AMOUNT)+' · '+when+
+       (closedBefore.length?' · <span style="color:var(--gold)">◇ closed '+closedBefore[0].monday.toLocaleDateString('en-US',md)+'</span>':'')+'</div>'+
+       '<div class="tw-stat-sub">covers wk of '+nextPay.monday.toLocaleDateString('en-US',md)+' · '+
+       '<span class="tw-link" style="margin-top:0" data-action="toggleDcSchedule">schedule '+(DC_SCHEDULE_VISIBLE?'▲':'▼')+'</span></div>';
   } else {
-    h+='<div class="tw-stat-val">—</div>';
+    h+='<div class="tw-stat-val">—</div><div class="tw-stat-sub">no upcoming payments in schedule</div>';
   }
   el.innerHTML=h;
+  renderDcSchedule(rows, nextIdx, today);
 }
 
 function twBudget(){
@@ -5784,96 +5780,33 @@ function daycareSchedule(){
   return rows;
 }
 
-function renderDaycareReminder(){
-  var el = $('daycare-reminder');
-  if(!el) return;
-  var today = new Date(); today.setHours(0,0,0,0);
-  var schedule = daycareSchedule();
+function dcDay(d){ var x=new Date(d); x.setHours(0,0,0,0); return x; }
 
-  // Find next due (first non-skipped, non-past Friday)
-  var next = null, nextIdx = -1;
-  for(var i=0; i<schedule.length; i++){
-    var s = schedule[i];
-    if(s.skipped) continue;
-    var f = new Date(s.friday); f.setHours(0,0,0,0);
-    if(f >= today){ next = s; nextIdx = i; break; }
-  }
-
-  // Urgency: <=1 day = urgent, <=7 days = soon, else ok
-  var urgencyClass = 'ok', icon = '✅', title = '', detail = '';
-  if(next){
-    var dueDate = new Date(next.friday); dueDate.setHours(0,0,0,0);
-    var daysUntil = Math.round((dueDate - today) / (24*60*60*1000));
-    var dueFmt = dueDate.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
-    var coversFmt = next.monday.toLocaleDateString('en-US',{month:'short',day:'numeric'});
-
-    if(daysUntil === 0){
-      urgencyClass='urgent'; icon='🔴';
-      title = 'Daycare payment due TODAY — $'+DC_AMOUNT.toLocaleString();
-      detail = 'Pay <strong>$'+DC_AMOUNT.toLocaleString()+'</strong> today. Covers the week starting <strong>'+coversFmt+'</strong>.';
-    } else if(daysUntil < 0){
-      urgencyClass='urgent'; icon='🔴';
-      title = 'Daycare payment OVERDUE';
-      detail = 'Payment of <strong>$'+DC_AMOUNT.toLocaleString()+'</strong> was due <strong>'+dueFmt+'</strong> ('+Math.abs(daysUntil)+' days ago), covering week of <strong>'+coversFmt+'</strong>.';
-    } else if(daysUntil <= 3){
-      urgencyClass='urgent'; icon='🟠';
-      title = 'Daycare payment due in '+daysUntil+' day'+(daysUntil===1?'':'s');
-      detail = 'Pay <strong>$'+DC_AMOUNT.toLocaleString()+'</strong> by <strong>'+dueFmt+'</strong>. Covers the week starting <strong>'+coversFmt+'</strong>.';
-    } else if(daysUntil <= 10){
-      urgencyClass='soon'; icon='🟡';
-      title = 'Daycare payment due in '+daysUntil+' days';
-      detail = 'Next payment of <strong>$'+DC_AMOUNT.toLocaleString()+'</strong> is due <strong>'+dueFmt+'</strong>. Covers the week starting <strong>'+coversFmt+'</strong>.';
-    } else {
-      urgencyClass='ok'; icon='🟢';
-      title = 'Daycare — next payment in '+daysUntil+' days';
-      detail = 'Next payment of <strong>$'+DC_AMOUNT.toLocaleString()+'</strong> due <strong>'+dueFmt+'</strong>. Covers the week starting <strong>'+coversFmt+'</strong>.';
-    }
-  } else {
-    title = 'No upcoming daycare payments found';
-    detail = 'All payments through end of schedule are past.';
-  }
-
-  // Build schedule rows (show from 2 before next up to end of 2026, or all future)
-  var scheduleHTML = '';
-  var startIdx = Math.max(0, nextIdx - 2);
-  schedule.forEach(function(s, i){
-    if(i < startIdx) return;
-    var f = new Date(s.friday); f.setHours(0,0,0,0);
-    var isPast = f < today && !s.skipped;
-    var isNext = i === nextIdx;
-    var fStr = s.friday.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-    var mStr = s.monday.toLocaleDateString('en-US',{month:'short',day:'numeric'});
-    var rowClass = s.skipped ? 'skipped' : (isPast ? 'past' : (isNext ? 'next-up' : ''));
-    var badge = isNext ? '<span class="dc-pay-badge">next</span>' : '';
-    var label = s.skipped
+// Full schedule panel on This Week (folded in from the old Recurring-tab banner).
+// Rows from 2 before the next payment onward. State is carried by text
+// ("next" badge, "closed week" label) and opacity for past rows -- not hue.
+function renderDcSchedule(rows, nextIdx, today){
+  var panel=$('tw-dc-sched'), el=$('dc-sched-rows'); if(!panel||!el) return;
+  panel.style.display=DC_SCHEDULE_VISIBLE?'block':'none';
+  var h='', start=nextIdx<0?rows.length:Math.max(0, nextIdx-2);
+  rows.forEach(function(s, i){
+    if(i<start) return;
+    var isPast=dcDay(s.friday)<today && !s.skipped;
+    var isNext=i===nextIdx;
+    var fStr=s.friday.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    var mStr=s.monday.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+    var cls=s.skipped?'skipped':(isPast?'past':(isNext?'next-up':''));
+    var label=s.skipped
       ? '<span class="dc-pay-date">'+fStr+'</span><span class="dc-pay-covers">closed week — no payment</span>'
-      : '<span class="dc-pay-date">'+fStr+'</span><span class="dc-pay-covers">covers Mon '+mStr+'</span>'+badge;
-    scheduleHTML += '<div class="dc-pay-row '+rowClass+'"><div class="dc-pay-dot"></div>'+label+'</div>';
+      : '<span class="dc-pay-date">'+fStr+'</span><span class="dc-pay-covers">covers Mon '+mStr+'</span>'+(isNext?'<span class="dc-pay-badge">next</span>':'');
+    h+='<div class="dc-pay-row '+cls+'"><div class="dc-pay-dot"></div>'+label+'</div>';
   });
-
-  el.innerHTML =
-    '<div class="dc-reminder '+urgencyClass+'">'+
-    '<div class="dc-icon">'+icon+'</div>'+
-    '<div class="dc-body">'+
-    '<div class="dc-title">'+title+'</div>'+
-    '<div class="dc-detail">'+detail+'</div>'+
-    '<div class="dc-schedule">'+
-    '<div class="dc-schedule-title" id="dc-sched-toggle" data-action="toggleDcSchedule">'+
-    'Full payment schedule <span id="dc-sched-arrow">'+(DC_SCHEDULE_VISIBLE?'▲':'▼')+'</span>'+
-    '</div>'+
-    '<div class="dc-schedule-rows" id="dc-sched-rows" style="display:'+(DC_SCHEDULE_VISIBLE?'grid':'none')+'">'+
-    scheduleHTML+
-    '</div>'+
-    '</div>'+
-    '</div>'+
-    '</div>';
+  el.innerHTML=h||'<div class="tw-stat-sub">No upcoming payments.</div>';
 }
 
 function toggleDcSchedule(){
   DC_SCHEDULE_VISIBLE = !DC_SCHEDULE_VISIBLE;
-  var rows = $('dc-sched-rows'), arrow = $('dc-sched-arrow');
-  if(rows) rows.style.display = DC_SCHEDULE_VISIBLE ? 'grid' : 'none';
-  if(arrow) arrow.textContent = DC_SCHEDULE_VISIBLE ? '▲' : '▼';
+  twDaycare(); // re-renders tile arrow + panel together
 }
 
 // ── ACCOUNTS TAB ─────────────────────────────────────────────
