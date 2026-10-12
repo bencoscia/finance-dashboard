@@ -161,6 +161,8 @@ function dispatch(payload) {
     else if (action === 'addHsaReceipt')      return _withIdem(payload, function(){ return addHsaReceipt(payload); });   // invalidates HSA cache internally
     else if (action === 'scanHsaFolder')      return scanHsaFolder(); // idempotent via fileId dedup, not _withIdem
     else if (action === 'updateHsaReceipt')   return _withIdem(payload, function(){ return updateHsaReceipt(payload); }); // invalidates HSA cache internally
+    else if (action === 'approveHsaReceipt')  return _withIdem(payload, function(){ return approveHsaReceipt(payload); });
+    else if (action === 'deleteHsaReceipt')   return _withIdem(payload, function(){ return deleteHsaReceipt(payload); });
     else if (action === 'ledgerAddTxn')         { var r = _withIdem(payload, function(){ return ledgerAddTxn(payload); });         invalidateCardBalanceCache(); return r; }
     else if (action === 'ledgerUpdateTxn')      { var r = _withIdem(payload, function(){ return ledgerUpdateTxn(payload); });      invalidateCardBalanceCache(); return r; }
     else if (action === 'ledgerDeleteTxn')      { var r = _withIdem(payload, function(){ return ledgerDeleteTxn(payload); });      invalidateCardBalanceCache(); return r; }
@@ -240,6 +242,8 @@ function doPost(e) {
     else if (p.action === 'addHsaReceipt')      data = _withIdem(p, function(){ return addHsaReceipt(p); });   // invalidates HSA cache internally
     else if (p.action === 'scanHsaFolder')      data = scanHsaFolder(); // idempotent via fileId dedup, not _withIdem
     else if (p.action === 'updateHsaReceipt')   data = _withIdem(p, function(){ return updateHsaReceipt(p); }); // invalidates HSA cache internally
+    else if (p.action === 'approveHsaReceipt')  data = _withIdem(p, function(){ return approveHsaReceipt(p); });
+    else if (p.action === 'deleteHsaReceipt')   data = _withIdem(p, function(){ return deleteHsaReceipt(p); });
     else if (p.action === 'ledgerAddTxn')       data = _withIdem(p, function(){ return ledgerAddTxn(p); }); // invalidates ledger cache internally
     else if (p.action === 'ledgerUpdateTxn')    data = _withIdem(p, function(){ return ledgerUpdateTxn(p); }); // invalidates ledger cache internally
     else if (p.action === 'ledgerDeleteTxn')    data = _withIdem(p, function(){ return ledgerDeleteTxn(p); }); // invalidates ledger cache internally
@@ -2927,14 +2931,15 @@ function saveNetWorthSnapshot(p) {
 // claim reimbursable EXACTLY once (idempotency + the reimburse guards).
 // Sheet layout (see INDEX section 8): B1 = current HSA balance (manual, blank
 // if unknown), B2 = balance as-of date, header row 3, data rows 4+. Columns
-// A..K: id, date_incurred, amount, provider, description, category, funding,
-// receipt_link, reimbursed_amount, reimbursed_date, notes.
+// A..N: id, date_incurred, amount, provider, description, category, funding,
+// receipt_link, reimbursed_amount, reimbursed_date, notes, source_file_id,
+// needs_review, deleted (tombstone -- see deleteHsaReceipt).
 // ============================================================
 var HSA_SHEET         = 'HSA Receipts';
 var HSA_CONTRIB_SHEET = 'HSA Contributions'; // date | amount | type(employee|employer|interest) | notes; header row 1, data row 2+
 var HSA_CONTRIB_DATA_ROW = 2;
 var HSA_DATA_ROW      = 4;          // 1-indexed first data row (headers on row 3)
-var HSA_CACHE_VERSION = 'hsa_v5';   // v5: date-aware balance (inflowsSince/outflowsSince; computedBalance now projects B1 forward) -- bump on getHsa response-shape change
+var HSA_CACHE_VERSION = 'hsa_v6';   // v6: rows carry notes; tombstoned (col N) rows excluded. v5: date-aware balance (inflowsSince/outflowsSince; computedBalance now projects B1 forward) -- bump on getHsa response-shape change
 var HSA_CACHE_KEY     = HSA_CACHE_VERSION + '_data';
 
 function _hsaR2(x) { var f = parseFloat(x); return isNaN(f) ? 0 : Math.round(f * 100) / 100; }
@@ -2984,6 +2989,7 @@ function _hsaRollups(rows, established, hsaBalance) {
       category:         r.category || '',
       funding:          funding,
       receiptLink:      r.receiptLink || '',
+      notes:            r.notes || '',
       reimbursedAmount: reimb,
       reimbursedDate:   r.reimbursedDate || '',
       status:           status,
@@ -3024,7 +3030,7 @@ function _hsaReadRows(sheet) {
   var lastRow = sheet.getLastRow();
   if (lastRow < HSA_DATA_ROW) return [];
   var n      = lastRow - (HSA_DATA_ROW - 1);
-  var values = sheet.getRange(HSA_DATA_ROW, 1, n, 13).getValues(); // A..M (M = needs_review)
+  var values = sheet.getRange(HSA_DATA_ROW, 1, n, 14).getValues(); // A..N (M = needs_review, N = deleted)
   var rows   = [];
   for (var i = 0; i < values.length; i++) {
     var v  = values[i];
@@ -3041,7 +3047,11 @@ function _hsaReadRows(sheet) {
       receiptLink:      (v[7] == null) ? '' : String(v[7]),
       reimbursedAmount: v[8],
       reimbursedDate:   _hsaDateStr(v[9]),
-      needsReview:      (v[12] === true || String(v[12]).toUpperCase() === 'TRUE')
+      notes:            (v[10] == null) ? '' : String(v[10]),
+      sourceFileId:     (v[11] == null) ? '' : String(v[11]),
+      needsReview:      (v[12] === true || String(v[12]).toUpperCase() === 'TRUE'),
+      deleted:          (v[13] === true || String(v[13]).toUpperCase() === 'TRUE'),
+      rowNum:           HSA_DATA_ROW + i
     });
   }
   return rows;
@@ -3196,7 +3206,8 @@ function getHsa() {
 
   var c = cfg();
   var established = c.hsaEstablished || null;
-  var roll = _hsaRollups(_hsaReadRows(sheet), established, hsaBalance);
+  var live = _hsaReadRows(sheet).filter(function (r) { return !r.deleted; }); // col N tombstones excluded everywhere
+  var roll = _hsaRollups(live, established, hsaBalance);
 
   var contribs = _hsaReadContributions(ss);
   var nowStr   = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
@@ -3240,6 +3251,7 @@ function reimburseReceipt(p) {
   var rowNum = -1, amount = 0, funding = 'OOP', dateIncurred = '';
   for (var i = HSA_DATA_ROW - 1; i < values.length; i++) {
     if (String(values[i][0]) === id) {
+      if (values[i][13] === true || String(values[i][13]).toUpperCase() === 'TRUE') return { error: 'Receipt ' + id + ' is deleted.' };
       rowNum       = i + 1;
       amount       = _hsaR2(values[i][2]);
       funding      = String(values[i][6] || 'OOP');
@@ -3266,26 +3278,21 @@ function reimburseReceipt(p) {
 
 // -- POST: add a new receipt row -------------------------------
 // Plain append -- HSA Receipts has no formulas or sections below the data
-// block (verified against the live sheet), so this is a single setValues
-// call, not the insertCells/SUM-repair dance the monthly sheets need.
-// LockService guards id assignment: two near-simultaneous adds (e.g. both
-// household members logging a receipt at once) must never compute the same
-// "next id" -- a duplicate id would corrupt the by-id lookup reimburseReceipt
-// depends on. Wrapped in _withIdem in both routers for retry-safety.
+// block, so this is a single setValues call. LockService guards id
+// assignment: two near-simultaneous adds must never compute the same
+// "next id" (a duplicate id corrupts every by-id lookup). Wrapped in
+// _withIdem in both routers for retry-safety.
+// Split into _hsaPrepRow (validate, pure) + _hsaAppendRow (write, assumes the
+// caller holds the script lock) so scanHsaFolder can append under ITS lock.
+// Previously the scan called addHsaReceipt, whose releaseLock() released the
+// scan's own (reentrant) lock after the first file.
+// Dedup (2026-10): a txn-originated draft (needsReview, no sourceFileId) is
+// checked against existing rows -- exact date+amount match => no new row
+// (returns duplicateOf); same amount within HSA_DUP_WINDOW_DAYS => created but
+// noted "possible duplicate of #id" so both are visible and one can be deleted.
 function addHsaReceipt(p, sheetNameOverride) {
-  var draft = !!p.needsReview; // best-effort import from a malformed filename
-  var amount = parseFloat(p.amount);
-  if (draft) { if (isNaN(amount) || amount < 0) amount = 0; }            // draft tolerates missing amount
-  else       { if (isNaN(amount) || amount <= 0) return { error: 'Amount must be a positive number.' }; }
-  var dateStr = String(p.dateIncurred || '').trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-    if (draft) dateStr = '';                                            // draft tolerates missing date
-    else return { error: 'Invalid or missing date incurred.' };
-  }
-  var funding = (String(p.funding || 'OOP').toUpperCase() === 'HSA') ? 'HSA' : 'OOP';
-  var receiptLink = String(p.receiptLink || '').trim();
-  if (receiptLink && !/^https?:\/\//i.test(receiptLink))
-    return { error: 'Receipt link must start with http:// or https://' };
+  var prep = _hsaPrepRow(p);
+  if (prep.error) return prep;
 
   var ss    = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(sheetNameOverride || HSA_SHEET);
@@ -3297,35 +3304,134 @@ function addHsaReceipt(p, sheetNameOverride) {
   if (!gotLock) return { error: 'Could not acquire lock -- please try again.' };
 
   try {
-    invalidateSheet(sheetNameOverride || HSA_SHEET);
-    var values = readSheet(sheet);
-    var maxId = 0;
-    for (var i = HSA_DATA_ROW - 1; i < values.length; i++) {
-      var n = parseInt(values[i][0], 10);
-      if (!isNaN(n) && n > maxId) maxId = n;
+    if (prep.draft && !prep.sourceFileId && prep.amount > 0) {
+      var dup = _hsaFindDup(_hsaReadRows(sheet),
+        { dateIncurred: prep.dateStr, amount: prep.amount }, { requireUnlinked: false });
+      if (dup && dup.kind === 'exact')
+        return { ok: true, id: dup.id, duplicateOf: dup.id, created: false };
+      if (dup && dup.kind === 'near')
+        prep.notes = _hsaJoinNote(prep.notes, 'Possible duplicate of #' + dup.id + ' (same amount, date within ' + HSA_DUP_WINDOW_DAYS + 'd)');
     }
-    var newId = maxId + 1;
-    var insertRow = Math.max(sheet.getLastRow() + 1, HSA_DATA_ROW);
-    // Col L (12) = source_file_id: the Drive fileId when created by the folder
-    // scan, blank for manual adds. This is the dedup key scanHsaFolder reads to
-    // avoid re-importing a file. Written in the same setValues as the id so it
-    // lands atomically under the lock.
-    var row = [
-      newId, (dateStr ? new Date(dateStr + 'T12:00:00') : ''), amount,
-      String(p.provider || '').trim(), String(p.description || '').trim(),
-      String(p.category || '').trim(), funding, receiptLink, '', '',
-      String(p.notes || '').trim(), String(p.sourceFileId || ''), (draft ? 'TRUE' : '')
-    ];
-    sheet.getRange(insertRow, 1, 1, row.length).setValues([row]);
-    sheet.getRange(insertRow, 1).setNumberFormat('0');
-    if (dateStr) sheet.getRange(insertRow, 2).setNumberFormat('yyyy-mm-dd');
-    sheet.getRange(insertRow, 3).setNumberFormat('$#,##0.00');
-    SpreadsheetApp.flush();
+    var res = _hsaAppendRow(sheet, prep);
+    invalidateSheet(sheetNameOverride || HSA_SHEET);
     invalidateHsaCache();
-    return { ok: true, id: newId, row: insertRow, needsReview: draft };
+    return res;
   } finally {
     lock.releaseLock();
   }
+}
+
+// Validate + normalize an add payload. Pure. Draft (needsReview) tolerates a
+// missing date/amount so a malformed import can be stored for review.
+function _hsaPrepRow(p) {
+  var draft = !!p.needsReview;
+  var amount = parseFloat(p.amount);
+  if (draft) { if (isNaN(amount) || amount < 0) amount = 0; }
+  else       { if (isNaN(amount) || amount <= 0) return { error: 'Amount must be a positive number.' }; }
+  var dateStr = String(p.dateIncurred || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    if (draft) dateStr = '';
+    else return { error: 'Invalid or missing date incurred.' };
+  }
+  var receiptLink = String(p.receiptLink || '').trim();
+  if (receiptLink && !/^https?:\/\//i.test(receiptLink))
+    return { error: 'Receipt link must start with http:// or https://' };
+  return {
+    draft: draft, amount: _hsaR2(amount), dateStr: dateStr,
+    funding: (String(p.funding || 'OOP').toUpperCase() === 'HSA') ? 'HSA' : 'OOP',
+    provider: String(p.provider || '').trim(), description: String(p.description || '').trim(),
+    category: String(p.category || '').trim(), receiptLink: receiptLink,
+    notes: String(p.notes || '').trim(), sourceFileId: String(p.sourceFileId || '')
+  };
+}
+
+// Append one prepared row. CALLER MUST HOLD the script lock. id = max id in
+// col A + 1; deleted rows are tombstoned (col N), never removed, so the max
+// never decreases and ids are never reused.
+function _hsaAppendRow(sheet, prep) {
+  var lastRow = sheet.getLastRow();
+  var maxId = 0;
+  if (lastRow >= HSA_DATA_ROW) {
+    var ids = sheet.getRange(HSA_DATA_ROW, 1, lastRow - HSA_DATA_ROW + 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++) {
+      var n = parseInt(ids[i][0], 10);
+      if (!isNaN(n) && n > maxId) maxId = n;
+    }
+  }
+  var newId = maxId + 1;
+  var insertRow = Math.max(lastRow + 1, HSA_DATA_ROW);
+  // A..N: id, date, amount, provider, description, category, funding, link,
+  // reimbursed_amount, reimbursed_date, notes, source_file_id, needs_review, deleted
+  var row = [
+    newId, (prep.dateStr ? new Date(prep.dateStr + 'T12:00:00') : ''), prep.amount,
+    prep.provider, prep.description, prep.category, prep.funding, prep.receiptLink, '', '',
+    prep.notes, prep.sourceFileId, (prep.draft ? 'TRUE' : ''), ''
+  ];
+  sheet.getRange(insertRow, 1, 1, row.length).setValues([row]);
+  sheet.getRange(insertRow, 1).setNumberFormat('0');
+  if (prep.dateStr) sheet.getRange(insertRow, 2).setNumberFormat('yyyy-mm-dd');
+  sheet.getRange(insertRow, 3).setNumberFormat('$#,##0.00');
+  SpreadsheetApp.flush();
+  return { ok: true, id: newId, row: insertRow, needsReview: prep.draft, created: true };
+}
+
+function _hsaJoinNote(a, b) { return a ? (a + ' | ' + b) : b; }
+
+// -- Duplicate detection (pure; unit-tested by testHsaDedup) ---------------
+var HSA_DUP_WINDOW_DAYS = 7;
+
+// Drive file id from a Drive URL (/d/<id>/... or ?id=<id>); '' if none.
+function _hsaDriveId(link) {
+  var s = String(link || '');
+  var m = /\/d\/([A-Za-z0-9_-]{20,})/.exec(s) || /[?&]id=([A-Za-z0-9_-]{20,})/.exec(s);
+  return m ? m[1] : '';
+}
+
+function _hsaDayNum(s) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ''));
+  return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) / 86400000 : null;
+}
+
+// rows: _hsaReadRows output (needs id, dateIncurred, amount, sourceFileId,
+//   receiptLink, deleted). cand: { fileId?, dateIncurred, amount }.
+// opts.requireUnlinked: true for the folder scan -- an existing row already
+//   tied to a DIFFERENT file is a different receipt, never a content match.
+// Returns null or { kind, id, row } with kind in priority order:
+//   'file'  -- row's col L or its receipt link points at this exact Drive file
+//              (checked across deleted rows too: a deleted receipt stays deleted)
+//   'exact' -- same date AND same amount (to the cent)
+//   'near'  -- same amount, dates within HSA_DUP_WINDOW_DAYS (or a date missing)
+function _hsaFindDup(rows, cand, opts) {
+  var requireUnlinked = !!(opts && opts.requireUnlinked);
+  var i, r;
+  if (cand.fileId) {
+    for (i = 0; i < rows.length; i++) {
+      r = rows[i];
+      if (String(r.sourceFileId || '') === cand.fileId || _hsaDriveId(r.receiptLink) === cand.fileId)
+        return { kind: 'file', id: r.id, row: r };
+    }
+  }
+  var amt = _hsaR2(cand.amount);
+  if (!(amt > 0)) return null;
+  var cDay = _hsaDayNum(cand.dateIncurred);
+  var near = null;
+  for (i = 0; i < rows.length; i++) {
+    r = rows[i];
+    if (r.deleted) continue;
+    if (requireUnlinked && (r.sourceFileId || _hsaDriveId(r.receiptLink))) continue;
+    if (Math.abs(_hsaR2(r.amount) - amt) >= 0.005) continue;
+    var rDay = _hsaDayNum(r.dateIncurred);
+    if (cDay != null && rDay != null && cDay === rDay) return { kind: 'exact', id: r.id, row: r };
+    if (!near && (cDay == null || rDay == null || Math.abs(cDay - rDay) <= HSA_DUP_WINDOW_DAYS))
+      near = { kind: 'near', id: r.id, row: r };
+  }
+  return near;
+}
+
+function _hsaFindById(sheet, id) {
+  var rows = _hsaReadRows(sheet);
+  for (var i = 0; i < rows.length; i++) if (String(rows[i].id) === String(id)) return rows[i];
+  return null;
 }
 
 // Parse a receipt filename of the form  DATE~provider~amount.pdf  into fields.
@@ -3408,7 +3514,10 @@ function updateHsaReceipt(p, sheetNameOverride) {
   var values = readSheet(sheet);
   var rowNum = -1;
   for (var i = HSA_DATA_ROW - 1; i < values.length; i++) {
-    if (String(values[i][0]) === id) { rowNum = i + 1; break; }
+    if (String(values[i][0]) === id) {
+      if (values[i][13] === true || String(values[i][13]).toUpperCase() === 'TRUE') return { error: 'Receipt ' + id + ' is deleted.' };
+      rowNum = i + 1; break;
+    }
   }
   if (rowNum < 0) return { error: 'Receipt not found: ' + id };
 
@@ -3426,16 +3535,67 @@ function updateHsaReceipt(p, sheetNameOverride) {
   return { ok: true, id: id, row: rowNum };
 }
 
+// -- POST: approve a needs_review draft as-is ------------------------------
+// "The stored fields are right" -- clears col M without rewriting anything else
+// (Edit is the path for changing fields). Refuses a draft that is still missing
+// a valid date or a positive amount: approving it would put an undatable or
+// $0 row into the totals. Idempotent by construction; also _withIdem-wrapped.
+function approveHsaReceipt(p, sheetNameOverride) {
+  var id = (p.id == null) ? '' : String(p.id);
+  if (!id) return { error: 'Missing receipt id.' };
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetNameOverride || HSA_SHEET);
+  if (!sheet) return { error: 'Sheet not found: ' + (sheetNameOverride || HSA_SHEET) };
+  var r = _hsaFindById(sheet, id);
+  if (!r || r.deleted) return { error: 'Receipt not found: ' + id };
+  if (!r.needsReview) return { ok: true, id: id, already: true };
+  if (!_isRealDate(r.dateIncurred) || !(_hsaR2(r.amount) > 0))
+    return { error: 'Receipt ' + id + ' is missing a valid date or amount -- use Edit to fill it in.' };
+  sheet.getRange(r.rowNum, 13).setValue('');
+  SpreadsheetApp.flush();
+  invalidateSheet(sheetNameOverride || HSA_SHEET);
+  invalidateHsaCache();
+  return { ok: true, id: id };
+}
+
+// -- POST: delete a receipt (tombstone, col N = TRUE) ----------------------
+// Soft delete on purpose: (1) a hard-deleted scanned row loses its col-L fileId
+// and the next folder scan would re-import the file; (2) the row's id stays
+// occupied, so max+1 id assignment never reuses it; (3) undo = clear N in the
+// Sheet. Every reader skips tombstones. Refuses a row with a recorded
+// reimbursement: that is the record of a real withdrawal -- zero it via
+// Reimburse first so dropping it is deliberate.
+function deleteHsaReceipt(p, sheetNameOverride) {
+  var id = (p.id == null) ? '' : String(p.id);
+  if (!id) return { error: 'Missing receipt id.' };
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetNameOverride || HSA_SHEET);
+  if (!sheet) return { error: 'Sheet not found: ' + (sheetNameOverride || HSA_SHEET) };
+  var r = _hsaFindById(sheet, id);
+  if (!r) return { error: 'Receipt not found: ' + id };
+  if (r.deleted) return { ok: true, id: id, already: true };
+  if (_hsaR2(r.reimbursedAmount) > 0)
+    return { error: 'Receipt ' + id + ' has a recorded reimbursement of $' + _hsaR2(r.reimbursedAmount).toFixed(2) +
+      '. Set its reimbursement to 0 first, then delete.' };
+  sheet.getRange(r.rowNum, 14).setValue('TRUE');
+  SpreadsheetApp.flush();
+  invalidateSheet(sheetNameOverride || HSA_SHEET);
+  invalidateHsaCache();
+  return { ok: true, id: id };
+}
+
 // -- POST / trigger: import new receipt PDFs from the Drive folder ----------
-// Takes no args so a future time-based trigger can call it directly. Idempotent
-// by construction: each created row stores its Drive fileId in col L, and a file
-// whose id is already present is skipped -- so re-running (button re-click,
-// retry, or hourly trigger) never double-imports. A script lock serializes
-// scans so two concurrent runs can't both see the same file as "new". Strict
-// filename parsing: unmatched names are skipped and returned in `skipped` with a
-// reason (fail loud, never guess). Auto-created rows default funding=OOP (the
-// safe default -- the receipt shows up as a reimbursable claim, not silently
-// dropped); category/description stay blank for you to fill in.
+// Takes no args so a future time-based trigger can call it directly. Holds the
+// script lock for the whole scan and appends via _hsaAppendRow (no nested lock).
+// Per file, in order (_hsaFindDup):
+//   'file'  match (col L fileId, OR an existing row's receipt link points at this
+//           Drive file) -> already on the sheet. Backfill col L if it was only
+//           linked, so later scans hit the fast path. Deleted rows count: a
+//           deleted receipt is never resurrected.
+//   'exact' match (same date + amount, existing row not tied to another file)
+//           -> attach the file to that row (col L, and col H if blank); no new row.
+//   'near'  match (same amount, within 7d) -> import as a needs_review draft
+//           noted "possible duplicate of #id" -- visible, excluded from totals.
+//   none    -> import as before (strict name -> confirmed row; malformed name ->
+//           best-effort draft; nothing receipt-like -> skipped + reported).
 function scanHsaFolder() {
   var folderId = cfg().hsaReceiptFolder;
   if (!folderId) return { error: 'Set hsa_receipt_folder in Config (the Drive folder ID).' };
@@ -3454,28 +3614,27 @@ function scanHsaFolder() {
   if (!gotLock) return { error: 'A scan is already running -- try again in a moment.' };
 
   try {
-    invalidateSheet(HSA_SHEET);
-    var values = readSheet(sheet);
-    var seen = {};
-    for (var i = HSA_DATA_ROW - 1; i < values.length; i++) {
-      var fid = values[i][11]; // col L
-      if (fid) seen[String(fid)] = true;
-    }
-
-    var created = [], skipped = [];
+    var rows = _hsaReadRows(sheet);
+    var created = [], linked = [], skipped = [], dupFlagged = 0;
     var it = folder.getFilesByType('application/pdf');
     while (it.hasNext()) {
       var file  = it.next();
       var theId = file.getId();
       var fname = file.getName();
-      if (seen[theId]) continue; // already imported -- silent (not noise)
+
+      var hit = _hsaFindDup(rows, { fileId: theId }, null);
+      if (hit) {
+        if (!hit.row.sourceFileId) {
+          sheet.getRange(hit.row.rowNum, 12).setValue(theId);
+          hit.row.sourceFileId = theId;
+          linked.push({ name: fname, id: hit.id, how: 'link' });
+        }
+        continue; // already on the sheet -- silent unless we just backfilled
+      }
 
       var parsed = _parseReceiptName(fname);
       var addArgs;
       if (parsed.error) {
-        // Slightly-wrong name: salvage what we can and import as a draft for
-        // in-dashboard editing, rather than dropping it. Skip only when there's
-        // nothing receipt-like (no date AND no amount) -- likely not a receipt.
         var be = _bestEffortReceipt(fname);
         if (!be.date && !be.amount) { skipped.push({ name: fname, reason: parsed.error + ' (no date or amount found)' }); continue; }
         addArgs = {
@@ -3490,17 +3649,36 @@ function scanHsaFolder() {
         };
       }
 
-      var res = addHsaReceipt(addArgs);
-      if (res.error) { skipped.push({ name: fname, reason: res.error }); continue; }
+      var dup = _hsaFindDup(rows, { dateIncurred: addArgs.dateIncurred, amount: addArgs.amount }, { requireUnlinked: true });
+      if (dup && dup.kind === 'exact') {
+        sheet.getRange(dup.row.rowNum, 12).setValue(theId);
+        if (!dup.row.receiptLink) { sheet.getRange(dup.row.rowNum, 8).setValue(addArgs.receiptLink); dup.row.receiptLink = addArgs.receiptLink; }
+        dup.row.sourceFileId = theId;
+        linked.push({ name: fname, id: dup.id, how: 'match' });
+        continue;
+      }
+      if (dup && dup.kind === 'near') {
+        addArgs.needsReview = true;
+        addArgs.notes = _hsaJoinNote(addArgs.notes, 'Possible duplicate of #' + dup.id + ' (same amount, date within ' + HSA_DUP_WINDOW_DAYS + 'd)');
+        dupFlagged++;
+      }
 
-      seen[theId] = true;
+      var prep = _hsaPrepRow(addArgs);
+      if (prep.error) { skipped.push({ name: fname, reason: prep.error }); continue; }
+      var res = _hsaAppendRow(sheet, prep);
+      rows.push({ id: res.id, rowNum: res.row, dateIncurred: prep.dateStr, amount: prep.amount,
+                  receiptLink: prep.receiptLink, sourceFileId: theId, needsReview: prep.draft, deleted: false });
       created.push({ name: fname, id: res.id, needsReview: !!res.needsReview });
     }
 
+    SpreadsheetApp.flush();
+    invalidateSheet(HSA_SHEET);
     invalidateHsaCache();
     var draftCount = 0;
     for (var k = 0; k < created.length; k++) if (created[k].needsReview) draftCount++;
-    return { ok: true, created: created, createdCount: created.length, draftCount: draftCount, skipped: skipped, skippedCount: skipped.length };
+    return { ok: true, created: created, createdCount: created.length, draftCount: draftCount,
+             linked: linked, linkedCount: linked.length, dupFlagged: dupFlagged,
+             skipped: skipped, skippedCount: skipped.length };
   } finally {
     lock.releaseLock();
   }

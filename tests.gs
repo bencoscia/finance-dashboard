@@ -111,9 +111,10 @@ function createHsaScratchSheet() {
   }
   sheet.getRange(1, 1).setValue('Account balance');
   sheet.getRange(2, 1).setValue('Balance as of');
-  sheet.getRange(3, 1, 1, 11).setValues([[
+  sheet.getRange(3, 1, 1, 14).setValues([[
     'id','date_incurred','amount','provider','description',
-    'category','funding','receipt_link','reimbursed_amount','reimbursed_date','notes'
+    'category','funding','receipt_link','reimbursed_amount','reimbursed_date','notes',
+    'source_file_id','needs_review','deleted'
   ]]);
   return sheet;
 }
@@ -943,6 +944,59 @@ function testUpdateHsaReceipt() {
   assertEqual(after[0].provider, 'Summit Dental', 'provider updated');
 }
 
+function testHsaDedup() {
+  section('_hsaFindDup + _hsaDriveId (scan / txn-draft duplicate detection)');
+  var F = '1AbCdEfGhIjKlMnOpQrStUvWxYz012345';
+  assertEqual(_hsaDriveId('https://drive.google.com/file/d/' + F + '/view?usp=sharing'), F, 'drive id from /d/ link');
+  assertEqual(_hsaDriveId('https://drive.google.com/open?id=' + F), F, 'drive id from ?id= link');
+  assertEqual(_hsaDriveId('https://example.com/r.pdf'), '', 'non-Drive link -> no id');
+
+  var rows = [
+    { id: 1, dateIncurred: '2026-10-02', amount: 85, sourceFileId: '', receiptLink: 'https://drive.google.com/file/d/' + F + '/view', deleted: false },
+    { id: 2, dateIncurred: '2026-10-02', amount: 40, sourceFileId: 'OTHERFILEOTHERFILEOTHER', receiptLink: '', deleted: false },
+    { id: 3, dateIncurred: '2026-09-01', amount: 12, sourceFileId: '', receiptLink: '', deleted: true }
+  ];
+  var a = _hsaFindDup(rows, { fileId: F }, null);
+  assert(a && a.kind === 'file' && a.id === 1, 'file match via pasted receipt link');
+  var b = _hsaFindDup(rows, { dateIncurred: '2026-10-02', amount: 40 }, { requireUnlinked: true });
+  assertEqual(b, null, 'scan: row tied to another file is never a content match');
+  var c = _hsaFindDup(rows, { dateIncurred: '2026-10-02', amount: 40 }, { requireUnlinked: false });
+  assert(c && c.kind === 'exact' && c.id === 2, 'txn draft: exact date+amount matches scanned row');
+  var d = _hsaFindDup(rows, { dateIncurred: '2026-10-08', amount: 40 }, { requireUnlinked: false });
+  assert(d && d.kind === 'near', 'same amount within 7d -> near');
+  assertEqual(_hsaFindDup(rows, { dateIncurred: '2026-10-20', amount: 40 }, { requireUnlinked: false }), null, 'same amount 18d apart -> no match');
+  assertEqual(_hsaFindDup(rows, { dateIncurred: '2026-09-01', amount: 12 }, null), null, 'deleted rows are not content matches');
+  assertEqual(_hsaFindDup(rows, { dateIncurred: '2026-10-02', amount: 85.004 }, null).kind, 'exact', 'amount compared to the cent');
+}
+
+function testApproveDeleteHsa() {
+  section('approve / delete / txn-draft dedup (scratch sheet only)');
+  createHsaScratchSheet();
+  _resetCaches();
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(HSA_TEST_SHEET_NAME);
+
+  var d = addHsaReceipt({ needsReview: true, dateIncurred: '2026-10-02', amount: 85, funding: 'OOP' }, HSA_TEST_SHEET_NAME);
+  var dup = addHsaReceipt({ needsReview: true, dateIncurred: '2026-10-02', amount: 85, funding: 'OOP' }, HSA_TEST_SHEET_NAME);
+  assertEqual(dup.duplicateOf, d.id, 'second identical txn draft returns duplicateOf, no new row');
+  var bad = addHsaReceipt({ needsReview: true, dateIncurred: '', amount: 0, funding: 'OOP' }, HSA_TEST_SHEET_NAME);
+
+  assert(approveHsaReceipt({ id: d.id }, HSA_TEST_SHEET_NAME).ok, 'approve complete draft');
+  assert(approveHsaReceipt({ id: bad.id }, HSA_TEST_SHEET_NAME).error, 'approve refuses draft missing date/amount');
+  _resetCaches();
+  var r = _hsaReadRows(sheet);
+  assertEqual(r.length, 2, 'exactly 2 rows (dup draft not written)');
+  assertEqual(r[0].needsReview, false, 'needs_review cleared by approve');
+
+  assert(deleteHsaReceipt({ id: bad.id }, HSA_TEST_SHEET_NAME).ok, 'delete ok');
+  _resetCaches();
+  r = _hsaReadRows(sheet);
+  assertEqual(r[1].deleted, true, 'delete writes tombstone (row kept)');
+  var n = addHsaReceipt({ dateIncurred: '2026-10-03', amount: 20, funding: 'OOP' }, HSA_TEST_SHEET_NAME);
+  assertEqual(n.id, 3, 'ids not reused after delete');
+  // (reimbursed-row delete guard is covered offline: reimburseReceipt has no
+  //  scratch-sheet override, so it must never be called from tests)
+}
+
 function testMortgageSingleSource() {
   section('mortgage single source (net worth == ledger, not B8)');
 
@@ -1028,6 +1082,8 @@ function _runTestSuite(includeSlow) {
     testParseReceiptName();
     testBestEffortReceipt();
     testUpdateHsaReceipt();
+    testHsaDedup();
+    testApproveDeleteHsa();
     testMonthCacheTiers();
 
     if (includeSlow) {

@@ -1314,6 +1314,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     <div class="pay-modal-btns">
       <button class="btn-primary" id="hsa-edit-submit-btn" data-action="submitHsaEdit">Save changes</button>
       <button class="btn-cancel" data-action="hideHsaEditModal">Cancel</button>
+      <button class="btn-cancel" id="hsa-edit-delete-btn" data-action="deleteHsa" title="Removes it from the dashboard; the Sheet keeps a tombstone row">Delete\u2026</button>
     </div>
   </div>
 </div>
@@ -1532,6 +1533,8 @@ function initEventListeners(){
     'toggleDcSchedule':   toggleDcSchedule,
     'reimburseHsa':       function(e){ var el=e.target.closest('[data-action]'); showHsaModal(el.dataset.id); },
     'editHsa':            function(e){ var el=e.target.closest('[data-action]'); showHsaEditModal(el.dataset.id); },
+    'approveHsa':         function(e){ var el=e.target.closest('[data-action]'); approveHsa(el.dataset.id); },
+    'deleteHsa':          deleteHsaFromEdit,
     'submitHsaEdit':      submitHsaEdit,
     'hideHsaEditModal':   hideHsaEditModal,
     'scanHsaReceipts':    scanHsaReceipts,
@@ -2464,6 +2467,9 @@ async function submitQuickAdd(){
   // surfaces as a cryptic fetch error instead of a clean banner.
   if(isDemo || !SCRIPT_URL){ hideQuickAdd(); showBanner('Demo mode — nothing saved','ok'); return; }
   btn.disabled=true; btn.textContent='Saving…';
+  // Secondary-write outcomes, shown in the FINAL banner -- a banner shown mid-save
+  // is overwritten by the closing 'Saved' (partial failures used to vanish).
+  var qaWarn=[], qaInfo=[];
   try{
     if(qaType==='txn'){
       var txnResult = await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('txn'), month:mkey(month),
@@ -2476,13 +2482,15 @@ async function submitQuickAdd(){
       // so say exactly that rather than pretending the whole save failed.
       if($('qa-hsa-flag') && $('qa-hsa-flag').checked){
         try {
-          await apiPost(SCRIPT_URL,{action:'addHsaReceipt', idemKey:genIdemKey('hsaAdd'),
+          var hsaRes = await apiPost(SCRIPT_URL,{action:'addHsaReceipt', idemKey:genIdemKey('hsaAdd'),
             needsReview:true, dateIncurred:$('qa-date').value, amount:Math.abs(amt),
             provider:'', description:$('qa-desc').value.trim(), category:'',
             funding:'OOP', receiptLink:''});
+          if(hsaRes && hsaRes.duplicateOf != null)
+            qaInfo.push('HSA receipt already on file as #'+hsaRes.duplicateOf+' (same date + amount) \u2014 no draft added');
           loadHsa(true);
         } catch(hsaErr){
-          showBanner('Transaction saved, but the HSA draft failed: '+hsaErr.message+' — add it from the HSA tab.','err');
+          qaWarn.push('the HSA draft failed: '+hsaErr.message+' — add it from the HSA tab');
         }
       }
       // Staged tags: same pattern as the HSA draft above -- a second write
@@ -2499,7 +2507,7 @@ async function submitQuickAdd(){
             id:txnResult.id, tags:qaStagedTags});
           if(_knownTagCounts) qaStagedTags.forEach(function(t){ if(!_knownTagCounts[t]) _knownTagCounts[t]=1; });
         } catch(tagErr){
-          showBanner('Transaction saved, but tags failed to save: '+tagErr.message+' — add them from the transaction list.','err');
+          qaWarn.push('tags failed to save: '+tagErr.message+' — add them from the transaction list');
         }
       }
       // If the card drawer is open on this card, refresh it so the new txn appears
@@ -2578,7 +2586,8 @@ async function submitQuickAdd(){
       refreshCardBalances();
     }
     hideQuickAdd();
-    showBanner('Saved','ok');
+    if(qaWarn.length) showBanner('Saved, but '+qaWarn.join('; ')+'.','err');
+    else showBanner('Saved'+(qaInfo.length?' \u2014 '+qaInfo.join('; '):''),'ok');
     renderThisWeek();
   }catch(e){
     $('qa-err').textContent=(e.message&&e.message.indexOf('fetch')>=0)
@@ -5473,18 +5482,20 @@ async function submitSplit(){
       // HSA-routed lines: the txn parts are already saved above; each also
       // gets a needs-review draft on the HSA tab. Per-line failures are
       // reported honestly (the split itself succeeded).
-      var hsaFailed = 0;
+      var hsaFailed = 0, hsaDupes = [];
       for(var hi = 0; hi < hsaLines.length; hi++){
         try {
-          await apiPost(SCRIPT_URL,{action:'addHsaReceipt', idemKey:genIdemKey('hsaAdd'),
+          var hr = await apiPost(SCRIPT_URL,{action:'addHsaReceipt', idemKey:genIdemKey('hsaAdd'),
             needsReview:true, dateIncurred:t.date, amount:Math.abs(hsaLines[hi].cost),
             provider:'', description:hsaLines[hi].description, category:'',
             funding:'OOP', receiptLink:''});
+          if(hr && hr.duplicateOf != null) hsaDupes.push(hr.duplicateOf);
         } catch(hsaErr){ hsaFailed++; }
       }
       if(hsaLines.length && hsaFailed){
         showBanner('Split saved, but '+hsaFailed+' HSA draft'+(hsaFailed>1?'s':'')+' failed — add from the HSA tab.','err');
       } else if(hsaLines.length){
+        if(hsaDupes.length) showBanner('Split saved; HSA receipt'+(hsaDupes.length>1?'s':'')+' already on file as #'+hsaDupes.join(', #')+' \u2014 no draft added.','ok');
         loadHsa(true);
       }
     }
@@ -6338,7 +6349,8 @@ function demoHsa(){
       {id:2, dateIncurred:'2025-07-03', amount:800,  provider:'LensCrafters',       description:'Glasses',       category:'Vision',    funding:'OOP', receiptLink:'', reimbursedAmount:800,  reimbursedDate:'2026-01-15', status:'reimbursed',  qualified:true},
       {id:3, dateIncurred:'2026-03-22', amount:2500, provider:'St Joseph Hospital', description:'Outpatient',    category:'Procedure', funding:'OOP', receiptLink:'', reimbursedAmount:1000, reimbursedDate:'2026-06-01', status:'partial',     qualified:true},
       {id:4, dateIncurred:'2026-04-09', amount:300,  provider:'CVS Pharmacy',       description:'Prescription',  category:'Rx',        funding:'HSA', receiptLink:'', reimbursedAmount:0,    reimbursedDate:'',           status:'paid_direct', qualified:true},
-      {id:5, dateIncurred:'2024-11-02', amount:500,  provider:'Old Clinic',         description:'Pre-HSA visit', category:'Office',    funding:'OOP', receiptLink:'', reimbursedAmount:0,    reimbursedDate:'',           status:'open',        qualified:false}
+      {id:5, dateIncurred:'2024-11-02', amount:500,  provider:'Old Clinic',         description:'Pre-HSA visit', category:'Office',    funding:'OOP', receiptLink:'', reimbursedAmount:0,    reimbursedDate:'',           status:'open',        qualified:false},
+      {id:6, dateIncurred:'2026-03-24', amount:2500, provider:'',                   description:'Hospital copay',category:'',          funding:'OOP', receiptLink:'', reimbursedAmount:0,    reimbursedDate:'',           status:'needs_review',qualified:true, needsReview:true, notes:'Possible duplicate of #3 (same amount, date within 7d)'}
     ]
   };
 }
@@ -6459,6 +6471,13 @@ function renderHsa(d){
       notes += '<div class="hsa-note">\u2713 Folder scan imported '+hsaScanReport.createdCount+' new receipt'+(hsaScanReport.createdCount===1?'':'s')+
         (hsaScanReport.draftCount ? ' \u2014 '+hsaScanReport.draftCount+' need review (\u270E, edit to confirm; excluded from totals until then)' : '')+'.</div>';
     }
+    if(hsaScanReport.linkedCount){
+      notes += '<div class="hsa-note">\u21C4 Folder scan attached '+hsaScanReport.linkedCount+' file'+(hsaScanReport.linkedCount===1?'':'s')+' to existing entries instead of importing duplicates: '+
+        hsaScanReport.linked.map(function(l){ return esc(l.name)+' \u2192 #'+esc(String(l.id)); }).join('; ')+'</div>';
+    }
+    if(hsaScanReport.dupFlagged){
+      notes += '<div class="hsa-note warn">\u26A0 '+hsaScanReport.dupFlagged+' imported receipt'+(hsaScanReport.dupFlagged===1?' looks':'s look')+' like a possible duplicate (same amount within 7 days) \u2014 imported as needs-review; delete whichever copy is redundant.</div>';
+    }
     if(hsaScanReport.skipped && hsaScanReport.skipped.length){
       notes += '<div class="hsa-note warn">\u26A0 Folder scan skipped '+hsaScanReport.skipped.length+' file'+(hsaScanReport.skipped.length===1?'':'s')+' (rename to <code>DATE~provider~amount.pdf</code> and rescan): '+
         hsaScanReport.skipped.map(function(s){ return esc(s.name)+' &mdash; '+esc(s.reason); }).join('; ')+'</div>';
@@ -6495,11 +6514,16 @@ function renderHsa(d){
     // Reimburse only for confirmed, qualified, out-of-pocket rows with a remainder
     var canReimburse = !r.needsReview && r.qualified && r.funding==='OOP' && remaining > 0.005;
     var editBtn = '<button class="hsa-reimburse-btn" data-action="editHsa" data-id="'+esc(String(r.id))+'">Edit</button>';
+    // Approve-as-is only when the stored draft is complete; otherwise Edit is the path.
+    var canApprove = r.needsReview && r.dateIncurred && r.amount > 0;
+    if(canApprove) editBtn = '<button class="hsa-reimburse-btn" data-action="approveHsa" data-id="'+esc(String(r.id))+'">\u2713 Approve</button> ' + editBtn;
     var reimburseBtn = canReimburse
       ? ' <button class="hsa-reimburse-btn" data-action="reimburseHsa" data-id="'+esc(String(r.id))+'">Reimburse</button>'
       : '';
     var actionCell = editBtn + reimburseBtn;
     var descBit = r.description ? '<span style="color:var(--muted);font-size:12px"> &middot; '+esc(r.description)+'</span>' : '';
+    // Notes carry the why of a draft (malformed filename, possible duplicate of #id)
+    if(r.notes) descBit += '<div style="color:var(--faint);font-size:11px;margin-top:2px">'+(/possible duplicate/i.test(r.notes)?'\u26A0 ':'')+esc(r.notes)+'</div>';
     return '<tr>'+
       '<td>'+statusCell+'</td>'+
       '<td class="dt">'+esc(r.dateIncurred||'')+'</td>'+
@@ -6535,7 +6559,11 @@ function showHsaEditModal(id){
   if(!row) return;
   hsaEditId = String(id);
   $('hsa-edit-title').textContent = row.needsReview ? 'Confirm imported receipt' : 'Edit receipt';
-  $('hsa-edit-sub').textContent   = row.needsReview ? 'Imported from a malformed filename \u2014 fill in / fix the fields, then save to start counting it.' : ('Receipt '+id);
+  $('hsa-edit-sub').textContent   = row.needsReview ? 'Unconfirmed draft \u2014 check / fix the fields, then save to start counting it.' : ('Receipt '+id);
+  // Reimbursed rows are a withdrawal record: server refuses delete until reimbursement is set to 0
+  var hasReimb = row.reimbursedAmount > 0;
+  $('hsa-edit-delete-btn').disabled = hasReimb;
+  $('hsa-edit-delete-btn').title = hasReimb ? 'Has a recorded reimbursement \u2014 set it to 0 via Reimburse first' : 'Removes it from the dashboard; the Sheet keeps a tombstone row';
   $('hsa-edit-date').value     = row.dateIncurred || '';
   $('hsa-edit-amount').value   = row.amount ? Number(row.amount).toFixed(2) : '';
   $('hsa-edit-provider').value = row.provider || '';
@@ -6552,6 +6580,41 @@ function showHsaEditModal(id){
 }
 
 function hideHsaEditModal(){ $('hsa-edit-backdrop').style.display='none'; hsaEditId=''; }
+
+function _hsaRow(id){
+  var list=(hsaData&&hsaData.rows)||[];
+  for(var i=0;i<list.length;i++) if(String(list[i].id)===String(id)) return list[i];
+  return null;
+}
+
+// Approve a complete draft as-is (server re-validates the STORED values).
+async function approveHsa(id){
+  if(isDemo || !SCRIPT_URL){ showBanner('Demo mode \u2014 not saved','ok'); return; }
+  try {
+    await apiPost(SCRIPT_URL, { action:'approveHsaReceipt', idemKey:genIdemKey('hsaApprove'), id:id });
+    showBanner('Receipt #'+id+' approved \u2014 now counted in totals','ok');
+    loadHsa(true);
+  } catch(e){ showBanner('Approve failed: '+e.message,'err'); }
+}
+
+// Delete from the edit modal (deliberately not a one-click row button).
+async function deleteHsaFromEdit(){
+  var id = hsaEditId; if(!id) return;
+  var r = _hsaRow(id);
+  var desc = r ? (fmt(r.amount,2)+' \u00b7 '+(r.dateIncurred||'no date')+' \u00b7 '+(r.provider||r.description||'no provider')) : ('receipt '+id);
+  if(!confirm('Delete receipt #'+id+' ('+desc+')?\n\nIt disappears from the dashboard and totals. The Sheet keeps the row with deleted=TRUE (col N); clear that cell to undo.')) return;
+  if(isDemo || !SCRIPT_URL){ hideHsaEditModal(); showBanner('Demo mode \u2014 not deleted','ok'); return; }
+  $('hsa-edit-delete-btn').disabled = true;
+  try {
+    await apiPost(SCRIPT_URL, { action:'deleteHsaReceipt', idemKey:genIdemKey('hsaDel'), id:id });
+    hideHsaEditModal();
+    showBanner('Receipt #'+id+' deleted','ok');
+    loadHsa(true);
+  } catch(e){
+    $('hsa-edit-err').textContent = 'Delete failed: '+e.message;
+    $('hsa-edit-delete-btn').disabled = false;
+  }
+}
 
 async function submitHsaEdit(){
   var amount = parseFloat($('hsa-edit-amount').value);
@@ -6579,7 +6642,7 @@ async function submitHsaEdit(){
     showBanner('Receipt updated','ok');
     loadHsa(true); // authoritative refetch -- totals recompute now the draft is confirmed
   } catch(e){
-    $('hsa-edit-err').textContent='Network error \u2014 refresh to check before retrying.';
+    $('hsa-edit-err').textContent = e.app ? e.message : 'Network error \u2014 refresh to check before retrying.';
     $('hsa-edit-submit-btn').disabled=false; $('hsa-edit-submit-btn').textContent='Save changes';
   }
 }
@@ -6749,6 +6812,7 @@ async function scanHsaReceipts(){
     hsaScanReport = res; // surfaced as a persistent note by renderHsa
     var msg = 'Imported '+res.createdCount+' receipt'+(res.createdCount===1?'':'s');
     if(res.draftCount) msg += ' ('+res.draftCount+' need review)';
+    if(res.linkedCount) msg += ', attached '+res.linkedCount+' to existing entries';
     if(res.skippedCount) msg += ', skipped '+res.skippedCount+' (see notes)';
     showBanner(msg, res.skippedCount ? 'err' : 'ok');
     loadHsa(true); // authoritative refetch -- re-renders with the new rows + scan report
