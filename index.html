@@ -301,6 +301,9 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .hsa-reimburse-btn:hover{background:var(--surface2)}
 .hsa-filter-btn{font-family:var(--mono);font-size:11px;padding:5px 11px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer;margin-bottom:10px}
 .hsa-filter-btn:hover{background:var(--surface2)}
+.hsa-seg{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px}
+.hsa-seg .hsa-filter-btn{margin-bottom:6px}
+.hsa-filter-btn.on{font-weight:700;color:var(--text);background:var(--surface3);border-color:var(--text)}
 .hsa-proj-sub{font-size:12px;color:var(--muted);margin:2px 0 14px;line-height:1.5}
 .hsa-proj-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px 14px;margin-bottom:14px}
 .hsa-proj-grid label{display:flex;flex-direction:column;font-size:11px;color:var(--muted);font-family:var(--mono);gap:4px}
@@ -1540,7 +1543,7 @@ function initEventListeners(){
     'scanHsaReceipts':    scanHsaReceipts,
     'submitHsaReimburse': submitHsaReimburse,
     'hideHsaModal':       hideHsaModal,
-    'toggleHsaOpen':      toggleHsaOpen,
+    'setHsaFilter':       function(e){ var el=e.target.closest('[data-action]'); setHsaFilter(el.dataset.args); },
     'toggleCalc':         function(){ toggleCalc(); },
     'calcInsert':         function(){ calcInsert(); },
   };
@@ -6302,7 +6305,19 @@ function replaceTr(tbodyId,i,newTr){
 var hsaData = null;
 var hsaReimburseId = '';
 var hsaEditId = '';
-var hsaShowOpenOnly = false;
+// Ledger filter: 'open' (reimbursable now) | 'review' (drafts) | 'all'.
+// Persisted per browser; defaults to 'open'.
+var HSA_FILTER_KEY = 'hsa_filter_v1';
+var hsaFilter = (function(){ try { var v=localStorage.getItem(HSA_FILTER_KEY); return (v==='review'||v==='all')?v:'open'; } catch(e){ return 'open'; } })();
+// Single definition of "reimbursable": the same predicate the server's
+// unreimbursed pool uses (_hsaRollups) -- confirmed, qualified, out of pocket,
+// with a remainder. The view's remaining total must equal d.unreimbursed.
+function hsaIsReimbursable(r){ return !r.needsReview && r.qualified && r.funding==='OOP' && (r.status==='open'||r.status==='partial'); }
+var HSA_FILTERS = {
+  open:   { label:'Reimbursable', test: hsaIsReimbursable },
+  review: { label:'Needs review', test: function(r){ return !!r.needsReview; } },
+  all:    { label:'All',          test: function(){ return true; } }
+};
 var hsaScanReport = null; // {created, skipped[]} from the last folder scan; shown until next scan
 
 var HSA_STATUS = {
@@ -6491,9 +6506,9 @@ function renderHsa(d){
     return;
   }
 
-  var shown = hsaShowOpenOnly
-    ? rows.filter(function(r){ return r.qualified && r.funding==='OOP' && (r.status==='open'||r.status==='partial'); })
-    : rows;
+  var counts = {};
+  Object.keys(HSA_FILTERS).forEach(function(k){ counts[k] = rows.filter(HSA_FILTERS[k].test).length; });
+  var shown = rows.filter(HSA_FILTERS[hsaFilter].test);
   // needs_review drafts float to the top (they need action); otherwise newest first
   shown = shown.slice().sort(function(a,b){
     if(!!a.needsReview !== !!b.needsReview) return a.needsReview ? -1 : 1;
@@ -6537,19 +6552,48 @@ function renderHsa(d){
     '</tr>';
   }).join('');
 
-  var filterBtn = '<button class="hsa-filter-btn" data-action="toggleHsaOpen">'+(hsaShowOpenOnly?'Show all':'Show only open')+'</button>';
+  // Active filter: bold + darker border/fill + aria-pressed (not hue). Counts on every chip.
+  var filterBar = '<div class="hsa-seg" role="group" aria-label="Filter receipts">'+
+    Object.keys(HSA_FILTERS).map(function(k){
+      var on = k===hsaFilter;
+      return '<button class="hsa-filter-btn'+(on?' on':'')+'" aria-pressed="'+on+'" data-action="setHsaFilter" data-args="'+k+'">'+
+        HSA_FILTERS[k].label+' ('+counts[k]+')</button>';
+    }).join('')+'</div>';
+  // Drafts are hidden from the Reimbursable view (they can't be reimbursed until
+  // approved) -- say so, so action items never disappear silently.
+  if(hsaFilter==='open' && counts.review){
+    filterBar += '<div class="hsa-note">\u270E '+counts.review+' draft'+(counts.review===1?'':'s')+' need review and '+(counts.review===1?'is':'are')+' hidden here &mdash; '+
+      '<span class="tw-link" style="margin-top:0" data-action="setHsaFilter" data-args="review">show</span></div>';
+  }
+  if(!shown.length){
+    body = '<tr><td colspan="9" class="tbl-empty">'+(hsaFilter==='open' ? 'Nothing open to reimburse.' : hsaFilter==='review' ? 'No drafts need review.' : 'No receipts.')+'</td></tr>';
+  }
+  // Footer: remaining-to-reimburse for the shown rows. In the Reimbursable view
+  // this must equal the "Unreimbursed pool" metric above (same predicate).
+  var remSum = 0, amtSum = 0;
+  shown.forEach(function(r){ amtSum += r.amount; if(hsaIsReimbursable(r)) remSum += (r.amount - r.reimbursedAmount); });
+  remSum = Math.round(remSum*100)/100; amtSum = Math.round(amtSum*100)/100;
+  var foot = shown.length
+    ? '<tfoot><tr><td colspan="2"><strong>'+shown.length+' shown</strong></td><td class="co r"><strong>'+fmt(amtSum,2)+'</strong></td>'+
+      '<td colspan="3" class="r" style="color:var(--muted)">remaining to reimburse</td><td class="co r"><strong>'+fmt(remSum,2)+'</strong></td><td colspan="2"></td></tr></tfoot>'
+    : '';
 
   $('hsa-content').innerHTML =
-    filterBtn+
+    filterBar+
     '<div class="tbl-wrap"><table class="tbl"><thead><tr>'+
     '<th>Status</th><th>Incurred</th><th class="r">Amount</th><th>Provider</th><th>Category</th><th class="c">Funding</th><th class="r">Reimbursed</th><th class="c">Receipt</th><th></th>'+
-    '</tr></thead><tbody>'+body+'</tbody></table></div>';
+    '</tr></thead><tbody>'+body+'</tbody>'+foot+'</table></div>';
 
   // ledger data just landed -> let the projection pull fresh TTM spend/hoard
   if(hsaCalcReady){ hsaCalcApplyTtm(); renderHsaProj(); }
 }
 
-function toggleHsaOpen(){ hsaShowOpenOnly = !hsaShowOpenOnly; if(hsaData) renderHsa(hsaData); }
+function setHsaFilter(k){
+  if(!HSA_FILTERS[k]) return;
+  hsaFilter = k;
+  try { localStorage.setItem(HSA_FILTER_KEY, k); } catch(e){}
+  if(hsaData) renderHsa(hsaData);
+}
 
 function showHsaEditModal(id){
   if(!SCRIPT_URL){ showSetup(); return; }
