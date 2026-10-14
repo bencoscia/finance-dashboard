@@ -3,7 +3,17 @@
 <head>
 <!-- See INDEX.md for the file map, invariants, traps, and change protocol. Keep it updated. -->
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover">
+<!-- Home Screen web app (iOS). Opens full-screen ONLY when launched from an icon made via
+     Safari Share -> Add to Home Screen; existing icons keep the old tags -- delete + re-add.
+     Status bar = "default" (dark text on light bar): black-translucent forces WHITE clock text,
+     unreadable over the near-white header. Installed app has its OWN localStorage (fin_url etc). -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Ledger">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#FDFDFB">
+<link rel="apple-touch-icon" href="data:image/png;base64,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">
 <title>Household Ledger</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231E5C46'/%3E%3Ccircle cx='32' cy='32' r='20' fill='none' stroke='%23B08D3E' stroke-width='2.5'/%3E%3Ccircle cx='32' cy='32' r='13' fill='none' stroke='%23F5F7F3' stroke-width='1.5' stroke-dasharray='3 3'/%3E%3Ccircle cx='32' cy='32' r='5' fill='%23B08D3E'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -182,7 +192,13 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 .tab-btn{font-family:var(--mono);font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:.07em;padding:9px 14px;background:transparent;border:none;border-bottom:2px solid transparent;margin-bottom:-1px;cursor:pointer;color:var(--muted);transition:color .15s,border-color .15s}
 .tab-btn.active{color:var(--text);border-bottom-color:var(--green)}
 .tab-btn:hover:not(.active){color:var(--text)}
+.tab-btn .tl-short{display:none}   /* short label shown only in the phone bottom bar */
 .tab-panel{display:none}
+/* touch feel (all widths; harmless on desktop): no rubber-band/pull-to-refresh
+   (the header refresh button replaces it), no grey tap flash, no text selection on controls */
+html,body{overscroll-behavior-y:none}
+button,.tab-btn,[role="button"],[role="checkbox"],[data-action]{-webkit-tap-highlight-color:transparent}
+button,.tab-btn{-webkit-user-select:none;user-select:none}
 .tab-panel.active{display:block;animation:fadeIn .18s ease}
 @keyframes fadeIn{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
 
@@ -589,7 +605,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .cdr-disc{font-size:10px;color:var(--amber);flex-shrink:0}
 .card-drawer-empty{padding:40px;text-align:center;color:var(--faint);font-size:13px}
 .card-drawer-loading{padding:30px;text-align:center;color:var(--faint);font-size:12px;font-family:var(--mono)}
-.card-drawer-footer{padding:10px 16px;border-top:1px solid var(--border);font-family:var(--mono);font-size:11px;color:var(--faint);display:flex;justify-content:space-between;flex-shrink:0}
+.card-drawer-footer{padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--border);font-family:var(--mono);font-size:11px;color:var(--faint);display:flex;justify-content:space-between;flex-shrink:0}
 
 /* ── PAYMENT MODAL ── */
 .pay-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:180;display:flex;align-items:flex-start;justify-content:center;padding:40px 24px 24px}
@@ -755,17 +771,46 @@ tr:hover .racts,tr.editing .racts{opacity:1}
   }
   .tbl td.dc{ white-space:normal; }   /* let descriptions wrap inside their 240px cap */
 
-  /* 16px min on form fields stops iOS Safari auto-zooming when one is focused */
-  input, select, textarea{ font-size:16px; }
+  /* 16px on form fields stops iOS focus-zoom; !important beats inline font-size.
+     Paired with maximum-scale=1 in the viewport meta -- 16px alone proved insufficient on-device. */
+  input, select, textarea{ font-size:16px !important; }
 
-  /* tab bar: keep all tabs on one row and scroll sideways instead of overflowing */
-  .tabs{ overflow-x:auto; -webkit-overflow-scrolling:touch; flex-wrap:nowrap; touch-action:pan-x; overscroll-behavior-x:contain; }
-  .tab-btn{ flex:0 0 auto; white-space:nowrap; }
+  /* BOTTOM TAB BAR: fixed, clear of the home indicator, scrolls sideways (9 tabs never
+     fit 390px). Active = top indicator bar + weight + fill + aria-current, not colour alone. */
+  .tabs{ position:fixed; left:0; right:0; bottom:0; z-index:50; margin:0; width:auto;
+    background:var(--surface); border-bottom:none; border-top:1px solid var(--border2);
+    box-shadow:0 -2px 10px rgba(0,0,0,.06);
+    padding:4px max(6px, env(safe-area-inset-right,0px)) calc(4px + env(safe-area-inset-bottom,0px)) max(6px, env(safe-area-inset-left,0px));
+    overflow-x:auto; -webkit-overflow-scrolling:touch; flex-wrap:nowrap; touch-action:pan-x; overscroll-behavior-x:contain;
+    scrollbar-width:none; }
+  .tabs::-webkit-scrollbar{ display:none; }
+  .tab-btn{ flex:0 0 auto; white-space:nowrap; min-height:48px; padding:0 12px; margin:0;
+    border-bottom:none; border-top:3px solid transparent; border-radius:0 0 6px 6px; font-size:11px; }
+  .tab-btn.active{ border-top-color:var(--green); background:var(--surface2); font-weight:700; }
+  .tab-btn .tl-long{ display:none; }
+  .tab-btn .tl-short{ display:inline; }
+  /* reserve the bar's height so the last row of a long page scrolls clear of it */
+  body{ padding-bottom:calc(64px + env(safe-area-inset-bottom,0px)); }
+
+  /* header: the inset is 0 with the "default" status-bar style (and in a Safari tab);
+     if the style is ever switched to black-translucent this keeps content off the clock */
+  .hdr{ padding-top:calc(10px + env(safe-area-inset-top,0px));
+    padding-left:max(14px, env(safe-area-inset-left,0px)); padding-right:max(14px, env(safe-area-inset-right,0px)); }
+
+  /* tall modals scroll clear of the home indicator */
+  .pay-modal-backdrop{ padding-bottom:calc(24px + env(safe-area-inset-bottom,0px)); }
+
+  /* hit areas >=40px without changing the look: an invisible ::after extends each control.
+     Extension <= half the gap between neighbours, so no control steals another's taps. */
+  .icon-btn, .hdr-add{ position:relative; }
+  .icon-btn::after, .hdr-add::after{ content:''; position:absolute; inset:-7px -4px; }
+  .rbtn{ position:relative; }
+  .rbtn::after{ content:''; position:absolute; inset:-4px; }
 
   /* header: ONE compact row. Hide the timestamp and the rarely-used "+ month",
      drop secondary button labels to their icons (refresh/settings), shrink the
      title. Keeps the sticky header short so it stops eating vertical scroll space. */
-  .hdr{ flex-wrap:nowrap; gap:8px; padding:10px 14px; }
+  .hdr{ flex-wrap:nowrap; gap:8px; padding-bottom:10px; }   /* top/left/right set with the safe-area rule above */
   .hdr h1{ font-size:16px; }
   .ts{ display:none; }
   .hdr .hide-mobile{ display:none; }
@@ -846,13 +891,13 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     <div id="banner" class="banner" style="display:none"></div>
 
     <div class="tabs">
-      <button class="tab-btn active"  data-tab="thisweek">This Week</button>
+      <button class="tab-btn active"  data-tab="thisweek" aria-current="page"><span class="tl-long">This Week</span><span class="tl-short">Week</span></button>
       <button class="tab-btn"         data-tab="accounts">Accounts</button>
-      <button class="tab-btn"         data-tab="txns">Transactions</button>
-      <button class="tab-btn"         data-tab="fixed">Recurring expenses</button>
+      <button class="tab-btn"         data-tab="txns"><span class="tl-long">Transactions</span><span class="tl-short">Txns</span></button>
+      <button class="tab-btn"         data-tab="fixed"><span class="tl-long">Recurring expenses</span><span class="tl-short">Recurring</span></button>
       <button class="tab-btn"         data-tab="budget">Budget</button>
       <button class="tab-btn"         data-tab="networth">Net worth</button>
-      <button class="tab-btn"         data-tab="loans">Student Loans</button>
+      <button class="tab-btn"         data-tab="loans"><span class="tl-long">Student Loans</span><span class="tl-short">Loans</span></button>
       <button class="tab-btn"         data-tab="mortgage">Mortgage</button>
       <button class="tab-btn"         data-tab="hsa">HSA</button>
     </div>
@@ -4430,10 +4475,7 @@ function openCheckingDrawer(){
 // editor would be a second surface for exactly the bugs already fixed once.
 function drawerEditTxn(id, month){
   closeCardDrawer();
-  var txnTab = Array.prototype.find.call(
-    document.querySelectorAll('.tab-btn'),
-    function(b){ return b.textContent.trim() === 'Transactions'; }
-  );
+  var txnTab = document.querySelector('.tab-btn[data-tab="txns"]');
   if(txnTab) showTab('txns', txnTab);
   var sel = $('msel-txn');
   if(sel) sel.value = month;
@@ -6926,9 +6968,16 @@ async function submitHsaReimburse(){
 
 // ── tabs ──
 function showTab(id,btn){
+  var changed = !btn.classList.contains('active');
   document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active');});
-  document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');});
-  $('tab-'+id).classList.add('active'); btn.classList.add('active');
+  document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');b.removeAttribute('aria-current');});
+  $('tab-'+id).classList.add('active'); btn.classList.add('active'); btn.setAttribute('aria-current','page');
+  // Bottom tab bar (phones) stays put while the page scrolls, so a switch would
+  // otherwise open the next tab mid-page. Only on an actual change.
+  if(changed){
+    window.scrollTo(0,0);
+    try { btn.scrollIntoView({block:'nearest', inline:'nearest'}); } catch(e){}
+  }
   if(id==='loans')    loadLoans();
   if(id==='mortgage') loadMortgage();
   if(id==='networth') loadNetWorth();
@@ -7169,10 +7218,7 @@ async function doAddMonth(){
     showBanner('"' + monthName + '" opened — fixed expenses seeded from prior month ✓', 'ok');
     hideAddMonth();
     // Switch to transactions tab and auto-select the new month
-    var txnTab = Array.prototype.find.call(
-      document.querySelectorAll('.tab-btn'),
-      function(b){ return b.textContent.trim() === 'Transactions'; }
-    );
+    var txnTab = document.querySelector('.tab-btn[data-tab="txns"]');
     if(txnTab) showTab('txns', txnTab);
     var sel = $('msel-txn');
     if(sel){ sel.value = monthName; loadTxns(monthName); }
