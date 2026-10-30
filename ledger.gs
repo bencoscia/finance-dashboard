@@ -1,7 +1,7 @@
 // ledger.gs -- normalized long-table layer (the migration target).
 //
 // Four flat sheets replace the per-month positional sheets:
-//   Txns             id | date | month | description | amount | method | category | discretionary | ben | jenna
+//   Txns             id | date | month | description | amount | method | category | discretionary | ben | jenna | tags | pending
 //   Fixed Log        id | month | name | source | amount | paid | paid_date
 //   Income Log       id | month | date | source | amount
 //   Variable History month | category | amount        (display/TTM only -- NEVER summed into expenses)
@@ -42,7 +42,10 @@ var LEDGER_CACHE_KEY     = LEDGER_CACHE_VERSION + '_monthly';
 var LEDGER_CATEGORIES = ['onetime', 'groceries', 'gas', 'transfer'];
 
 var LEDGER_HEADERS = {};
-LEDGER_HEADERS[LEDGER_TXNS]    = ['id','date','month','description','amount','method','category','discretionary','ben','jenna','tags'];
+LEDGER_HEADERS[LEDGER_TXNS]    = ['id','date','month','description','amount','method','category','discretionary','ben','jenna','tags','pending'];
+// Txns col L 'pending' = review flag (TRUE/blank). Written only by ledgerSetPending;
+// add/update/split write cols A-J and never touch K or L.
+var LEDGER_COL_PENDING = 12;
 LEDGER_HEADERS[LEDGER_FIXED]   = ['id','month','name','source','amount','paid','paid_date'];
 LEDGER_HEADERS[LEDGER_INCOME]  = ['id','month','date','source','amount'];
 LEDGER_HEADERS[LEDGER_VARHIST] = ['month','category','amount'];
@@ -52,7 +55,7 @@ LEDGER_HEADERS[LEDGER_VARHIST] = ['month','category','amount'];
 // Create four tabs by hand, paste the header row into row 1 of each,
 // View > Freeze > 1 row, then import the migration CSVs at A1 (the CSVs
 // include the header row; "Replace data at selected cell"):
-//   Txns:             id  date  month  description  amount  method  category  discretionary  ben  jenna  tags
+//   Txns:             id  date  month  description  amount  method  category  discretionary  ben  jenna  tags  pending
 //   Fixed Log:        id  month  name  source  amount  paid  paid_date
 //   Income Log:       id  month  date  source  amount
 //   Variable History: month  category  amount
@@ -199,7 +202,7 @@ function getLedgerTxns(month) {
       description: String(r[3] || ''), amount: _ln(r[4]),
       method: String(r[5] || ''), category: String(r[6] || 'onetime'),
       discretionary: _lb(r[7]), ben: _lb(r[8]), jenna: _lb(r[9]),
-      tags: _ltags(r[10])
+      tags: _ltags(r[10]), pending: _lb(r[11])
     });
   }
   out.sort(function(a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id; });
@@ -540,6 +543,10 @@ function ledgerSeedFixedMonth(p) {
 // that isn't already present, defaulting amount/source to its most recent
 // historical occurrence (edit once the real invoice arrives). Idempotent --
 // safe to call every time the Recurring tab loads a month, not just once.
+// An item with NO prior occurrence is NOT invented (that used to write a $0,
+// blank-source row -- a silent wrong default, and it made the seed test count
+// 3 rows instead of 2). It is reported in `noHistory` so the UI can say
+// "add it once by hand"; after that it has history and self-heals.
 function ledgerEnsureQuarterly(p) {
   var mk = _lmonth(p.month);
   if (!mk) return { error: 'ledgerEnsureQuarterly needs month=YYYY-MM.' };
@@ -556,7 +563,7 @@ function ledgerEnsureQuarterly(p) {
   return _ledgerWithLock(function () {
     invalidateSheet(LEDGER_FIXED);
     var values = readSheet(sheet);
-    var added = [];
+    var added = [], noHistory = [];
     for (var d = 0; d < due.length; d++) {
       var name = due[d].name;
       var exists = false, lastAmt = null, lastSrc = '', lastMonth = '';
@@ -569,6 +576,7 @@ function ledgerEnsureQuarterly(p) {
         }
       }
       if (exists) continue;
+      if (!lastMonth) { noHistory.push(name); continue; }
       var newId = _ledgerNextId(values);
       var newRow = [newId, mk, name, lastSrc, lastAmt !== null ? lastAmt : 0, false, ''];
       var r = Math.max(sheet.getLastRow() + 1, 2);
@@ -577,7 +585,7 @@ function ledgerEnsureQuarterly(p) {
       added.push({ id: newId, name: name, amount: lastAmt, source: lastSrc, fromHistory: lastMonth || null });
     }
     if (added.length) { SpreadsheetApp.flush(); invalidateLedgerCache(); invalidateSheet(LEDGER_FIXED); }
-    return { ok: true, month: mk, added: added };
+    return { ok: true, month: mk, added: added, noHistory: noHistory };
   });
 }
 
@@ -765,7 +773,7 @@ function ledgerGetTransactions(monthName) {
       description: String(r[3] || ''), cost: _ln(r[4]),
       paymentMethod: String(r[5] || ''), category: cat,
       discretionary: _lb(r[7]), ben: _lb(r[8]), jenna: _lb(r[9]),
-      tags: _ltags(r[10])
+      tags: _ltags(r[10]), pending: _lb(r[11])
     });
   }
   txns.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id; });
@@ -874,7 +882,8 @@ function _ledgerCheckingEvents(seedMonth) {
       date: _ldate(txnRows[i][1]) || (mk + '-01'),
       amount: -amt,
       description: String(txnRows[i][3] || '') || (cat === 'gas' ? 'Gas' : 'Transaction'),
-      source: cat === 'transfer' ? 'transfer' : 'txn'
+      source: cat === 'transfer' ? 'transfer' : 'txn',
+      pending: _lb(txnRows[i][LEDGER_COL_PENDING - 1])
     });
   }
   var fixedRows = readSheet(LEDGER_FIXED) || [[]];
@@ -914,7 +923,7 @@ function _ledgerCheckingEvents(seedMonth) {
     events.push({
       date: cpmk + '-01', // Card Payments has no per-payment date, only month
       amount: pamt,        // stored negative; adding it is the correct sign
-      description: 'Card payment — ' + String(cpRows[i][1] || ''),
+      description: 'Card payment - ' + String(cpRows[i][1] || ''),
       source: 'cardPayment'
     });
   }
@@ -947,23 +956,31 @@ function getLedgerCheckingHistory(limitStr) {
       date: events[i].date, description: events[i].description,
       amount: Math.round(events[i].amount * 100) / 100,
       balance: Math.round(running * 100) / 100,
-      source: events[i].source
+      source: events[i].source,
+      pending: !!events[i].pending
     });
   }
   rows.reverse();
-  var limit = parseInt(limitStr, 10) || 200;
+  // Uncapped by default (a 200 cap would start silently dropping the oldest
+  // entries a few months after the seed month); explicit limit still honored.
+  var limit = parseInt(limitStr, 10);
+  if (!(limit > 0)) limit = Infinity;
   var total = rows.length;
   if (rows.length > limit) rows = rows.slice(0, limit);
   return { since: s.seedMonth, seed: s.seed, currentBalance: Math.round(running * 100) / 100,
-           count: total, entries: rows };
+           count: total, entries: rows, truncated: rows.length < total };
 }
 
 // Card drawer, ledger world: one pass over Txns (all categories -- the old
 // version merged the txn block with grocery/gas subtable entries; here they
-// are already one table). Newest first, capped.
+// are already one table). Newest first. UNCAPPED by default: a silent 500 cap
+// used to drop the oldest history of the busiest cards (WF/Costco/Prime pass
+// 500 within ~2 years) and made the drawer's search miss them. A caller may
+// still pass limit; total is always the pre-cap count and truncated says so.
 function ledgerGetTransactionsByCard(pm, limitStr) {
   if (!pm) return { error: 'pm required' };
-  var limit = parseInt(limitStr, 10) || 500;
+  var limit = parseInt(limitStr, 10);
+  if (!(limit > 0)) limit = Infinity;
   var rows = readSheet(LEDGER_TXNS);
   if (!rows) return { error: 'Sheet not found: ' + LEDGER_TXNS };
   var results = [];
@@ -980,12 +997,65 @@ function ledgerGetTransactionsByCard(pm, limitStr) {
       cost: Math.round(amt * 100) / 100,
       paymentMethod: pm,
       discretionary: _lb(r[7]), ben: _lb(r[8]), jenna: _lb(r[9]),
+      pending: _lb(r[11]),
       source: cat === 'groceries' ? 'grocery' : cat === 'gas' ? 'gas' : 'transaction'
     });
   }
   results.sort(function (a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : 0; });
-  if (results.length > limit) results = results.slice(0, limit);
-  return { pm: pm, transactions: results, count: results.length };
+  var total = results.length;
+  if (total > limit) results = results.slice(0, limit);
+  return { pm: pm, transactions: results, count: results.length, total: total,
+           truncated: results.length < total };
+}
+
+// -- WRITE: ledgerSetPending --------------------------------------------------
+// Review flag on a txn (Txns col L). Lives in the Sheet, not localStorage, for
+// the same reason tags do: it must be visible on every device, and the account
+// tiles count it server-side. Absolute value (TRUE / blank), so a retry
+// rewrites the same state. Optional p.month ('June 2026') guards the one-time
+// localStorage migration: a stale pre-cutover key (month:rowIndex) that happens
+// to collide with a real id in a DIFFERENT month is rejected, not applied.
+function ledgerSetPending(p) {
+  if (!p.id) return { error: 'ledgerSetPending needs id.' };
+  var flag = p.pending === true || String(p.pending).toLowerCase() === 'true';
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(LEDGER_TXNS);
+  if (!sheet) return { error: 'Sheet not found: ' + LEDGER_TXNS };
+  return _ledgerWithLock(function () {
+    invalidateSheet(LEDGER_TXNS);
+    var values = readSheet(sheet);
+    var hdr = String((values[0] || [])[LEDGER_COL_PENDING - 1] || '').trim().toLowerCase();
+    if (hdr !== 'pending')
+      return { error: "Txns column L header must be 'pending' (found '" + hdr + "'). Add it to L1 by hand." };
+    var row = _ledgerFindRowById(values, p.id);
+    if (row < 0) return { error: 'Txn id ' + p.id + ' not found.' };
+    if (p.month) {
+      var r = values[row - 1];
+      var rowMonth = _ledgerMonthName(_lmonth(r[2]) || _lmonth(r[1]));
+      if (rowMonth !== String(p.month)) return { error: 'month mismatch', rowMonth: rowMonth };
+    }
+    sheet.getRange(row, LEDGER_COL_PENDING).setValue(flag ? true : '');
+    SpreadsheetApp.flush();
+    invalidateSheet(LEDGER_TXNS);
+    return { ok: true, id: parseInt(p.id, 10), pending: flag };
+  });
+}
+
+// Pending flags rolled up by payment method -> { 'AMEX': {count, total}, ... }.
+// All months; feeds the account tiles via getCardBalances.
+function _ledgerPendingByMethod() {
+  var rows = readSheet(LEDGER_TXNS) || [[]];
+  var out = {};
+  for (var i = 1; i < rows.length; i++) {
+    if (!_lb(rows[i][LEDGER_COL_PENDING - 1])) continue;
+    var m = String(rows[i][5] || '').trim();
+    if (!m) continue;
+    var a = _ln(rows[i][4]) || 0;
+    if (!out[m]) out[m] = { count: 0, total: 0 };
+    out[m].count++;
+    out[m].total = Math.round((out[m].total + a) * 100) / 100;
+  }
+  return out;
 }
 
 // -- WRITE: ledgerAddIncome ---------------------------------------------------
@@ -1179,6 +1249,19 @@ function testLedger() {
     ok(rt.ok && rt.tags.length === 2 && rt.tags[0] === 'food', 'setTags normalizes + dedupes: ' + JSON.stringify(rt.tags));
     ok(getLedgerTxns('2026-06').txns[0].tags.length === 2, 'tags read back on txn rows');
 
+    // pending flag (col L): header-guarded, month-guarded, survives a full update
+    var rp = ledgerSetPending({ id: 1, pending: true });
+    ok(rp.ok && rp.pending === true, 'setPending true: ' + JSON.stringify(rp));
+    ok(getLedgerTxns('2026-06').txns[0].pending === true, 'pending reads back');
+    ok(ledgerSetPending({ id: 1, pending: true, month: 'May 2026' }).error === 'month mismatch', 'month guard rejects a wrong-month key');
+    ok(ledgerSetPending({ id: 1, pending: true, month: 'June 2026' }).ok, 'month guard accepts the right month');
+    var pbm = _ledgerPendingByMethod();
+    ok(pbm['AMEX'] && pbm['AMEX'].count === 1, 'pending rolls up by method: ' + JSON.stringify(pbm));
+    var t1 = getLedgerTxns('2026-06').txns[0];
+    ledgerUpdateTxn({ id: 1, date: t1.date, month: t1.month, amount: t1.amount, method: t1.method, description: t1.description + ' (edited)' });
+    ok(getLedgerTxns('2026-06').txns[0].pending === true, 'pending survives ledgerUpdateTxn (cols A-J only)');
+    ok(ledgerSetPending({ id: 1, pending: false }).ok && getLedgerTxns('2026-06').txns[0].pending === false, 'setPending false clears');
+
     var rd = ledgerDeleteTxn({ id: 3 });
     ok(rd.ok, 'delete by id: ' + JSON.stringify(rd));
     ok(!!ledgerDeleteTxn({ id: 3 }).error, 'repeat delete fails loudly');
@@ -1226,6 +1309,8 @@ function testLedger() {
     ok(eq2.ok && eq2.added.length === 1 && eq2.added[0].name === 'Water' && near(eq2.added[0].amount, 88.40),
        'quarterly ensure adds Water in a due month, defaulted from last occurrence: ' + JSON.stringify(eq2));
     ok(getLedgerFixed('2026-07').fixed.some(function(f){return f.name==='Water' && !f.paid;}), 'Water lands unpaid, ready to edit');
+    var eq0 = ledgerEnsureQuarterly({ month: '2027-01' }); // due, but Water exists only in 2026 -> has history
+    ok(eq0.ok && eq0.added.length === 1 && eq0.noHistory.length === 0, 'later due month defaults from latest occurrence: ' + JSON.stringify(eq0));
     var eq3 = ledgerEnsureQuarterly({ month: '2026-07' });
     ok(eq3.ok && eq3.added.length === 0, 'quarterly ensure is idempotent -- no duplicate on a second call');
   } finally {

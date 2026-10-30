@@ -498,6 +498,15 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .txn-filter-bar{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
 .filter-input{font-family:var(--mono);font-size:12px;padding:6px 10px;border:1px solid var(--border2);border-radius:var(--r);background:var(--surface);color:var(--text);outline:none;flex:1;min-width:140px}
 .filter-input:focus{border-color:var(--blue-lt)}
+.amt-range{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:11px;color:var(--faint)}
+.amt-range .filter-input{flex:none;width:92px;min-width:0}
+.filter-clear{cursor:pointer}
+.tbl th.sortable{cursor:pointer;user-select:none}
+.tbl th.sortable:hover{color:var(--text)}
+.tbl th.sortable[aria-sort="ascending"],.tbl th.sortable[aria-sort="descending"]{color:var(--text);font-weight:600}
+.sort-ind{display:inline-block;width:1.1em;text-align:center}
+.acct-pending{display:flex;align-items:center;gap:6px;margin:6px 0 2px;padding:4px 8px;border-left:3px solid var(--amber);background:var(--amber-bg);border-radius:0 4px 4px 0;font-family:var(--mono);font-size:11px;color:var(--text)}
+.cdr-pend{font-size:11px;flex-shrink:0}
 .filter-chip{font-family:var(--mono);font-size:11px;padding:5px 10px;border:1px solid var(--border2);border-radius:20px;background:transparent;color:var(--muted);cursor:pointer;transition:all .15s;white-space:nowrap}
 .filter-chip.active{background:var(--blue);color:#fff;border-color:var(--blue)}
 .filter-chip.active.disc{background:var(--amber);border-color:var(--amber)}
@@ -943,7 +952,12 @@ tr:hover .racts,tr.editing .racts{opacity:1}
         <button class="filter-chip" id="fchip-jenna" data-filter="jenna">Jenna</button>
         <button class="filter-chip" id="fchip-pend" data-filter="pend">Pending</button>
         <button class="filter-chip" id="fchip-tag" data-filter="tag" style="display:none">🏷 <span id="fchip-tag-label">tag</span></button>
-        <span class="filter-clear" id="filter-clear" style="display:none" >✕ Clear</span>
+        <span class="amt-range" title="Amount range (inclusive). Leave a side blank for open-ended.">
+          <input class="filter-input" id="txn-amt-min" type="number" step="0.01" inputmode="decimal" placeholder="Min $" aria-label="Minimum amount">
+          <span>to</span>
+          <input class="filter-input" id="txn-amt-max" type="number" step="0.01" inputmode="decimal" placeholder="Max $" aria-label="Maximum amount">
+        </span>
+        <span class="filter-clear" id="filter-clear" style="display:none" data-action="clearFilters">✕ Clear</span>
       </div>
       <div class="tbl-wrap" id="tbl-wrap">
         <div class="tbl-empty">Select a month above to view transactions.</div>
@@ -1505,6 +1519,8 @@ function initEventListeners(){
   if($('msel-txn'))       $('msel-txn').onchange      = function(){ loadTxns(this.value); };
   if($('msel-fx'))        $('msel-fx').onchange       = function(){ loadFixed(this.value); };
   if($('txn-search'))     $('txn-search').oninput     = onSearchInput;
+  if($('txn-amt-min'))    $('txn-amt-min').oninput    = onSearchInput;
+  if($('txn-amt-max'))    $('txn-amt-max').oninput    = onSearchInput;
   if($('cdr-search'))     $('cdr-search').oninput     = filterCardDrawer;
   if($('split-tax-rate')) $('split-tax-rate').oninput = updateAllSplitAmounts;
 
@@ -1548,6 +1564,9 @@ function initEventListeners(){
     'qaSetType':          qaSetType,
     'submitQuickAddSplit': submitQuickAddSplit,
     'qaAddFromDrawer':    qaAddFromDrawer,
+    'qaAddForPm':         function(e){ var el=e.target.closest('[data-action]'); qaOpenForPm(el.dataset.pm, null); },
+    'sortTxns':           function(e){ var el=e.target.closest('[data-action]'); sortTxns(el.dataset.sort); },
+    'jumpToPending':      jumpToPending,
     'openCheckingDrawer': openCheckingDrawer,
     'drawerEditTxn':      function(e){
       var el=e.target.closest('[data-args]'); if(!el) return;
@@ -2027,6 +2046,7 @@ function renderAll(data){
   renderVsTypical(monthly);
   fetchKnownTags();
   migrateLocalTags();
+  migrateLocalPending();
   // auto-load most recent month for both tabs
   if(firstMonth){
     loadTxns(firstMonth,true);
@@ -2369,7 +2389,11 @@ async function submitQuickAddSplit(){
 
 function qaSetType(e){
   var el=e.target.closest('[data-qa-type]'); if(!el) return;
+  // Keep the chosen payment method across type tabs (e.g. opened from a card
+  // tile as a txn, switched to groceries) -- re-rendering would reset it.
+  var prevPm = $('qa-pm') ? $('qa-pm').value : '';
   qaType=el.dataset.qaType; qaStagedTags=[]; qaRenderSeg(); qaRenderFields();
+  if(prevPm && $('qa-pm')) $('qa-pm').value = prevPm;
 }
 function qaRenderSeg(){
   document.querySelectorAll('.qa-seg-btn').forEach(function(b){
@@ -3875,22 +3899,77 @@ function filterByTag(tag){
   renderTagSummary(); applyFilters();
 }
 
+// ── PENDING REVIEW FLAG ──────────────────────────────────────
+// Lives on the Txns sheet (col L) via ledgerSetPending, like tags: visible on
+// every device, and counted server-side for the account tiles. t.pending comes
+// back on every txn read. PENDING_KEY survives only for the one-time flush of
+// flags this browser kept in localStorage before the move.
 var PENDING_KEY = 'fin_pending_v1';
 
-function getPendingFlags(){
-  return lsGetJSON(PENDING_KEY, {});
+function pendingCountForMonth(){
+  return txns.filter(function(t){ return !!t.pending; }).length;
 }
-function pendingKey(month, rowIndex){ return month+':'+rowIndex; }
-function isPending(month, rowIndex){ return !!getPendingFlags()[pendingKey(month,rowIndex)]; }
-function togglePendingFlag(month, rowIndex){
-  var flags = getPendingFlags();
-  var k = pendingKey(month, rowIndex);
-  if(flags[k]) delete flags[k]; else flags[k] = true;
-  lsSetJSON(PENDING_KEY, flags);
+function pendingBannerHtml(){
+  var n = pendingCountForMonth();
+  return n > 0
+    ? '<div class="txn-pending-banner">\u23f3 <strong>'+n+' pending</strong> \u2014 flagged for review'+
+      '<a data-action="jumpToPending">Jump to first</a></div>'
+    : '';
 }
-function allPendingForMonth(month){
-  var flags = getPendingFlags();
-  return Object.keys(flags).filter(function(k){ return k.indexOf(month+':')===0; });
+function refreshPendingBanner(){
+  var html = pendingBannerHtml();
+  var banner = $('tbl-wrap') && $('tbl-wrap').querySelector('.txn-pending-banner');
+  if(html){ if(banner) banner.outerHTML = html; else $('tbl-wrap').insertAdjacentHTML('afterbegin', html); }
+  else if(banner) banner.remove();
+}
+function jumpToPending(){
+  var tbody=$('tbody'); if(!tbody) return;
+  var rows=tbody.querySelectorAll('tr');
+  for(var r=0;r<rows.length;r++){
+    var t=txns[parseInt(rows[r].dataset.i,10)];
+    if(t && t.pending && rows[r].style.display!=='none'){
+      rows[r].scrollIntoView({block:'center', behavior:'smooth'}); return;
+    }
+  }
+}
+// One-time flush of legacy localStorage flags (key 'June 2026:1234' -> id).
+// The server checks the key's month against the row's month, so a stale
+// pre-cutover key (month:rowIndex) colliding with a real id elsewhere is
+// rejected rather than flagging the wrong txn. Keys are dropped on success or
+// definitive rejection; kept (retried next load) only on network failure.
+function migrateLocalPending(){
+  if(isDemo || !SCRIPT_URL) return;
+  var data = lsGetJSON(PENDING_KEY, null);
+  if(!data) return;
+  var keys = Object.keys(data).filter(function(k){ return !!data[k]; });
+  if(!keys.length){ try{ localStorage.removeItem(PENDING_KEY); }catch(e){} return; }
+  var i=0, okCount=0, rejected=0, keep={}, lastErr='';
+  function next(){
+    if(i>=keys.length){
+      if(Object.keys(keep).length) lsSetJSON(PENDING_KEY, keep);
+      else { try{ localStorage.removeItem(PENDING_KEY); }catch(e){} }
+      if(lastErr && !okCount) showBanner('Pending flags not moved to the sheet yet: '+lastErr,'err');
+      else if(okCount || rejected) showBanner('Moved '+okCount+' pending flag'+(okCount===1?'':'s')+' to the sheet'+
+        (rejected ? ' \u00b7 '+rejected+' stale flag'+(rejected===1?'':'s')+' dropped (no matching txn)' : ''),'ok');
+      if(okCount){ refreshCardBalances(); if(curMonthTxn) loadTxns(curMonthTxn,true); }
+      return;
+    }
+    var k=keys[i++], cut=k.lastIndexOf(':');
+    var month=k.slice(0,cut), id=parseInt(k.slice(cut+1),10);
+    if(isNaN(id) || !month){ rejected++; next(); return; }
+    apiPost(SCRIPT_URL,{action:'ledgerSetPending', idemKey:genIdemKey('pendmig'), id:id, pending:true, month:month})
+      .then(function(r){ if(r && r.error) throw Object.assign(new Error(r.error), {app:true}); okCount++; next(); })
+      .catch(function(e){
+        // Definitive rejections (row gone / wrong month) drop the key. Anything
+        // else -- network, or a missing 'pending' header in Txns!L1 -- keeps it
+        // for the next load so no flag is lost.
+        var msg = (e && e.message) || '';
+        if(e && e.app && /not found|month mismatch/i.test(msg)) rejected++;
+        else { keep[k]=true; lastErr=msg; }
+        next();
+      });
+  }
+  next();
 }
 
 // ── TRANSACTIONS ──
@@ -3907,7 +3986,6 @@ async function loadTxns(month, silent){
   try {
     var data=await apiFetch(SCRIPT_URL,'transactions',{month:month});
     txns=data.transactions||[];
-    _pendingCache = null;
     _activeTagFilter = ''; activeFilters.tag = ''; // clear for new month
     // Sort oldest → newest
     txns.sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
@@ -3924,27 +4002,87 @@ function renderTxnTable(){
   renderTagSummary();
   if(!txns.length){ $('tbl-wrap').innerHTML='<div class="tbl-empty">No transactions found.</div>'; return; }
 
-  var pendingCount = allPendingForMonth(curMonthTxn).length;
-  var bannerHtml = pendingCount > 0
-    ? '<div class="txn-pending-banner">⏳ <strong>'+pendingCount+' pending</strong> — flagged for review<a >Jump to first</a></div>'
-    : '';
-
-  $('tbl-wrap').innerHTML = bannerHtml +
+  $('tbl-wrap').innerHTML = pendingBannerHtml() +
     '<table class="tbl" id="tbl">'+
     '<thead><tr>'+
-    '<th style="width:110px">Date</th><th>Description</th>'+
-    '<th class="r" style="width:95px">Amount</th><th style="width:115px">Payment</th>'+
+    sortTh('date','Date','width:110px','')+sortTh('desc','Description','','')+
+    sortTh('amount','Amount','width:95px','r')+sortTh('pm','Payment','width:115px','')+
     '<th class="c" style="width:55px">Disc.</th><th class="c" style="width:40px">Ben</th>'+
     '<th class="c" style="width:45px">Jenna</th><th class="c" style="width:32px" title="Pending review">⏳</th>'+
     '<th style="width:80px"></th></tr></thead><tbody id="tbody"></tbody></table>';
 
-  // Populate all rows first — applyFilters will then show/hide them
+  // Populate all rows first — applyFilters will then show/hide them.
+  // txns[] keeps its load order (every handler addresses rows by index i);
+  // sorting only reorders the <tr> nodes, located by data-i.
   var tbody = $('tbody');
   txns.forEach(function(t,i){ tbody.appendChild(viewRow(t,i)); });
   // Wire tag buttons directly on each row's tag area
   txns.forEach(function(t,i){ wireTagArea(i); });
+  orderTxnRows();
 
   applyFilters(); // apply any active search/chip filters
+}
+
+// ── SORT ─────────────────────────────────────────────────────
+// View state only (survives month switches, not reloads). Default = the
+// historical order: date ascending. Amount starts descending (biggest first).
+var txnSort = { key:'date', dir:1 };
+function sortTh(key, label, style, cls){
+  var on = txnSort.key===key;
+  var ind = on ? (txnSort.dir>0 ? '\u25b2' : '\u25bc') : '';
+  return '<th class="sortable'+(cls?' '+cls:'')+'"'+(style?' style="'+style+'"':'')+
+    ' data-action="sortTxns" data-sort="'+key+'"'+
+    ' aria-sort="'+(on?(txnSort.dir>0?'ascending':'descending'):'none')+'"'+
+    ' title="Sort by '+label.toLowerCase()+'">'+
+    (cls==='r' ? '<span class="sort-ind">'+ind+'</span>'+label : label+'<span class="sort-ind">'+ind+'</span>')+
+    '</th>';
+}
+function txnSortValue(t, key){
+  if(key==='amount') return (t.cost==null||isNaN(t.cost)) ? null : t.cost;
+  if(key==='desc')   return (t.description||'').toLowerCase();
+  if(key==='pm')     return (t.paymentMethod||'').toLowerCase();
+  return t.date||'';
+}
+function sortedTxnIndices(){
+  var key=txnSort.key, dir=txnSort.dir;
+  var idx=txns.map(function(_,i){ return i; });
+  idx.sort(function(a,b){
+    var ta=txns[a], tb=txns[b];
+    // Unsaved rows (no id: the blank add row) stay pinned to the top
+    var ua=ta.id==null, ub=tb.id==null;
+    if(ua!==ub) return ua ? -1 : 1;
+    var va=txnSortValue(ta,key), vb=txnSortValue(tb,key);
+    if(va===null && vb!==null) return 1;   // blanks last in either direction
+    if(vb===null && va!==null) return -1;
+    if(va<vb) return -dir;
+    if(va>vb) return dir;
+    return a-b;                            // stable: original order breaks ties
+  });
+  return idx;
+}
+function orderTxnRows(){
+  var tbody=$('tbody'); if(!tbody) return;
+  var byI={};
+  Array.prototype.forEach.call(tbody.children, function(tr){ byI[tr.dataset.i]=tr; });
+  sortedTxnIndices().forEach(function(i){ if(byI[i]) tbody.appendChild(byI[i]); });
+}
+function sortTxns(key){
+  if(!key) return;
+  if(txnSort.key===key) txnSort.dir = -txnSort.dir;
+  else { txnSort.key=key; txnSort.dir = (key==='amount') ? -1 : 1; }
+  // Repaint headers in place; reorder existing rows (keeps any open edit row)
+  var ths=document.querySelectorAll('#tbl thead th.sortable');
+  Array.prototype.forEach.call(ths, function(th){
+    var tmp=document.createElement('tr');
+    tmp.innerHTML=sortTh(th.dataset.sort, th.textContent.replace(/[\u25b2\u25bc]/g,''), th.getAttribute('style')||'',
+      th.classList.contains('r')?'r':'');
+    th.replaceWith(tmp.firstChild);
+  });
+  orderTxnRows();
+}
+function amtBound(id){
+  var el=$(id); if(!el || el.value==='') return null;
+  var v=parseFloat(el.value); return isNaN(v) ? null : v;
 }
 
 function renderCardStrip(){
@@ -4003,39 +4141,44 @@ function clearFilters(){
     if(chip) chip.className='filter-chip';
   });
   if($('txn-search')) $('txn-search').value='';
+  if($('txn-amt-min')) $('txn-amt-min').value='';
+  if($('txn-amt-max')) $('txn-amt-max').value='';
   $('filter-clear').style.display='none';
   applyFilters();
 }
-
-// Cache pending flags once per render cycle (avoids 60× JSON.parse per render)
-var _pendingCache = null;
-function getPendingCache(){ return _pendingCache || (_pendingCache = getPendingFlags()); }
-function clearPendingCache(){ _pendingCache = null; }
 
 function applyFilters(){
   var tbody = $('tbody');
   if(!tbody) return;
   var search  = $('txn-search') ? $('txn-search').value.trim().toLowerCase() : '';
   var flags   = activeFilters;
-  var anyFilter = search || Object.keys(flags).some(function(k){ return flags[k]; });
+  var amin    = amtBound('txn-amt-min'), amax = amtBound('txn-amt-max');
+  var anyFilter = search || amin!==null || amax!==null ||
+                  Object.keys(flags).some(function(k){ return flags[k]; });
   $('filter-clear').style.display = anyFilter ? 'inline' : 'none';
 
-  // Toggle row visibility with display:none — no DOM rebuild, preserves edit state
+  // Toggle row visibility with display:none — no DOM rebuild, preserves edit state.
+  // Rows are matched to txns by data-i, NOT position: sorting reorders the DOM.
   var rows    = tbody.querySelectorAll('tr');
   var visible = 0, visibleTotal = 0;
-  var pfCache = anyFilter && flags.pend ? getPendingCache() : null;
 
-  txns.forEach(function(t, i){
+  Array.prototype.forEach.call(rows, function(tr){
+    var t = txns[parseInt(tr.dataset.i,10)];
+    if(!t) return;
     var show = true;
-    if(search && !(t.description||'').toLowerCase().includes(search) &&
-       !(t.paymentMethod||'').toLowerCase().includes(search)) show = false;
-    if(show && flags.disc  && !t.discretionary) show = false;
-    if(show && flags.ben   && !t.ben)            show = false;
-    if(show && flags.jenna && !t.jenna)          show = false;
-    if(show && flags.pend  && !(pfCache && pfCache[pendingKey(curMonthTxn, t.id)])) show = false;
-    if(show && flags.tag   && flags.tag !== '' && getRowTags(curMonthTxn, t.id).indexOf(flags.tag) < 0) show = false;
-
-    if(rows[i]) rows[i].style.display = show ? '' : 'none';
+    if(t.id != null){ // unsaved (add) row is never filtered away mid-entry
+      if(search && !(t.description||'').toLowerCase().includes(search) &&
+         !(t.paymentMethod||'').toLowerCase().includes(search)) show = false;
+      if(show && flags.disc  && !t.discretionary) show = false;
+      if(show && flags.ben   && !t.ben)            show = false;
+      if(show && flags.jenna && !t.jenna)          show = false;
+      if(show && flags.pend  && !t.pending)        show = false;
+      if(show && flags.tag   && flags.tag !== '' && getRowTags(curMonthTxn, t.id).indexOf(flags.tag) < 0) show = false;
+      // Amount bounds are inclusive and signed: refunds/transfers are negative
+      if(show && amin!==null && !(t.cost >= amin)) show = false;
+      if(show && amax!==null && !(t.cost <= amax)) show = false;
+    }
+    tr.style.display = show ? '' : 'none';
     if(show){ visible++; visibleTotal += (t.cost || 0); }
   });
 
@@ -4107,7 +4250,7 @@ function updateSum(){
 }
 function viewRow(t,i){
   var tr=document.createElement('tr'); tr.dataset.i=i;
-  var pending = t.id != null ? isPending(curMonthTxn, t.id) : false;
+  var pending = !!t.pending;
   if(pending) tr.className='txn-pending-row';
   if(pending) tr.id='pending-row-'+i;
   var cc=t.cost==null?'':(t.cost<0?'cpos':(t.cost>4000?'cneg':''));
@@ -4359,20 +4502,31 @@ function qaAddFromDrawer(){
   if(typeof _drawerPm==='undefined' || !_drawerPm) return;
   // Close the drawer first -- stacking it beside the modal is visual noise,
   // and it reopens after a successful save so the new row is visible.
-  _qaDrawerReturn = { pm: _drawerPm, title: $('cdr-title').textContent };
+  var ret = { pm: _drawerPm, title: $('cdr-title').textContent };
   closeCardDrawer();
+  qaOpenForPm(ret.pm, ret);
+}
+
+// Quick Add preset to one payment method. Used by the account tiles' + Add
+// (ret=null: the tile re-renders via refreshCardBalances after save) and by
+// the drawer's + Add (ret={pm,title}: the drawer reopens after save).
+function qaOpenForPm(pm, ret){
+  _qaDrawerReturn = ret || null;
   qaType='txn'; qaStagedTags=[]; qaRenderSeg(); qaRenderFields();
-  var pmSel=$('qa-pm'); if(pmSel) pmSel.value=_qaDrawerReturn.pm;
+  var pmSel=$('qa-pm'); if(pmSel) pmSel.value=pm||'';
   $('qa-err').textContent='';
   $('qa-modal-backdrop').style.display='flex';
+  setTimeout(function(){ var d=$('qa-desc'); if(d) d.focus(); }, 50);
 }
 
 var _drawerMode = 'card'; // 'card' | 'checking' -- same drawer element, two data sources
 
+var _drawerTotal = 0, _drawerTruncated = false;
 function openCardDrawer(pm, displayName){
   _drawerMode = 'card';
   _drawerPm   = pm;
   _drawerTxns = [];
+  _drawerTotal = 0; _drawerTruncated = false;
   $('cdr-title').textContent = displayName;
   $('cdr-sub').textContent   = 'Loading…';
   $('cdr-search').value      = '';
@@ -4397,8 +4551,11 @@ function openCardDrawer(pm, displayName){
   if(!SCRIPT_URL){ $('cdr-body').innerHTML='<div class="card-drawer-empty">Not connected</div>'; return; }
 
   apiFetch(SCRIPT_URL, 'cardTxns', {pm: pm}).then(function(data){
+    if(data.error){ $('cdr-body').innerHTML='<div class="card-drawer-empty">'+esc(data.error)+'</div>'; return; }
     _drawerTxns = data.transactions || [];
-    $('cdr-sub').textContent = data.total + ' transactions found';
+    // total = server's pre-cap count; older backends sent only count (post-cap)
+    _drawerTotal = data.total != null ? data.total : _drawerTxns.length;
+    _drawerTruncated = !!data.truncated || _drawerTotal > _drawerTxns.length;
     renderCardDrawer(_drawerTxns);
   }).catch(function(e){
     $('cdr-body').innerHTML = '<div class="card-drawer-empty">Error: '+esc(e.message)+'</div>';
@@ -4459,10 +4616,11 @@ function openCheckingDrawer(){
   }
   if(!SCRIPT_URL){ $('cdr-body').innerHTML='<div class="card-drawer-empty">Not connected</div>'; return; }
 
-  apiFetch(SCRIPT_URL, 'ledgerCheckingHistory', {limit: 500}).then(function(data){
+  apiFetch(SCRIPT_URL, 'ledgerCheckingHistory').then(function(data){
     if(data.error){ $('cdr-body').innerHTML='<div class="card-drawer-empty">'+esc(data.error)+'</div>'; return; }
     _drawerTxns = data.entries || [];
-    $('cdr-sub').textContent = 'Since '+data.since+' \u00b7 '+data.count+' entries';
+    $('cdr-sub').textContent = 'Since '+data.since+' \u00b7 '+data.count+' entries'+
+      (data.truncated ? ' \u00b7 \u26a0 newest '+_drawerTxns.length+' shown' : '');
     renderCheckingDrawer(_drawerTxns);
   }).catch(function(e){
     $('cdr-body').innerHTML = '<div class="card-drawer-empty">Error: '+esc(e.message)+'</div>';
@@ -4513,6 +4671,7 @@ function renderCheckingDrawer(entries){
         '<div class="card-drawer-row">'+
         '<span class="cdr-date">'+(e.date||'').slice(5)+'</span>'+
         '<span class="cdr-desc" title="'+esc(e.description)+'">'+esc(e.description)+'</span>'+
+        (e.pending ? '<span class="cdr-pend" title="Pending review">\u23f3</span>' : '')+
         srcTag+
         '<span class="cdr-amt '+(neg?'negative':'positive')+'">'+(neg?'':'+')+fmt(e.amount,2)+'</span>'+
         '<span class="cdr-running" title="Balance after this entry">'+fmt(e.balance,2)+'</span>'+
@@ -4560,6 +4719,7 @@ function renderCardDrawer(txns){
       var sourceTag = t.source && t.source !== 'transaction'
         ? '<span class="cdr-source '+esc(t.source)+'">'+esc(t.source)+'</span>' : '';
       var discTag = t.discretionary ? '<span class="cdr-disc" title="Discretionary">disc</span>' : '';
+      var pendTag = t.pending ? '<span class="cdr-pend" title="Pending review">\u23f3</span>' : '';
       var editable = !isPay && t.id != null;
       html +=
         '<div class="card-drawer-row'+(editable?' editable':'')+'"'+
@@ -4567,7 +4727,7 @@ function renderCardDrawer(txns){
                     ' title="Edit this transaction"':'')+'>'+
         '<span class="cdr-date">'+(t.date||'').slice(5)+'</span>'+  // show MM-DD
         '<span class="cdr-desc" title="'+esc(t.description)+'">'+esc(t.description)+'</span>'+
-        sourceTag + discTag +
+        pendTag + sourceTag + discTag +
         '<span class="cdr-amt'+(isPay?' positive':'')+'">'+fmt(t.cost,2)+'</span>'+
         '</div>';
     });
@@ -4579,7 +4739,14 @@ function renderCardDrawer(txns){
     (payCount ? ' \u00b7 '+payCount+' payment'+(payCount===1?'':'s') : '');
   $('cdr-total').textContent = 'Charges: '+fmt(grandTotal,2)+
     (grandPayments ? ' \u00b7 Paid: '+fmt(grandPayments,2) : '');
-  $('cdr-sub').textContent   = txns.length + ' of ' + (_drawerTxns.length||txns.length);
+  // Sub line: what the drawer HAS vs what exists. "N of M" only ever means
+  // "search matched N of the M loaded"; truncation is said in words.
+  var loaded = _drawerTxns.length || txns.length;
+  var sub = (txns.length < loaded)
+    ? txns.length + ' of ' + loaded + ' match'
+    : loaded + ' transaction' + (loaded===1?'':'s');
+  if(_drawerTruncated) sub += ' \u00b7 \u26a0 newest '+loaded+' of '+_drawerTotal+' shown';
+  $('cdr-sub').textContent = sub;
 }
 
 // ── VARIABLE EXPENSE ENTRIES ─────────────────────────────────
@@ -4805,6 +4972,10 @@ function ensureQuarterlyFor(month){
         var names = r.added.map(function(a){return a.name;}).join(', ');
         showBanner(names+' added to Recurring — enter the actual amount when the bill arrives','ok');
         loadFixed(month, true);
+      } else if(r && r.noHistory && r.noHistory.length && curMonthFx===month){
+        // Due per Config but never recorded: nothing to default from, so the
+        // server won't invent a $0 row. Say so instead of staying silent.
+        showBanner('\u26a0 '+r.noHistory.join(', ')+' is due this month but has no history \u2014 add it once in Recurring','err');
       }
     })
     .catch(function(){ /* silent -- non-critical background check */ });
@@ -5879,9 +6050,8 @@ var CARD_MAP = [
   { pm:'Prime',       sheetKey:'Prime Visa',    name:'Amazon Prime Visa',      type:'credit', limit:29800 },
   { pm:"Lowe's",      sheetKey:"Lowe's",        name:"Lowe's Advantage",       type:'credit', limit:35000 },
   { pm:'United',      sheetKey:'United',        name:'United Explorer',        type:'credit', limit:14800 },
-  { pm:'Discover',    sheetKey:'Discover',      name:'Discover It',            type:'credit', limit:6600  },
 ];
-var PM_OPTIONS = ['', 'AMEX', 'Costco', 'Wells Fargo', 'Prime', 'United', "Lowe's", 'Discover', 'Checking', 'Gift Card'];
+var PM_OPTIONS = ['', 'AMEX', 'Costco', 'Wells Fargo', 'Prime', 'United', "Lowe's", 'Checking', 'Gift Card'];
 
 // Daycare config — overwritten by allData.config on load
 var DC_AMOUNT         = 2380;
@@ -6008,6 +6178,14 @@ function renderFcfCard(){
 }
 
 
+// Pending-review indicator for an account tile: nothing at all when zero.
+// Meaning is carried by the glyph + words + left rule, not the amber tint.
+function pendingTileHtml(p){
+  if(!p || !p.count) return '';
+  return '<div class="acct-pending" title="Transactions flagged for review (\u23f3 on the Transactions tab)">'+
+    '\u23f3 '+p.count+' pending'+(p.total ? ' \u00b7 '+fmt(p.total,2) : '')+'</div>';
+}
+
 function loadAccounts(){
   var cb       = (allData && allData.cardBalances) || {};
   var cards    = cb.cards       || {};
@@ -6082,10 +6260,12 @@ function loadAccounts(){
     '<span class="acct-bal '+(checkingDisplay!=null?(checkingDisplay<500?'negative':'positive'):'')+'">'+(checkingDisplay!=null?fmt(checkingDisplay,2):'—')+'</span>'+
     '<span class="acct-bal-label">current balance</span>'+
     '</div>'+
+    pendingTileHtml(cb.checkingPending)+
     (loanTotal?'<div class="acct-updated" style="color:var(--amber)">Student loans: '+fmt(loanTotal)+'</div>':'')+
     chkRows+
     (SCRIPT_URL&&!isDemo
       ? '<div class="acct-checking-btns">'+
+        '<button class="acct-pay-btn" style="margin:0" data-action="qaAddForPm" data-pm="Checking">+ Add</button>'+
         '<button class="acct-dep-btn" data-action="chkDeposit">+ Deposit / paycheck</button>'+
         '<button class="acct-wd-btn"  data-action="chkWithdrawal">− Withdrawal</button>'+
         '</div>'
@@ -6153,6 +6333,9 @@ function loadAccounts(){
       histHtml += '<div class="acct-updated" style="color:var(--green)">Credit balance (overpaid)</div>';
     }
 
+    var addBtn = isDemo ? '' :
+      '<button class="acct-pay-btn" style="margin-right:6px" data-action="qaAddForPm" data-pm="'+esc(def.pm)+'"'+
+      ' title="Add a charge to '+esc(def.name)+'">+ Add</button>';
     var payBtn = isDemo ? '' :
       '<button class="acct-pay-btn" data-action="payCard" data-key="'+esc(def.sheetKey)+
       '" data-name="'+esc(def.name)+'" data-balance="'+(balance!=null?balance:0)+
@@ -6185,8 +6368,9 @@ function loadAccounts(){
       '<div class="acct-bal-row">'+balHtml+
       '<span class="acct-bal-label">'+(balance!=null?(balance<0?'credit balance':'current balance'):'not found')+'</span>'+
       '</div>'+
+      pendingTileHtml(sheetCard && {count:sheetCard.pendingCount, total:sheetCard.pendingTotal})+
       stmtHtml + histHtml + utilHtml + lastPayHtml +
-      '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:0">' + payBtn + voidBtn + '</div>';
+      '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:0">' + addBtn + payBtn + voidBtn + '</div>';
     grid.appendChild(card);
   });
 
@@ -6308,26 +6492,24 @@ function renderCreditChart(history){
   });
 }
 
+// Optimistic flip, then the sheet write; on failure the flip is undone and
+// said out loud (no silent divergence between row and sheet).
 function toggleRowPending(i){
   var t = txns[i];
-  if(t.id == null) return;
-  togglePendingFlag(curMonthTxn, t.id);
-  clearPendingCache(); // invalidate so next applyFilters re-reads
-  // Re-render just this row to flip its state
-  replaceTr('tbody', i, viewRow(t, i)); wireTagArea(i);
-  // Update banner count
-  var pendingCount = allPendingForMonth(curMonthTxn).length;
-  var banner = $('tbl-wrap').querySelector('.txn-pending-banner');
-  if(pendingCount > 0){
-    var bannerHtml = '<div class="txn-pending-banner">'+
-      '⏳ <strong>'+pendingCount+' pending</strong> — transactions flagged for review'+
-      '<a >Jump to first</a>'+
-      '</div>';
-    if(banner) banner.outerHTML = bannerHtml;
-    else $('tbl-wrap').insertAdjacentHTML('afterbegin', bannerHtml);
-  } else {
-    if(banner) banner.remove();
-  }
+  if(!t || t.id == null) return;
+  var want = !t.pending;
+  function paint(){ replaceTr('tbody', i, viewRow(t, i)); wireTagArea(i); refreshPendingBanner(); applyFilters(); }
+  t.pending = want; paint();
+  if(isDemo || !SCRIPT_URL) return;
+  apiPost(SCRIPT_URL,{action:'ledgerSetPending', idemKey:genIdemKey('pend'), id:t.id, pending:want})
+    .then(function(r){
+      if(r && r.error) throw new Error(r.error);
+      refreshCardBalances(); // tiles carry pending counts
+    })
+    .catch(function(e){
+      t.pending = !want; paint();
+      showBanner('Pending flag not saved: '+e.message,'err');
+    });
 }
 
 // ── helpers ──
@@ -7134,7 +7316,7 @@ function demoCardBalances(){
     checkingBalance:    8432.17,
     checkingBalanceAlt: 2432.17,
     totalBalance:       1406.08,
-    totalLimit:         159900,
+    totalLimit:         153300,
     utilization:        0.0088,
     cards: {
       'United':      { balance:   331.22,  limit: 14800 },
@@ -7143,7 +7325,6 @@ function demoCardBalances(){
       'Citi':        { balance: -1010.93,  limit: 14000 },
       'Wells Fargo': { balance:  1264.78,  limit: 18800 },
       "Lowe's":      { balance:     0,     limit: 35000 },
-      'Discover':    { balance:     0,     limit:  6600 },
     }
   };
 }
