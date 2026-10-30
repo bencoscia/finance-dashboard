@@ -635,6 +635,8 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .acct-void-btn{font-family:var(--mono);font-size:11px;padding:4px 10px;background:transparent;border:1px solid var(--border2);border-radius:6px;color:var(--terra);cursor:pointer;margin-top:8px;margin-left:6px;transition:background .15s,color .15s}
 .acct-void-btn:hover{background:#fef2f2;border-color:var(--terra)}
 .acct-checking-btns{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.acct-btn-row{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:8px}
+.acct-btn-row>button,.acct-checking-btns>button{margin:0;white-space:nowrap}
 .acct-dep-btn{font-family:var(--mono);font-size:11px;padding:4px 10px;background:transparent;border:1px solid var(--green-bd);border-radius:6px;color:var(--green);cursor:pointer;transition:background .15s}
 .acct-dep-btn:hover{background:var(--green-bg)}
 .acct-wd-btn{font-family:var(--mono);font-size:11px;padding:4px 10px;background:transparent;border:1px solid var(--terra-bd);border-radius:6px;color:var(--terra);cursor:pointer;transition:background .15s}
@@ -6266,8 +6268,8 @@ function loadAccounts(){
     (SCRIPT_URL&&!isDemo
       ? '<div class="acct-checking-btns">'+
         '<button class="acct-pay-btn" style="margin:0" data-action="qaAddForPm" data-pm="Checking">+ Add</button>'+
-        '<button class="acct-dep-btn" data-action="chkDeposit">+ Deposit / paycheck</button>'+
-        '<button class="acct-wd-btn"  data-action="chkWithdrawal">− Withdrawal</button>'+
+        '<button class="acct-dep-btn" data-action="chkDeposit" title="Record a deposit or paycheck">+ Deposit</button>'+
+        '<button class="acct-wd-btn"  data-action="chkWithdrawal" title="Record a withdrawal">− Withdraw</button>'+
         '</div>'
       : '');
   grid.appendChild(chkCard);
@@ -6334,12 +6336,12 @@ function loadAccounts(){
     }
 
     var addBtn = isDemo ? '' :
-      '<button class="acct-pay-btn" style="margin-right:6px" data-action="qaAddForPm" data-pm="'+esc(def.pm)+'"'+
+      '<button class="acct-pay-btn" data-action="qaAddForPm" data-pm="'+esc(def.pm)+'"'+
       ' title="Add a charge to '+esc(def.name)+'">+ Add</button>';
     var payBtn = isDemo ? '' :
       '<button class="acct-pay-btn" data-action="payCard" data-key="'+esc(def.sheetKey)+
       '" data-name="'+esc(def.name)+'" data-balance="'+(balance!=null?balance:0)+
-      '">+ Record payment</button>';
+      '" title="Record a payment">+ Payment</button>';
 
     // Last payment info + void button
     var lastPayment = sheetCard ? sheetCard.lastPayment : null;
@@ -6370,7 +6372,7 @@ function loadAccounts(){
       '</div>'+
       pendingTileHtml(sheetCard && {count:sheetCard.pendingCount, total:sheetCard.pendingTotal})+
       stmtHtml + histHtml + utilHtml + lastPayHtml +
-      '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:0">' + addBtn + payBtn + voidBtn + '</div>';
+      '<div class="acct-btn-row">' + addBtn + payBtn + voidBtn + '</div>';
     grid.appendChild(card);
   });
 
