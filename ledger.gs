@@ -921,7 +921,9 @@ function _ledgerCheckingEvents(seedMonth) {
     var pamt = _ln(cpRows[i][2]);
     if (pamt === null) continue;
     events.push({
-      date: cpmk + '-01', // Card Payments has no per-payment date, only month
+      // Col A holds the real payment date on rows written by makeCardPayment;
+      // only pre-date-column history falls back to the month start.
+      date: _ldate(cpRows[i][0]) || (cpmk + '-01'),
       amount: pamt,        // stored negative; adding it is the correct sign
       description: 'Card payment - ' + String(cpRows[i][1] || ''),
       source: 'cardPayment'
@@ -973,7 +975,7 @@ function getLedgerCheckingHistory(limitStr) {
 
 // Card drawer, ledger world: one pass over Txns (all categories -- the old
 // version merged the txn block with grocery/gas subtable entries; here they
-// are already one table). Newest first. UNCAPPED by default: a silent 500 cap
+// are already one table) plus this card's Card Payments. Newest first. UNCAPPED by default: a silent 500 cap
 // used to drop the oldest history of the busiest cards (WF/Costco/Prime pass
 // 500 within ~2 years) and made the drawer's search miss them. A caller may
 // still pass limit; total is always the pre-cap count and truncated says so.
@@ -1001,11 +1003,130 @@ function ledgerGetTransactionsByCard(pm, limitStr) {
       source: cat === 'groceries' ? 'grocery' : cat === 'gas' ? 'gas' : 'transaction'
     });
   }
+  // Payments against this card, so the drawer reads like a statement rather
+  // than charges-only. Card Payments col B holds the sheetKey ('Prime Visa',
+  // 'Citi'), NOT the Txns payment-method label ('Prime', 'Costco') -- the
+  // long-standing dual-naming trap. _pmToSheetKey is the one bridge; never
+  // compare pm to col B directly.
+  var sheetKey = _pmToSheetKey(pm);
+  if (sheetKey) {
+    var cp = readSheet('Card Payments') || [];
+    for (i = 0; i < cp.length; i++) {
+      if (String(cp[i][1] || '').trim() !== sheetKey) continue;
+      var pamt = _ln(cp[i][2]);
+      if (pamt === null) continue;
+      var pmk = _ledgerMonthKey(String(cp[i][3] || ''));
+      // Historical rows predate the date column; fall back to the month start
+      // so they still sort into the right place instead of vanishing.
+      var pdate = _ldate(cp[i][0]) || (pmk ? pmk + '-01' : '');
+      results.push({
+        month: pmk ? _ledgerMonthName(pmk) : '',
+        date: pdate,
+        description: 'Payment',
+        cost: Math.round(pamt * 100) / 100, // stored negative = credit
+        paymentMethod: pm,
+        discretionary: false, ben: false, jenna: false, pending: false,
+        source: 'payment'
+      });
+    }
+  }
   results.sort(function (a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : 0; });
   var total = results.length;
   if (total > limit) results = results.slice(0, limit);
   return { pm: pm, transactions: results, count: results.length, total: total,
            truncated: results.length < total };
+}
+
+// -- Statement balances -------------------------------------------------------
+// (Restored 2026-10 from the Apps Script editor's version history: this code
+// lived ONLY in the editor's ledger.gs and was never committed, so pasting the
+// repo copy deleted it. It is in the repo now.)
+// A card's statement balance is what it owed at the last statement CLOSE, not
+// today. It is NOT derivable from the due date: grace periods differ by issuer
+// and card, so guessing a close date would yield a confidently wrong number --
+// worse than showing nothing. Requires Card Trackers column I (closing day of
+// month, 1-31), entered by hand; blank column => null, reported honestly.
+//
+// Method: roll the CURRENT balance backwards over everything dated after the
+// close. Deriving from the displayed balance (rather than re-summing from the
+// seed) means statement and current can never disagree -- the same
+// single-source discipline used for the checking register.
+function _lastCloseDate(closeDay, today) {
+  var d = today || new Date();
+  var y = d.getFullYear(), m = d.getMonth();
+  function clampDay(yy, mm, day) {           // Feb 30 -> Feb 28/29
+    var last = new Date(yy, mm + 1, 0).getDate();
+    return new Date(yy, mm, Math.min(day, last));
+  }
+  var thisMonth = clampDay(y, m, closeDay);
+  if (thisMonth <= d) return thisMonth;
+  return clampDay(y, m - 1, closeDay);       // JS Date handles month -1 rollover
+}
+
+function _cardStatementBalances(balances, ctMeta, pmToKey) {
+  var out = {};
+  var today = new Date();
+  var todayStr = _ldate(today);
+
+  // Collect post-close, dated, balance-affecting events once per card.
+  var closeStr = {}, has = false, k;
+  for (k in ctMeta) {
+    if (ctMeta[k] && ctMeta[k].closeDay != null) {
+      closeStr[k] = _ldate(_lastCloseDate(ctMeta[k].closeDay, today));
+      has = true;
+    }
+  }
+  if (!has) return out;
+
+  var post = {}, undated = {};
+  function bump(key, amt, dateStr) {
+    if (!key || closeStr[key] === undefined) return;
+    if (!dateStr) { undated[key] = (undated[key] || 0) + 1; return; }
+    if (dateStr > closeStr[key] && dateStr <= todayStr) post[key] = (post[key] || 0) + amt;
+  }
+
+  var i, rows;
+  rows = readSheet(LEDGER_TXNS) || [[]];
+  for (i = 1; i < rows.length; i++) {
+    var amt = _ln(rows[i][4]);
+    if (amt === null) continue;
+    bump(pmToKey[String(rows[i][5] || '').trim()], amt, _ldate(rows[i][1]));
+  }
+  rows = readSheet(LEDGER_FIXED) || [[]];
+  for (i = 1; i < rows.length; i++) {
+    var src = String(rows[i][3] || '').trim();
+    if (!src || src === 'Checking') continue;
+    if (!_lb(rows[i][5])) continue;          // unpaid rows never hit the card
+    var famt = _ln(rows[i][4]);
+    if (famt === null) continue;
+    // A paid row with no paid_date can't be placed either side of the close.
+    bump(pmToKey[src], famt, _ldate(rows[i][6]));
+  }
+  rows = readSheet('Card Payments') || [];
+  for (i = 0; i < rows.length; i++) {
+    var pamt = _ln(rows[i][2]);
+    if (pamt === null) continue;
+    var pdate = _ldate(rows[i][0]);
+    if (!pdate) {
+      var pmk = _ledgerMonthKey(String(rows[i][3] || ''));
+      pdate = pmk ? pmk + '-01' : '';
+    }
+    bump(String(rows[i][1] || '').trim(), pamt, pdate);
+  }
+
+  for (k in closeStr) {
+    var cur = Math.round((balances[k] || 0) * 100) / 100;
+    var since = Math.round((post[k] || 0) * 100) / 100;
+    out[k] = {
+      closeDate:  closeStr[k],
+      statement:  Math.round((cur - since) * 100) / 100,
+      sinceClose: since,
+      note: undated[k]
+        ? undated[k] + ' paid recurring row(s) have no payment date -- excluded from the split'
+        : null
+    };
+  }
+  return out;
 }
 
 // -- WRITE: ledgerSetPending --------------------------------------------------
