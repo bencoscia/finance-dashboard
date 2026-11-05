@@ -160,6 +160,7 @@ function dispatch(payload) {
     else if (action === 'reimburseReceipt')   return _withIdem(payload, function(){ return reimburseReceipt(payload); }); // invalidates HSA cache internally
     else if (action === 'addHsaReceipt')      return _withIdem(payload, function(){ return addHsaReceipt(payload); });   // invalidates HSA cache internally
     else if (action === 'scanHsaFolder')      return scanHsaFolder(); // idempotent via fileId dedup, not _withIdem
+    else if (action === 'uploadHsaReceipt')   return _withIdem(payload, function(){ return uploadHsaReceipt(payload); }); // creates a Drive file: retry must not make a 2nd
     else if (action === 'updateHsaReceipt')   return _withIdem(payload, function(){ return updateHsaReceipt(payload); }); // invalidates HSA cache internally
     else if (action === 'approveHsaReceipt')  return _withIdem(payload, function(){ return approveHsaReceipt(payload); });
     else if (action === 'deleteHsaReceipt')   return _withIdem(payload, function(){ return deleteHsaReceipt(payload); });
@@ -241,6 +242,7 @@ function doPost(e) {
     else if (p.action === 'reimburseReceipt')   data = _withIdem(p, function(){ return reimburseReceipt(p); }); // invalidates HSA cache internally
     else if (p.action === 'addHsaReceipt')      data = _withIdem(p, function(){ return addHsaReceipt(p); });   // invalidates HSA cache internally
     else if (p.action === 'scanHsaFolder')      data = scanHsaFolder(); // idempotent via fileId dedup, not _withIdem
+    else if (p.action === 'uploadHsaReceipt')   data = _withIdem(p, function(){ return uploadHsaReceipt(p); }); // creates a Drive file: retry must not make a 2nd
     else if (p.action === 'updateHsaReceipt')   data = _withIdem(p, function(){ return updateHsaReceipt(p); }); // invalidates HSA cache internally
     else if (p.action === 'approveHsaReceipt')  data = _withIdem(p, function(){ return approveHsaReceipt(p); });
     else if (p.action === 'deleteHsaReceipt')   data = _withIdem(p, function(){ return deleteHsaReceipt(p); });
@@ -3582,6 +3584,144 @@ function deleteHsaReceipt(p, sheetNameOverride) {
   return { ok: true, id: id };
 }
 
+// Place one Drive file onto the sheet given its already-derived fields.
+// CALLER MUST HOLD the script lock. Shared by scanHsaFolder and
+// uploadHsaReceipt so both paths apply identical content dedup (the 'file'
+// fast path is the scan's own concern -- an upload's file is always new).
+// Mutates rows (the caller's in-memory view) so later placements see it.
+// Returns one of:
+//   { kind:'linked',  id, row }                -- exact date+amount match on an
+//                                                 unlinked row; file attached to it
+//   { kind:'created', id, needsReview, dupOf }  -- new row (dupOf set => near-dup draft)
+//   { kind:'skipped', reason }                 -- fields failed validation
+function _hsaPlaceReceipt(sheet, rows, addArgs, fileId) {
+  var dup = _hsaFindDup(rows, { dateIncurred: addArgs.dateIncurred, amount: addArgs.amount }, { requireUnlinked: true });
+  if (dup && dup.kind === 'exact') {
+    sheet.getRange(dup.row.rowNum, 12).setValue(fileId);
+    if (!dup.row.receiptLink) { sheet.getRange(dup.row.rowNum, 8).setValue(addArgs.receiptLink); dup.row.receiptLink = addArgs.receiptLink; }
+    dup.row.sourceFileId = fileId;
+    return { kind: 'linked', id: dup.id, row: dup.row };
+  }
+  var dupOf = null;
+  if (dup && dup.kind === 'near') {
+    addArgs.needsReview = true;
+    addArgs.notes = _hsaJoinNote(addArgs.notes, 'Possible duplicate of #' + dup.id + ' (same amount, date within ' + HSA_DUP_WINDOW_DAYS + 'd)');
+    dupOf = dup.id;
+  }
+  var prep = _hsaPrepRow(addArgs);
+  if (prep.error) return { kind: 'skipped', reason: prep.error };
+  var res = _hsaAppendRow(sheet, prep);
+  rows.push({ id: res.id, rowNum: res.row, dateIncurred: prep.dateStr, amount: prep.amount,
+              provider: prep.provider, description: prep.description, category: prep.category,
+              receiptLink: prep.receiptLink, sourceFileId: fileId, needsReview: prep.draft, deleted: false });
+  return { kind: 'created', id: res.id, needsReview: !!res.needsReview, dupOf: dupOf };
+}
+
+// -- POST: upload a receipt photo (client-built PDF) into the receipt folder --
+// The client photographs the receipt, re-encodes it as JPEG and wraps it in a
+// one-page PDF, so no server-side image conversion is involved. This saves it
+// to Config!hsa_receipt_folder under the scan's naming convention, then places
+// it via _hsaPlaceReceipt -- the scan's own logic -- so the two paths cannot
+// disagree. The next folder scan sees the file's id in col L and skips it.
+// _withIdem-wrapped in both routers: a retried request must NOT create a
+// second file (two files = two fileIds = two rows the scan cannot dedup).
+// On any placement failure the new file is trashed, so a user retry after an
+// error never leaves a stray copy for the scan to import.
+var HSA_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+// Provider text made filename-safe: '~' is the field delimiter, the rest are
+// path/Drive-hostile. Pure.
+function _hsaSafeProvider(s) {
+  return String(s || '').replace(/[~\/\\:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+}
+
+// Fields -> conventional filename DATE~provider~amount.pdf, verified by
+// round-tripping through the scan's own parser (one parser, two writers).
+// Pure -- unit-tested by testHsaReceiptFileName. Returns {name, provider,
+// amount} or {error}.
+function _hsaReceiptFileName(dateStr, provider, amount) {
+  var prov = _hsaSafeProvider(provider);
+  if (!prov) return { error: 'Provider is required -- it is part of the receipt filename.' };
+  if (!_isRealDate(dateStr)) return { error: 'Invalid or missing date incurred.' };
+  var amt = _hsaR2(amount);
+  if (!(amt > 0)) return { error: 'Amount must be a positive number.' };
+  var name = dateStr + '~' + prov + '~' + amt.toFixed(2) + '.pdf';
+  var back = _parseReceiptName(name);
+  if (back.error || back.date !== dateStr || back.provider !== prov || Math.abs(back.amount - amt) >= 0.005)
+    return { error: 'Filename round-trip failed for "' + name + '"' + (back.error ? ': ' + back.error : '') };
+  return { name: name, provider: prov, amount: amt };
+}
+
+function uploadHsaReceipt(p) {
+  var dateStr = String(p.dateIncurred || '').trim();
+  var fn = _hsaReceiptFileName(dateStr, p.provider, p.amount);
+  if (fn.error) return fn;
+
+  var b64 = String(p.pdfBase64 || '');
+  if (!b64) return { error: 'No receipt image received.' };
+  var bytes;
+  try { bytes = Utilities.base64Decode(b64); }
+  catch (e) { return { error: 'Receipt data is not valid base64.' }; }
+  if (bytes.length > HSA_UPLOAD_MAX_BYTES)
+    return { error: 'Receipt file too large (' + Math.round(bytes.length / 1024) + ' KB; max ' + Math.round(HSA_UPLOAD_MAX_BYTES / 1024) + ' KB).' };
+  // '%PDF-' magic (37 80 68 70 45; all < 128 so Java's signed bytes compare directly)
+  if (bytes.length < 5 || bytes[0] !== 37 || bytes[1] !== 80 || bytes[2] !== 68 || bytes[3] !== 70 || bytes[4] !== 45)
+    return { error: 'Upload is not a PDF.' };
+
+  var folderId = cfg().hsaReceiptFolder;
+  if (!folderId) return { error: 'Set hsa_receipt_folder in Config (the Drive folder ID).' };
+  var folder;
+  try { folder = DriveApp.getFolderById(folderId); }
+  catch (e) { return { error: 'Cannot open Drive folder (check the ID and that the script can access it): ' + e.message }; }
+
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(HSA_SHEET);
+  if (!sheet) return { error: 'Sheet not found: ' + HSA_SHEET };
+
+  var lock = LockService.getScriptLock();
+  var gotLock = false;
+  try { gotLock = lock.tryLock(20000); } catch (e) {}
+  if (!gotLock) return { error: 'Receipts are busy (a scan may be running) -- try again in a moment.' };
+
+  try {
+    var rows = _hsaReadRows(sheet);
+    var file;
+    try { file = folder.createFile(Utilities.newBlob(bytes, 'application/pdf', fn.name)); }
+    catch (e) { return { error: 'Could not save to Drive: ' + e.message + ' (if this is a permission error, run testHsaDriveWrite once from the Apps Script editor to re-authorize)' }; }
+    var fileId = file.getId(), fileUrl = file.getUrl();
+    var placed, filled = [];
+    try {
+      placed = _hsaPlaceReceipt(sheet, rows, {
+        dateIncurred: dateStr, amount: fn.amount, provider: fn.provider,
+        description: String(p.description || '').trim(), category: String(p.category || '').trim(),
+        funding: p.funding, receiptLink: fileUrl, sourceFileId: fileId
+      }, fileId);
+      if (placed.kind === 'skipped') throw new Error(placed.reason);
+      // Linked to an existing row (typically the needs-review draft made by a
+      // txn's HSA-eligible box): fill ONLY its blank provider/description/
+      // category from what was typed here. Never overwrite, never clear
+      // needs_review -- confirming the row stays a deliberate Approve/Edit.
+      if (placed.kind === 'linked') {
+        var fill = [[4, 'provider', fn.provider], [5, 'description', String(p.description || '').trim()], [6, 'category', String(p.category || '').trim()]];
+        for (var i = 0; i < fill.length; i++) {
+          var cur = placed.row[fill[i][1]];
+          if ((cur === '' || cur == null) && fill[i][2]) { sheet.getRange(placed.row.rowNum, fill[i][0]).setValue(fill[i][2]); filled.push(fill[i][1]); }
+        }
+      }
+    } catch (e) {
+      try { file.setTrashed(true); } catch (e2) {}
+      return { error: 'Receipt not saved (file removed): ' + e.message };
+    }
+    SpreadsheetApp.flush();
+    invalidateSheet(HSA_SHEET);
+    invalidateHsaCache();
+    return { ok: true, kind: placed.kind, id: placed.id, fileName: fn.name, fileUrl: fileUrl, fileId: fileId,
+             bytes: bytes.length, needsReview: (placed.kind === 'linked') ? !!placed.row.needsReview : !!placed.needsReview,
+             dupOf: placed.dupOf || null, filled: filled };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // -- POST / trigger: import new receipt PDFs from the Drive folder ----------
 // Takes no args so a future time-based trigger can call it directly. Holds the
 // script lock for the whole scan and appends via _hsaAppendRow (no nested lock).
@@ -3649,26 +3789,11 @@ function scanHsaFolder() {
         };
       }
 
-      var dup = _hsaFindDup(rows, { dateIncurred: addArgs.dateIncurred, amount: addArgs.amount }, { requireUnlinked: true });
-      if (dup && dup.kind === 'exact') {
-        sheet.getRange(dup.row.rowNum, 12).setValue(theId);
-        if (!dup.row.receiptLink) { sheet.getRange(dup.row.rowNum, 8).setValue(addArgs.receiptLink); dup.row.receiptLink = addArgs.receiptLink; }
-        dup.row.sourceFileId = theId;
-        linked.push({ name: fname, id: dup.id, how: 'match' });
-        continue;
-      }
-      if (dup && dup.kind === 'near') {
-        addArgs.needsReview = true;
-        addArgs.notes = _hsaJoinNote(addArgs.notes, 'Possible duplicate of #' + dup.id + ' (same amount, date within ' + HSA_DUP_WINDOW_DAYS + 'd)');
-        dupFlagged++;
-      }
-
-      var prep = _hsaPrepRow(addArgs);
-      if (prep.error) { skipped.push({ name: fname, reason: prep.error }); continue; }
-      var res = _hsaAppendRow(sheet, prep);
-      rows.push({ id: res.id, rowNum: res.row, dateIncurred: prep.dateStr, amount: prep.amount,
-                  receiptLink: prep.receiptLink, sourceFileId: theId, needsReview: prep.draft, deleted: false });
-      created.push({ name: fname, id: res.id, needsReview: !!res.needsReview });
+      var placed = _hsaPlaceReceipt(sheet, rows, addArgs, theId);
+      if (placed.kind === 'linked')  { linked.push({ name: fname, id: placed.id, how: 'match' }); continue; }
+      if (placed.kind === 'skipped') { skipped.push({ name: fname, reason: placed.reason }); continue; }
+      if (placed.dupOf) dupFlagged++;
+      created.push({ name: fname, id: placed.id, needsReview: !!placed.needsReview });
     }
 
     SpreadsheetApp.flush();

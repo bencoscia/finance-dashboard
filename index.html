@@ -313,6 +313,11 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .hsa-note{font-size:12px;color:var(--text);background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--amber);border-radius:var(--r);padding:9px 12px;margin-bottom:14px}
 .hsa-note.warn{border-left-color:var(--terra)}
 .hsa-link{color:var(--c2);text-decoration:underline}
+.qa-photo{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.qa-photo-btn{display:inline-block}
+.qa-photo-input{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none}
+.qa-photo-info{flex-basis:100%;font-size:12px;color:var(--muted)}
+.qa-photo-preview{flex-basis:100%;max-width:100%;max-height:220px;object-fit:contain;border:1px solid var(--border);border-radius:var(--r);background:var(--surface2)}
 .hsa-reimburse-btn{font-family:var(--mono);font-size:11px;padding:5px 11px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);cursor:pointer}
 .hsa-reimburse-btn:hover{background:var(--surface2)}
 .hsa-filter-btn{font-family:var(--mono);font-size:11px;padding:5px 11px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer;margin-bottom:10px}
@@ -2368,7 +2373,7 @@ function showQuickAdd(e){
   $('qa-err').textContent='';
   $('qa-modal-backdrop').style.display='flex';
 }
-function hideQuickAdd(){ var b=$('qa-modal-backdrop'); if(b) b.style.display='none'; }
+function hideQuickAdd(){ var b=$('qa-modal-backdrop'); if(b) b.style.display='none'; qaHsaPhotoReset(); }
 async function submitQuickAddSplit(){
   // Same save as submitQuickAdd's txn branch, then jump into the split modal.
   if(qaType!=='txn') return;
@@ -2450,6 +2455,7 @@ function qaResolvedMonth(){
 
 function qaRenderFields(){
   var f=$('qa-fields'); var today=localToday();
+  qaHsaPhotoReset(); // any re-render drops a staged photo (fields it belonged to are gone)
   var sb=$('qa-split-btn'); if(sb) sb.style.display = (qaType==='txn') ? '' : 'none';
   function field(label,inner){ return '<div class="pay-field"><label>'+label+'</label>'+inner+'</div>'; }
   var pmSel='<select id="qa-pm" class="msel" style="width:100%">'+
@@ -2508,7 +2514,15 @@ function qaRenderFields(){
       field('Description','<input type="text" id="qa-desc" placeholder="e.g. Crown">')+
       field('Category','<input type="text" id="qa-hsa-category" placeholder="e.g. Dental">')+
       field('Funding','<select id="qa-hsa-funding" class="msel" style="width:100%"><option value="OOP">Out of pocket (reimbursable)</option><option value="HSA">Paid with HSA card</option></select>')+
+      field('Receipt photo','<div class="qa-photo">'+
+        '<label class="btn-add qa-photo-btn" for="qa-hsa-photo" id="qa-hsa-photo-lbl">📷 Take photo</label>'+
+        '<input type="file" id="qa-hsa-photo" class="qa-photo-input" accept="image/*" capture="environment">'+
+        '<button type="button" class="btn-cancel" id="qa-hsa-photo-clear" style="display:none">Remove</button>'+
+        '<div id="qa-hsa-photo-info" class="qa-photo-info"></div>'+
+        '<img id="qa-hsa-preview" class="qa-photo-preview" alt="Receipt preview" style="display:none">'+
+        '</div>')+
       field('Receipt link (optional)','<input type="url" id="qa-hsa-link" placeholder="https://drive.google.com/...">');
+    qaWirePhoto();
   } else {
     var cardSel='<select id="qa-card" class="msel" style="width:100%">'+
       CARD_MAP.map(function(c){return '<option value="'+esc(c.sheetKey)+'">'+esc(c.name)+'</option>';}).join('')+'</select>';
@@ -2517,6 +2531,103 @@ function qaRenderFields(){
       field('Amount ($)','<input type="number" id="qa-amt" step="0.01" placeholder="0.00">')+
       field('Payment date','<input type="date" id="qa-date" value="'+today+'">');
   }
+}
+
+// ── HSA receipt photo: camera -> canvas JPEG -> 1-page PDF, all client-side ──
+// The server never sees the camera's original (HEIC on iPhone): the browser
+// decodes it, the canvas re-encodes to JPEG (long edge <= 2000 px, ~300-700 KB),
+// and hsaJpegToPdf wraps that JPEG verbatim (DCTDecode) in a minimal PDF, so the
+// receipt folder stays all-PDF and the scan's .pdf filter still applies.
+// capture="environment" opens the camera directly; on iOS the shot is NOT
+// written to the Photos library, so there is nothing to delete afterwards.
+var qaHsaPdf = null, qaHsaBusy = false, qaHsaPhotoToken = null;
+var HSA_PHOTO_MAX_EDGE = 2000, HSA_PHOTO_QUALITY = 0.82;
+
+function qaHsaPhotoReset(){
+  if(qaHsaPdf && qaHsaPdf.preview) URL.revokeObjectURL(qaHsaPdf.preview);
+  qaHsaPdf = null; qaHsaBusy = false; qaHsaPhotoToken = null;
+  qaHsaPhotoUi();
+}
+function qaWirePhoto(){
+  var inp=$('qa-hsa-photo'), clr=$('qa-hsa-photo-clear');
+  // Property closures, not on*= attributes (Invariant 2).
+  if(inp) inp.onchange=function(){ var f=this.files&&this.files[0]; this.value=''; if(f) qaHsaTakePhoto(f); };
+  if(clr) clr.onclick=function(){ qaHsaPhotoReset(); };
+  qaHsaPhotoUi();
+}
+function qaHsaPhotoUi(msg){
+  var info=$('qa-hsa-photo-info'); if(!info) return;
+  var pv=$('qa-hsa-preview'), clr=$('qa-hsa-photo-clear'), lbl=$('qa-hsa-photo-lbl'), link=$('qa-hsa-link');
+  var has=!!qaHsaPdf;
+  if(pv){ if(has){ pv.src=qaHsaPdf.preview; pv.style.display=''; } else { pv.removeAttribute('src'); pv.style.display='none'; } }
+  if(clr) clr.style.display = has ? '' : 'none';
+  if(lbl) lbl.textContent = has ? '📷 Retake' : '📷 Take photo';
+  if(link){ if(has) link.value=''; link.disabled=has; link.placeholder = has ? 'Set automatically from the photo' : 'https://drive.google.com/...'; }
+  // Text + glyph carry the state, never color alone (Invariant 5).
+  info.textContent = msg || (has
+    ? '✓ '+qaHsaPdf.w+'×'+qaHsaPdf.h+' px · '+Math.round(qaHsaPdf.size/1024)+' KB PDF — check the preview is legible'
+    : 'No photo — receipt saves without a file unless you add a link.');
+}
+function hsaLoadImage(file){
+  return new Promise(function(res,rej){
+    var url=URL.createObjectURL(file), im=new Image();
+    im.onload=function(){ res(im); };
+    im.onerror=function(){ URL.revokeObjectURL(url);
+      rej(new Error(/hei[cf]/i.test((file.type||'')+(file.name||'')) ? 'this browser cannot decode HEIC — use the camera button on your phone' : 'unreadable image')); };
+    im.src=url;
+  });
+}
+async function qaHsaTakePhoto(file){
+  var token={}; qaHsaPhotoToken=token;
+  if(qaHsaPdf && qaHsaPdf.preview) URL.revokeObjectURL(qaHsaPdf.preview);
+  qaHsaPdf=null; qaHsaBusy=true; qaHsaPhotoUi('Processing photo…');
+  try{
+    var img=await hsaLoadImage(file);
+    var nw=img.naturalWidth, nh=img.naturalHeight;
+    if(!(nw>0&&nh>0)) throw new Error('image has no size');
+    var k=Math.min(1, HSA_PHOTO_MAX_EDGE/Math.max(nw,nh));
+    var w=Math.max(1,Math.round(nw*k)), h=Math.max(1,Math.round(nh*k));
+    var cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+    var ctx=cv.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h);
+    ctx.drawImage(img,0,0,w,h);   // browsers apply EXIF orientation when drawing an <img>
+    URL.revokeObjectURL(img.src);
+    var jpg=await new Promise(function(res,rej){
+      cv.toBlob(function(b){ if(b) res(b); else rej(new Error('JPEG encode failed')); },'image/jpeg',HSA_PHOTO_QUALITY); });
+    var pdf=hsaJpegToPdf(new Uint8Array(await jpg.arrayBuffer()), w, h);
+    if(token!==qaHsaPhotoToken) return;          // retaken/cleared meanwhile
+    qaHsaPdf={ b64:bytesToB64(pdf), size:pdf.length, w:w, h:h, preview:URL.createObjectURL(jpg) };
+    qaHsaBusy=false; qaHsaPhotoUi();
+  }catch(e){
+    if(token!==qaHsaPhotoToken) return;
+    qaHsaPdf=null; qaHsaBusy=false; qaHsaPhotoUi('⚠ Could not use that photo ('+e.message+'). Try again.');
+  }
+}
+// Minimal valid PDF 1.4: one page, page box = image aspect with long edge 11 in,
+// the JPEG embedded byte-for-byte as a DCTDecode image XObject. Pure; verified
+// offline (pdfinfo/pdftoppm render) before shipping.
+function hsaJpegToPdf(jpeg, w, h){
+  var s=792/Math.max(w,h), pw=(w*s).toFixed(2), ph=(h*s).toFixed(2);
+  var enc=new TextEncoder(), parts=[], offs=[], len=0;
+  function put(x){ var b=(typeof x==='string')?enc.encode(x):x; parts.push(b); len+=b.length; }
+  put('%PDF-1.4\n%\u00e2\u00e3\u00cf\u00d3\n');
+  offs[1]=len; put('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+  offs[2]=len; put('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n');
+  offs[3]=len; put('3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 '+pw+' '+ph+'] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n');
+  offs[4]=len; put('4 0 obj\n<< /Type /XObject /Subtype /Image /Width '+w+' /Height '+h+' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length '+jpeg.length+' >>\nstream\n');
+  put(jpeg); put('\nendstream\nendobj\n');
+  var cs='q '+pw+' 0 0 '+ph+' 0 0 cm /Im0 Do Q';
+  offs[5]=len; put('5 0 obj\n<< /Length '+cs.length+' >>\nstream\n'+cs+'\nendstream\nendobj\n');
+  var xref=len, x='xref\n0 6\n0000000000 65535 f \n';
+  for(var i=1;i<=5;i++) x+=('0000000000'+offs[i]).slice(-10)+' 00000 n \n';
+  put(x+'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n'+xref+'\n%%EOF\n');
+  var out=new Uint8Array(len), p=0;
+  for(var j=0;j<parts.length;j++){ out.set(parts[j],p); p+=parts[j].length; }
+  return out;
+}
+function bytesToB64(u8){
+  var s='', CH=0x8000;
+  for(var i=0;i<u8.length;i+=CH) s+=String.fromCharCode.apply(null, u8.subarray(i,i+CH));
+  return btoa(s);
 }
 
 // 'June 2026' -> '2026-06' for ledger write payloads (reads still take names)
@@ -2638,13 +2749,33 @@ async function submitQuickAdd(){
       quickRefresh(); refreshCardBalances();
     } else if(qaType==='hsa'){
       if(amt<=0){ $('qa-err').textContent='Enter a receipt amount greater than zero.'; return; }
-      await apiPost(SCRIPT_URL,{action:'addHsaReceipt', idemKey:genIdemKey('hsaAdd'),
-        dateIncurred:$('qa-date').value, amount:amt,
-        provider:$('qa-hsa-provider').value.trim(),
-        description:$('qa-desc').value.trim(),
-        category:$('qa-hsa-category').value.trim(),
-        funding:$('qa-hsa-funding').value,
-        receiptLink:$('qa-hsa-link').value.trim()});
+      if(qaHsaBusy){ $('qa-err').textContent='Photo still processing — try again in a second.'; return; }
+      if(qaHsaPdf){
+        // Photo path: one atomic server write saves the PDF to the receipt folder
+        // (named DATE~provider~amount.pdf) AND places the row via the folder
+        // scan's own dedup. idemKey => apiPost's retry can't create a 2nd file.
+        var hProv=$('qa-hsa-provider').value.trim();
+        if(!hProv){ $('qa-err').textContent='Provider is required with a photo — it becomes part of the filename.'; return; }
+        btn.textContent='Uploading…';
+        var up = await apiPost(SCRIPT_URL,{action:'uploadHsaReceipt', idemKey:genIdemKey('hsaUpload'),
+          dateIncurred:$('qa-date').value, amount:amt, provider:hProv,
+          description:$('qa-desc').value.trim(),
+          category:$('qa-hsa-category').value.trim(),
+          funding:$('qa-hsa-funding').value,
+          pdfBase64:qaHsaPdf.b64});
+        if(up.kind==='linked') qaInfo.push('photo attached to existing receipt #'+up.id+' (same date + amount)'+(up.needsReview?' — still a ✎ draft: approve it on the HSA tab':''));
+        else if(up.dupOf) qaInfo.push('saved as ✎ draft — possible duplicate of #'+up.dupOf);
+        else qaInfo.push('saved '+up.fileName);
+        qaHsaPhotoReset();
+      } else {
+        await apiPost(SCRIPT_URL,{action:'addHsaReceipt', idemKey:genIdemKey('hsaAdd'),
+          dateIncurred:$('qa-date').value, amount:amt,
+          provider:$('qa-hsa-provider').value.trim(),
+          description:$('qa-desc').value.trim(),
+          category:$('qa-hsa-category').value.trim(),
+          funding:$('qa-hsa-funding').value,
+          receiptLink:$('qa-hsa-link').value.trim()});
+      }
       loadHsa(true); // authoritative refetch -- separate sheet, not part of quickRefresh/card balances
     } else {
       var key=$('qa-card').value;
