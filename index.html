@@ -317,7 +317,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .qa-photo-btn{display:inline-block}
 .qa-photo-input{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none}
 .qa-photo-info{flex-basis:100%;font-size:12px;color:var(--muted)}
-.qa-photo-preview{flex-basis:100%;max-width:100%;max-height:220px;object-fit:contain;border:1px solid var(--border);border-radius:var(--r);background:var(--surface2)}
+.qa-photo-preview{flex-basis:100%;max-width:100%;max-height:160px;object-fit:contain;border:1px solid var(--border);border-radius:var(--r);background:var(--surface2)}
 .hsa-reimburse-btn{font-family:var(--mono);font-size:11px;padding:5px 11px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);cursor:pointer}
 .hsa-reimburse-btn:hover{background:var(--surface2)}
 .hsa-filter-btn{font-family:var(--mono);font-size:11px;padding:5px 11px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer;margin-bottom:10px}
@@ -622,7 +622,10 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .card-drawer-footer{padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--border);font-family:var(--mono);font-size:11px;color:var(--faint);display:flex;justify-content:space-between;flex-shrink:0}
 
 /* ── PAYMENT MODAL ── */
-.pay-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:180;display:flex;align-items:flex-start;justify-content:center;padding:40px 24px 24px}
+/* A fixed backdrop never scrolls by itself: a modal taller than the viewport was clipped and touch
+   scroll fell through to the page behind (bug 2026-11, HSA photo preview). The backdrop is now the
+   scroll container; overscroll-behavior stops the scroll chaining to the body at either end. */
+.pay-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:180;display:flex;align-items:flex-start;justify-content:center;padding:40px 24px 24px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 .pay-modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:28px;max-width:380px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.18);margin:auto}
 .pay-modal h3{font-family:var(--mono);font-size:14px;font-weight:500;margin-bottom:4px}
 .pay-modal-sub{font-size:12px;color:var(--muted);margin-bottom:18px}
