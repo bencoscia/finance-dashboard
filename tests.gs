@@ -594,6 +594,19 @@ function testConfigParsing() {
   var out3 = _configDefaults();
   _applyRawConfig(out3, { 'hsa_established': '2025-04-17' });
   assertEqual(out3.hsaEstablished, '2025-04-17', 'hsa_established ISO string applies');
+
+  // Equity model keys: fraction or percent, garbage falls back (cfg_v5)
+  var out4 = _configDefaults();
+  assertEqual([out4.sdgrVol, out4.sdgrRiskFree, out4.equityTaxRate, out4.optionPteDays], [null, 0.04, null, 90], 'equity defaults');
+  _applyRawConfig(out4, { 'sdgr_vol': 60, 'sdgr_risk_free': '4.2', 'equity_tax_rate': 0.319, 'option_pte_days': 90 });
+  assertApprox(out4.sdgrVol, 0.6, 'sdgr_vol 60 read as 60%', 1e-9);
+  assertApprox(out4.sdgrRiskFree, 0.042, 'sdgr_risk_free 4.2 read as 4.2%', 1e-9);
+  assertApprox(out4.equityTaxRate, 0.319, 'equity_tax_rate fraction passes', 1e-9);
+  var out5 = _configDefaults();
+  _applyRawConfig(out5, { 'sdgr_vol': 0, 'equity_tax_rate': 0, 'option_pte_days': 'x' });
+  assertEqual(out5.sdgrVol, null, 'zero volatility rejected (stays unset)');
+  assertEqual(out5.equityTaxRate, 0, 'zero tax rate allowed');
+  assertEqual(out5.optionPteDays, 90, 'bad pte days falls back');
 }
 
 function testIdempotency() {
@@ -1065,6 +1078,104 @@ function testMortgageSingleSource() {
   }
 }
 
+// -- Equity (SDGR grants): pure helpers only -- no sheet access ------------
+// Fixture = the real grant 1 schedule shape: 4,013 shares, 25% cliff at
+// 12 months from 2020-06-01, then monthly, cumulative-floor allocation
+// (this reproduces the Sheet's 1003/83/84/84/83... rows exactly).
+function _testEqSchedule(N, start, total, cliff) {
+  var out = [], prev = 0, y = +start.slice(0, 4), m = +start.slice(5, 7) - 1;
+  for (var k = cliff; k <= total; k++) {
+    var cum = k === total ? N : Math.floor(N * k / total);
+    var mm = m + k, yy = y + Math.floor(mm / 12); mm = mm % 12;
+    out.push({ date: yy + '-' + (mm < 9 ? '0' : '') + (mm + 1) + '-01', shares: cum - prev });
+    prev = cum;
+  }
+  return out;
+}
+
+function testEquity() {
+  section('Equity grants (pure)');
+  var s1 = _testEqSchedule(4013, '2020-06-01', 48, 12);
+  assertEqual(s1.length, 37, 'grant-1 fixture has 37 vests');
+  assertEqual(s1[0], { date: '2021-06-01', shares: 1003 }, 'cliff vest = floor(4013*12/48)');
+  assertEqual(s1[1].shares, 83, 'first monthly vest = 83');
+
+  function vestsFor(id, sched) { return sched.map(function(v, i) { return { grantId: id, date: v.date, shares: v.shares, row: i + 2 }; }); }
+  var g1 = { id: '1', type: 'NSO', grantDate: '2020-07-24', expiry: '2030-07-24', strike: 76.27, granted: 4013, exercised: 0 };
+  var g3 = { id: '3', type: 'NSO', grantDate: '2022-03-01', expiry: '2032-03-01', strike: 27.76, granted: 1000, exercised: 100 };
+  var rsu = { id: '5', type: 'RSU', grantDate: '2025-03-01', expiry: '', strike: 0, granted: 400, exercised: 0 };
+  var old = { id: '6', type: 'NSO', grantDate: '2015-01-01', expiry: '2025-01-01', strike: 10, granted: 100, exercised: 0 };
+  var v3 = [{ grantId: '3', date: '2023-03-01', shares: 500 }, { grantId: '3', date: '2027-03-01', shares: 500 }];
+  var vr = [{ grantId: '5', date: '2026-03-01', shares: 100 }, { grantId: '5', date: '2027-03-01', shares: 300 }];
+  var vo = [{ grantId: '6', date: '2016-01-01', shares: 100 }];
+  var r = _equityRollup([g1, g3, rsu, old], vestsFor('1', s1).concat(v3, vr, vo), 33.39, '2026-11-09');
+  var G = {}; r.grants.forEach(function(g) { G[g.id] = g; });
+  assertEqual(G['1'].vested, 4013, 'grant 1 fully vested by 2026');
+  assertEqual(G['1'].intrinsic, 0, 'underwater grant intrinsic = 0');
+  assertEqual(G['3'].vested, 500, 'future vest not counted');
+  assertEqual(G['3'].exercisable, 400, 'exercisable = vested - exercised');
+  assertApprox(G['3'].intrinsic, 400 * (33.39 - 27.76), 'ITM intrinsic = exercisable x spread', 0.01);
+  assertEqual(G['3'].nextVest, { date: '2027-03-01', shares: 500 }, 'next vest found');
+  assertEqual(G['5'].exercisable, 0, 'RSU never exercisable (no double count)');
+  assertEqual(G['5'].intrinsic, 0, 'RSU intrinsic = 0');
+  assertEqual(G['5'].unvested, 300, 'RSU unvested = granted - vested');
+  assertEqual(G['6'].expired, true, 'expired option flagged');
+  assertEqual(G['6'].intrinsic, 0, 'expired ITM option intrinsic = 0');
+  assertApprox(r.vestedIntrinsic, 400 * 5.63, 'vestedIntrinsic sums live grants only', 0.01);
+
+  var mid = _equityRollup([g1], vestsFor('1', s1), 33.39, '2022-01-15');
+  assertEqual(mid.grants[0].vested, 1588, 'vested mid-schedule = floor(4013*19/48)');
+
+  // Warnings: sum mismatch, orphan vests, Sheet formula errors / drift
+  var w = _equityRollup([g3], v3.slice(0, 1).concat([{ grantId: '9', date: '2024-01-01', shares: 5 }]), 33.39, '2026-11-09');
+  assert(w.grants[0].warnings.join(' ').indexOf('sum to 500') >= 0, 'vest-sum mismatch warned');
+  assert(w.warnings.join(' ').indexOf('grant id 9') >= 0, 'orphan vest rows warned');
+  var e1 = JSON.parse(JSON.stringify(g3)); e1.sheetVested = '#N/A';
+  assert(_equityRollup([e1], v3, 33.39, '2026-11-09').grants[0].warnings.join(' ').indexOf('#N/A') >= 0, 'Sheet #N/A in col H warned');
+  var e2 = JSON.parse(JSON.stringify(g3)); e2.sheetVested = 1000;
+  assert(_equityRollup([e2], v3, 33.39, '2026-11-09').grants[0].warnings.join(' ').indexOf('col H = 1000') >= 0, 'Sheet col H drift warned');
+  var e3 = JSON.parse(JSON.stringify(g3)); e3.sheetVested = 500; e3.sheetIntrinsic = 2252;
+  assertEqual(_equityRollup([e3], v3, 33.39, '2026-11-09').grants[0].warnings.length, 0, 'matching Sheet values: no warnings');
+  assertEqual(_equityRollup([g3], v3, null, '2026-11-09').grants[0].intrinsic, null, 'no price -> intrinsic null, never 0');
+
+  // Validator
+  var ok = _equityValidateGrant({ type: 'nso', grantDate: '2022-03-01', expiry: '2032-03-01', strike: '27.76',
+    granted: 1000, exercised: 100, vests: [{ date: '2027-03-01', shares: 500 }, { date: '2023-03-01', shares: 500 }] }, '2026-11-09');
+  assert(!ok.error, 'valid option accepted: ' + ok.error);
+  assertEqual(ok.type, 'NSO', 'type upper-cased');
+  assertEqual(ok.vests[0].date, '2023-03-01', 'vests sorted by date');
+  assertEqual(ok.vestedNow, 500, 'vestedNow computed');
+  function bad(p, frag, msg) { var x = _equityValidateGrant(p, '2026-11-09'); assert(x.error && x.error.indexOf(frag) >= 0, msg + ' (' + (x.error || 'accepted') + ')'); }
+  var base = { type: 'NSO', grantDate: '2022-03-01', expiry: '2032-03-01', strike: 27.76, granted: 1000, exercised: 0,
+    vests: [{ date: '2023-03-01', shares: 500 }, { date: '2027-03-01', shares: 500 }] };
+  function w2(k, v) { var c = JSON.parse(JSON.stringify(base)); c[k] = v; return c; }
+  bad(w2('type', 'PSU'), 'Type', 'unknown type rejected');
+  bad(w2('expiry', ''), 'Expiration', 'option without expiry rejected');
+  bad(w2('expiry', '2021-01-01'), 'after the grant', 'expiry before grant rejected');
+  bad(w2('strike', 0), 'Strike', 'zero strike option rejected');
+  bad(w2('granted', 999), 'sum to 1000', 'vest sum != granted rejected');
+  bad(w2('exercised', 600), 'vested to date', 'exercising unvested shares rejected');
+  bad(w2('vests', [{ date: '2023-03-01', shares: 500 }, { date: '2023-03-01', shares: 500 }]), 'twice', 'duplicate vest date rejected');
+  bad(w2('vests', [{ date: '2023-02-30', shares: 1000 }]), 'invalid date', 'impossible date rejected');
+  var r2 = _equityValidateGrant({ type: 'RSU', grantDate: '2025-03-01', expiry: '2035-01-01', strike: 99, granted: 400, exercised: 7,
+    vests: [{ date: '2026-03-01', shares: 400 }] }, '2026-11-09');
+  assert(!r2.error, 'RSU accepted');
+  assertEqual([r2.strike, r2.expiry, r2.exercised], [0, '', 0], 'RSU strike/expiry/exercised forced empty');
+
+  // Duplicate guard: a placeholder row (blank type/date) with same strike+size matches
+  assert(_eqFindDupGrant([{ id: '3', type: '', grantDate: '', strike: 27.76, granted: 1000 }], ok) !== null, 'placeholder row detected as duplicate');
+  assert(_eqFindDupGrant([{ id: '3', type: 'NSO', grantDate: '2021-01-01', strike: 27.76, granted: 1000 }], ok) === null, 'different grant date is not a duplicate');
+
+  // Formula text for the default layout (A..K / A..C)
+  var gm = _eqHeaderMap(['id','type','grant_date','expiry_date','strike','granted','exercised','vested','exercisable','intrinsic','notes'], []).map;
+  var vm = _eqHeaderMap(['grant_id','vest_date','shares'], []).map;
+  var f = _eqGrantFormulas(9, gm, vm);
+  assertEqual(f.vested, '=IF(A9="","",SUMIFS(\'Equity Vests\'!C:C,\'Equity Vests\'!A:A,A9,\'Equity Vests\'!B:B,"<"&(TODAY()+1)))', 'vested formula text');
+  assertEqual(f.exercisable, '=IF(A9="","",IF(B9="RSU",0,MAX(0,H9-G9)))', 'exercisable formula text');
+  assertEqual(f.intrinsic, '=IF(A9="","",IF(AND(D9<>"",D9<TODAY()),0,I9*MAX(0,$B$1-E9)))', 'intrinsic formula text');
+  assertEqual(_eqColLetter(26), 'AA', 'column letters past Z');
+}
+
 function runTests() {
   _runTestSuite(false);
 }
@@ -1150,6 +1261,7 @@ function _runTestSuite(includeSlow) {
     step('testUpdateHsaReceipt', testUpdateHsaReceipt);
     step('testHsaDedup', testHsaDedup);
     step('testApproveDeleteHsa', testApproveDeleteHsa);
+    step('testEquity', testEquity);
     step('testMonthCacheTiers', testMonthCacheTiers);
 
     if (includeSlow) {

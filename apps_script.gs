@@ -59,6 +59,8 @@ function onEdit(e) {
   try {
     if (!e || !e.range) return;
     var name = e.range.getSheet().getName();
+    // Equity sheets feed Portfolio Management 'SDGR Options' -> net worth
+    if (name === EQ_GRANTS_SHEET || name === EQ_VESTS_SHEET) { invalidateNetWorthCache(); return; }
     if (ONEDIT_WATCH_SHEETS.indexOf(name) < 0) return;
     invalidateLedgerCache();
     invalidateCardBalanceCache();
@@ -138,6 +140,7 @@ function dispatch(payload) {
     else if (action === 'ledgerFixed')     return getLedgerFixed(payload.month);
     else if (action === 'ledgerTags')      return getLedgerTags();
     else if (action === 'ledgerCheckingHistory') return getLedgerCheckingHistory(payload.limit);
+    else if (action === 'equity')          return getEquity();
     // Write actions
     else if (action === 'updateTransaction')  { var r = updateTransaction(payload);  if (payload.month) invalidateMonthCache(payload.month); invalidateCardBalanceCache(); return r; }
     else if (action === 'addTransaction')     { var r = _withIdem(payload, function(){ return addTransaction(payload); });     if (payload.month) invalidateMonthCache(payload.month); invalidateCardBalanceCache(); return r; }
@@ -174,6 +177,7 @@ function dispatch(payload) {
     else if (action === 'ledgerEnsureQuarterly') return _withIdem(payload, function(){ return ledgerEnsureQuarterly(payload); }); // no balance impact: rows land unpaid
     else if (action === 'ledgerAddIncome')      { var r = _withIdem(payload, function(){ return ledgerAddIncome(payload); });      invalidateCardBalanceCache(); return r; }
     else if (action === 'ledgerSetTags')        return _withIdem(payload, function(){ return ledgerSetTags(payload); }); // display data; no balance impact
+    else if (action === 'addEquityGrant')       return _withIdem(payload, function(){ return addEquityGrant(payload); }); // invalidates net-worth cache internally
     else return { error: 'Unknown action: ' + action };
   } catch(err) {
     return { error: err.message };
@@ -206,6 +210,7 @@ function doGet(e) {
     else if (action === 'ledgerFixed')     data = getLedgerFixed(e.parameter.month);
     else if (action === 'ledgerTags')      data = getLedgerTags();
     else if (action === 'ledgerCheckingHistory') data = getLedgerCheckingHistory(e.parameter.limit);
+    else if (action === 'equity')          data = getEquity();
     else data = { error: 'Unknown action: ' + action };
   } catch(err) {
     data = { error: err.message };
@@ -256,6 +261,7 @@ function doPost(e) {
     else if (p.action === 'ledgerEnsureQuarterly') data = _withIdem(p, function(){ return ledgerEnsureQuarterly(p); });
     else if (p.action === 'ledgerAddIncome')      data = _withIdem(p, function(){ return ledgerAddIncome(p); }); // invalidates ledger cache internally
     else if (p.action === 'ledgerSetTags')        data = _withIdem(p, function(){ return ledgerSetTags(p); });
+    else if (p.action === 'addEquityGrant')       data = _withIdem(p, function(){ return addEquityGrant(p); }); // invalidates net-worth cache internally
     else data = { error: 'Unknown POST action: ' + p.action };
     // Invalidate caches for the affected month and card balances
     if (p.month) invalidateMonthCache(p.month);
@@ -1129,7 +1135,7 @@ function addTransaction(p) {
 // Parsed result is cached 5 minutes (edits take effect within that).
 // Run setupConfigSheet() in migrate.gs once to create the sheet.
 var CONFIG_SHEET  = 'Config';
-var CFG_CACHE_KEY = 'cfg_v4'; // v4: added hsaDeductible/hsaContribLimit/hsaDeductibleResetMonth (v3 hsaReceiptFolder, v2 hsaEstablished) -- bump on every shape change (lesson: stale-shape cache, see INDEX trap)
+var CFG_CACHE_KEY = 'cfg_v5'; // v5: added sdgrVol/sdgrRiskFree/equityTaxRate/optionPteDays (equity section). v4: added hsaDeductible/hsaContribLimit/hsaDeductibleResetMonth (v3 hsaReceiptFolder, v2 hsaEstablished) -- bump on every shape change (lesson: stale-shape cache, see INDEX trap)
 var _cfgMemo = null;
 
 function cfg() {
@@ -1173,7 +1179,20 @@ function _configDefaults() {
     hsaDeductible:        null,   // plan-year deductible $ (null -> tracker hidden)
     hsaContribLimit:      null,   // annual HSA contribution limit $ (null -> gauge hidden)
     hsaDeductibleResetMonth: 1,   // month the deductible resets (1 = Jan; calendar year)
+    sdgrVol:              null,   // B-S volatility (fraction); null -> model values hidden, never guessed
+    sdgrRiskFree:         0.04,   // B-S risk-free rate (fraction)
+    equityTaxRate:        null,   // marginal rate on option spread / RSU income; null -> after-tax hidden
+    optionPteDays:        90,     // post-termination exercise window for vested options
   };
+}
+
+// Rate-like Config value: a fraction (0.6) or a percent (60) -- anything above
+// maxFraction is read as a percent. Negative/garbage falls back; zero only
+// when allowZero (a 0% tax rate is real, a 0% volatility is not).
+function _cfgRate(v, d, maxFraction, allowZero) {
+  var n = _cfgNum(v, null);
+  if (n == null || n < 0 || (n === 0 && !allowZero)) return d;
+  return n > maxFraction ? n / 100 : n;
 }
 
 function _cfgNum(v, d) {
@@ -1228,6 +1247,13 @@ function _applyRawConfig(out, raw) {
   if ('hsa_deductible_reset_month' in raw) {
     var rm = parseInt(raw['hsa_deductible_reset_month'], 10);
     if (rm >= 1 && rm <= 12) out.hsaDeductibleResetMonth = rm;
+  }
+  if ('sdgr_vol' in raw)               out.sdgrVol              = _cfgRate(raw['sdgr_vol'], out.sdgrVol, 3, false);
+  if ('sdgr_risk_free' in raw)         out.sdgrRiskFree         = _cfgRate(raw['sdgr_risk_free'], out.sdgrRiskFree, 1, true);
+  if ('equity_tax_rate' in raw)        out.equityTaxRate        = _cfgRate(raw['equity_tax_rate'], out.equityTaxRate, 1, true);
+  if ('option_pte_days' in raw) {
+    var pd = parseInt(raw['option_pte_days'], 10);
+    if (pd > 0) out.optionPteDays = pd;
   }
   if ('seed_month' in raw) {
     var sm = raw['seed_month'];
@@ -2584,6 +2610,396 @@ function logCreditSnapshot(p) {
   return { ok: true };
 }
 
+// -- EQUITY: SDGR option / RSU grants ---------------------------
+// Two hand-created sheets (no sheet-creation code -- see INDEX section 8):
+//   'Equity Grants'  B1 = price (GOOGLEFINANCE), B2 = price_time, headers row 3, data row 4+
+//   'Equity Vests'   headers row 1 (grant_id | vest_date | shares), data row 2+
+// The SHEET owns the accounting: cols H-J formulas -> Portfolio Management
+// 'SDGR Options' (=SUM of col J) -> net worth. This code recomputes the same
+// quantities from the raw vest rows only to (a) cross-check the Sheet and
+// (b) serve the client's model. Black-Scholes lives in the client and never
+// enters net worth (employee options can't be sold or hedged, so B-S is an
+// upper bound on their value to the holder).
+var EQ_GRANTS_SHEET   = 'Equity Grants';
+var EQ_VESTS_SHEET    = 'Equity Vests';
+var EQ_GRANT_HDR_ROW  = 3;   // 1-indexed
+var EQ_GRANT_DATA_ROW = 4;
+var EQ_VEST_HDR_ROW   = 1;
+var EQ_VEST_DATA_ROW  = 2;
+var EQ_GRANT_COLS = ['id','type','grant_date','expiry_date','strike','granted','exercised','vested','exercisable','intrinsic','notes'];
+var EQ_VEST_COLS  = ['grant_id','vest_date','shares'];
+var EQ_TYPES      = ['NSO','ISO','RSU'];
+var EQ_MAX_VESTS  = 600;
+
+function _eqToday() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
+// Header name -> 0-based column index. Locating by name (not position) is the
+// lesson from the HSA contributions reader: a reordered sheet must not
+// silently read the wrong column.
+function _eqHeaderMap(row, required) {
+  var map = {};
+  for (var i = 0; i < (row || []).length; i++) {
+    var h = String(row[i] == null ? '' : row[i]).trim().toLowerCase();
+    if (h && !(h in map)) map[h] = i;
+  }
+  var missing = [];
+  for (var j = 0; j < required.length; j++) if (!(required[j] in map)) missing.push(required[j]);
+  return { map: map, missing: missing };
+}
+
+function _eqColLetter(idx0) {
+  var n = idx0 + 1, s = '';
+  while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+
+function _eqNum(v) {
+  if (typeof v === 'number') return isNaN(v) ? null : v;
+  if (v == null) return null;
+  var s = String(v).replace(/[$,\s]/g, '');
+  if (s === '') return null;
+  var n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+function _eqIsErr(v) { return typeof v === 'string' && /^#/.test(v.trim()); } // '#N/A', '#REF!', '#ERROR!'
+
+// A formula cell as read: number, null (blank), or the error/other string.
+function _eqCell(v) {
+  if (typeof v === 'number') return v;
+  if (v === '' || v == null) return null;
+  return String(v).trim();
+}
+
+// Per-row formulas for cols H/I/J. Pure (unit-tested). Column letters come
+// from the header maps so a reordered sheet still gets correct references.
+//  vested:      vest rows dated before tomorrow. "<"&(TODAY()+1) rather than
+//               "<="&TODAY() so a vest date carrying a time (the server writes
+//               noon, like HSA dates, to survive timezone shifts) still counts
+//               on its own day.
+//  exercisable: options only; RSUs vest into ordinary shares already counted
+//               in a brokerage account (or sold), so they must never count here.
+//  intrinsic:   0 once expired.
+function _eqGrantFormulas(r, gmap, vmap) {
+  var L = function(k) { return _eqColLetter(gmap[k]); };
+  var V = function(k) { return _eqColLetter(vmap[k]); };
+  var vs = "'" + EQ_VESTS_SHEET + "'!";
+  var A = L('id') + r, B = L('type') + r, D = L('expiry_date') + r, E = L('strike') + r,
+      G = L('exercised') + r, H = L('vested') + r, I = L('exercisable') + r;
+  return {
+    vested: '=IF(' + A + '="","",SUMIFS(' + vs + V('shares') + ':' + V('shares') + ',' +
+            vs + V('grant_id') + ':' + V('grant_id') + ',' + A + ',' +
+            vs + V('vest_date') + ':' + V('vest_date') + ',"<"&(TODAY()+1)))',
+    exercisable: '=IF(' + A + '="","",IF(' + B + '="RSU",0,MAX(0,' + H + '-' + G + ')))',
+    intrinsic: '=IF(' + A + '="","",IF(AND(' + D + '<>"",' + D + '<TODAY()),0,' + I + '*MAX(0,$B$1-' + E + ')))'
+  };
+}
+
+// Pure rollup -- no sheet access, so testEquity() can feed fixtures.
+// grants: [{ id, type, grantDate, expiry, strike, granted, exercised, notes,
+//            sheetVested, sheetIntrinsic }]   (sheet* = number | null | error string | undefined)
+// vests:  [{ grantId, date ('YYYY-MM-DD' or '' if unparseable), shares, row }]
+// price:  number or null.  today: 'YYYY-MM-DD'.
+function _equityRollup(grants, vests, price, today) {
+  var warnings = [], ids = {}, byId = {}, orphans = {}, badVest = [];
+  for (var i = 0; i < grants.length; i++) ids[String(grants[i].id)] = true;
+  for (var j = 0; j < vests.length; j++) {
+    var v = vests[j], k = String(v.grantId);
+    if (!ids[k]) { orphans[k] = (orphans[k] || 0) + 1; continue; }
+    if (!v.date || !(v.shares > 0)) { badVest.push(v.row || '?'); continue; }
+    (byId[k] = byId[k] || []).push(v);
+  }
+  var ok = Object.keys(orphans);
+  if (ok.length) warnings.push('Equity Vests has rows for grant id ' + ok.join(', ') +
+    ', which is not in Equity Grants -- those shares count nowhere.');
+  if (badVest.length) warnings.push('Equity Vests row(s) ' + badVest.join(', ') +
+    ' have a non-date vest_date or non-positive shares and were ignored (SUMIFS in col H ignores them too).');
+
+  var vestedIntrinsic = 0;
+  var out = grants.map(function(g) {
+    var w = [], isRsu = g.type === 'RSU';
+    var list = (byId[String(g.id)] || []).slice().sort(function(a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+    var total = 0, vested = 0, next = null;
+    for (var q = 0; q < list.length; q++) {
+      total += list[q].shares;
+      if (list[q].date <= today) vested += list[q].shares;
+      else if (!next) next = { date: list[q].date, shares: list[q].shares };
+    }
+    if (EQ_TYPES.indexOf(g.type) < 0) w.push('type "' + g.type + '" is not NSO, ISO or RSU.');
+    if (!list.length) w.push('no vest rows in Equity Vests -- vested counts as 0.');
+    else if (total !== g.granted) w.push('vest rows sum to ' + total + ' but granted = ' + g.granted + '.');
+    if (!isRsu && !g.expiry) w.push('no expiry_date -- model value unavailable.');
+    if (!isRsu && !(g.strike > 0)) w.push('no strike price.');
+    var expired = !isRsu && !!g.expiry && g.expiry < today;
+    var exercised = isRsu ? 0 : (g.exercised || 0);
+    if (exercised > vested) w.push('exercised (' + exercised + ') exceeds vested (' + vested + ').');
+    var exercisable = (isRsu || expired) ? 0 : Math.max(0, vested - exercised);
+    var intrinsic = price == null ? null :
+      Math.round(exercisable * Math.max(0, price - (g.strike || 0)) * 100) / 100;
+    if (intrinsic) vestedIntrinsic += intrinsic;
+
+    // Cross-check the Sheet's own formulas (they, not this, feed net worth).
+    if (g.sheetVested !== undefined) {
+      if (_eqIsErr(g.sheetVested)) w.push('Sheet col H shows ' + g.sheetVested + ' -- net worth is not counting this grant until it resolves.');
+      else if (g.sheetVested == null) w.push('Sheet col H is blank -- copy the H:J formulas down to this row.');
+      else if (typeof g.sheetVested === 'number' && g.sheetVested !== vested)
+        w.push('Sheet col H = ' + g.sheetVested + ' but the vest rows give ' + vested + ' as of ' + today + '.');
+      else if (_eqIsErr(g.sheetIntrinsic)) w.push('Sheet col J shows ' + g.sheetIntrinsic + '.');
+      else if (typeof g.sheetIntrinsic === 'number' && intrinsic != null && Math.abs(g.sheetIntrinsic - intrinsic) > 1)
+        w.push('Sheet col J = ' + g.sheetIntrinsic + ' but recomputed intrinsic = ' + intrinsic + '.');
+    }
+    return {
+      id: String(g.id), row: g.row, type: g.type, grantDate: g.grantDate, expiry: g.expiry,
+      strike: g.strike, granted: g.granted, exercised: exercised,
+      vested: vested, unvested: Math.max(0, g.granted - vested), exercisable: exercisable,
+      intrinsic: intrinsic, expired: expired, nextVest: next,
+      vests: list.map(function(x) { return { date: x.date, shares: x.shares }; }),
+      notes: g.notes || '', warnings: w
+    };
+  });
+  return { grants: out, warnings: warnings, vestedIntrinsic: Math.round(vestedIntrinsic * 100) / 100 };
+}
+
+// Validate + normalize an addEquityGrant payload. Pure (unit-tested).
+function _equityValidateGrant(p, today) {
+  p = p || {};
+  var type = String(p.type || '').trim().toUpperCase();
+  if (EQ_TYPES.indexOf(type) < 0) return { error: 'Type must be NSO, ISO or RSU.' };
+  var isRsu = type === 'RSU';
+  var grantDate = String(p.grantDate || '').trim();
+  if (!_isRealDate(grantDate)) return { error: 'Grant date must be a real YYYY-MM-DD date.' };
+  var expiry = isRsu ? '' : String(p.expiry || '').trim();
+  if (!isRsu) {
+    if (!_isRealDate(expiry)) return { error: 'Expiration date must be a real YYYY-MM-DD date.' };
+    if (expiry <= grantDate) return { error: 'Expiration must be after the grant date.' };
+  }
+  var strike = isRsu ? 0 : parseFloat(p.strike);
+  if (!isRsu && !(strike > 0 && strike < 100000)) return { error: 'Strike must be a positive price.' };
+  strike = Math.round(strike * 10000) / 10000;
+  var granted = Number(p.granted);
+  if (!(granted > 0) || Math.round(granted) !== granted) return { error: 'Shares granted must be a positive whole number.' };
+  var exercised = isRsu ? 0 : Number(p.exercised || 0);
+  if (!(exercised >= 0) || Math.round(exercised) !== exercised || exercised > granted)
+    return { error: 'Exercised must be a whole number between 0 and shares granted.' };
+  var raw = p.vests;
+  if (!raw || !raw.length) return { error: 'Vest schedule is empty.' };
+  if (raw.length > EQ_MAX_VESTS) return { error: 'Too many vest rows (' + raw.length + ').' };
+  var vests = [], seen = {}, sum = 0, vestedNow = 0;
+  for (var i = 0; i < raw.length; i++) {
+    var d = String(raw[i] && raw[i].date || '').trim(), s = Number(raw[i] && raw[i].shares);
+    if (!_isRealDate(d)) return { error: 'Vest row ' + (i + 1) + ': invalid date "' + d + '".' };
+    if (!(s > 0) || Math.round(s) !== s) return { error: 'Vest row ' + (i + 1) + ': shares must be a positive whole number.' };
+    if (seen[d]) return { error: 'Vest date ' + d + ' appears twice.' };
+    if (!isRsu && d > expiry) return { error: 'Vest date ' + d + ' is after the expiration date.' };
+    seen[d] = true; sum += s; if (d <= today) vestedNow += s;
+    vests.push({ date: d, shares: s });
+  }
+  if (sum !== granted) return { error: 'Vest rows sum to ' + sum + ' but shares granted is ' + granted + '.' };
+  if (exercised > vestedNow) return { error: 'Exercised (' + exercised + ') exceeds shares vested to date (' + vestedNow + ').' };
+  vests.sort(function(a, b) { return a.date < b.date ? -1 : 1; });
+  return {
+    type: type, grantDate: grantDate, expiry: expiry, strike: strike, granted: granted,
+    exercised: exercised, notes: String(p.notes || '').trim().slice(0, 500),
+    vests: vests, vestedNow: vestedNow
+  };
+}
+
+// Pure: would prep duplicate an existing grant? A placeholder row (blank
+// type or grant date) with the same strike and size counts as a match --
+// adding beside it would count the grant twice once its formulas resolve.
+function _eqFindDupGrant(existing, prep) {
+  for (var i = 0; i < existing.length; i++) {
+    var g = existing[i];
+    if (Math.abs((g.strike || 0) - prep.strike) > 0.005) continue;
+    if (g.granted !== prep.granted) continue;
+    if (g.type && g.type !== prep.type) continue;
+    if (g.grantDate && g.grantDate !== prep.grantDate) continue;
+    return g;
+  }
+  return null;
+}
+
+function _eqReadGrants(gv, gm) {
+  var out = [];
+  for (var i = EQ_GRANT_DATA_ROW - 1; i < gv.length; i++) {
+    var r = gv[i], idRaw = r[gm.id];
+    if (idRaw === '' || idRaw == null) continue;
+    out.push({
+      id: String(idRaw).trim(), row: i + 1,
+      type: String(r[gm.type] == null ? '' : r[gm.type]).trim().toUpperCase(),
+      grantDate: _hsaDateStr(r[gm.grant_date]),
+      expiry: _hsaDateStr(r[gm.expiry_date]),
+      strike: _eqNum(r[gm.strike]) || 0,
+      granted: _eqNum(r[gm.granted]) || 0,
+      exercised: _eqNum(r[gm.exercised]) || 0,
+      notes: ('notes' in gm) ? String(r[gm.notes] == null ? '' : r[gm.notes]) : '',
+      sheetVested: ('vested' in gm) ? _eqCell(r[gm.vested]) : undefined,
+      sheetIntrinsic: ('intrinsic' in gm) ? _eqCell(r[gm.intrinsic]) : undefined
+    });
+  }
+  return out;
+}
+
+function _eqReadVests(vv, vm) {
+  var out = [];
+  for (var i = EQ_VEST_DATA_ROW - 1; i < vv.length; i++) {
+    var r = vv[i], gid = r[vm.grant_id];
+    if (gid === '' || gid == null) continue;
+    out.push({ grantId: String(gid).trim(), date: _hsaDateStr(r[vm.vest_date]), shares: _eqNum(r[vm.shares]) || 0, row: i + 1 });
+  }
+  return out;
+}
+
+// The net-worth side of the cross-check: Portfolio Management col C on the
+// row labelled 'SDGR Options' (found by label, never by row number).
+function _eqPortfolioSdgr() {
+  var vals = readSheet(PORTFOLIO_SHEET);
+  if (!vals) return { found: false };
+  for (var i = 0; i < Math.min(vals.length, 30); i++) {
+    if (String(vals[i][1] || '').trim() === 'SDGR Options') return { found: true, value: _eqCell(vals[i][2]) };
+  }
+  return { found: false };
+}
+
+// -- GET: equity ---------------------------------------------------
+function getEquity() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var gs = ss.getSheetByName(EQ_GRANTS_SHEET), vs = ss.getSheetByName(EQ_VESTS_SHEET);
+  if (!gs) return { error: 'Sheet not found: ' + EQ_GRANTS_SHEET + ' (create it by hand -- INDEX section 8)' };
+  if (!vs) return { error: 'Sheet not found: ' + EQ_VESTS_SHEET + ' (create it by hand -- INDEX section 8)' };
+  var gv = readSheet(gs), vv = readSheet(vs);
+  var gh = _eqHeaderMap(gv[EQ_GRANT_HDR_ROW - 1], EQ_GRANT_COLS.slice(0, 7));
+  if (gh.missing.length) return { error: EQ_GRANTS_SHEET + ' row ' + EQ_GRANT_HDR_ROW + ' is missing header(s): ' + gh.missing.join(', ') };
+  var vh = _eqHeaderMap(vv[EQ_VEST_HDR_ROW - 1], EQ_VEST_COLS);
+  if (vh.missing.length) return { error: EQ_VESTS_SHEET + ' row ' + EQ_VEST_HDR_ROW + ' is missing header(s): ' + vh.missing.join(', ') };
+
+  var today = _eqToday(), tz = Session.getScriptTimeZone();
+  var priceRaw = gv[0] ? gv[0][1] : null;
+  var price = (typeof priceRaw === 'number' && priceRaw > 0) ? priceRaw : null;
+  var timeRaw = gv[1] ? gv[1][1] : null;
+  var priceTime = (timeRaw instanceof Date && !isNaN(timeRaw.getTime()))
+    ? Utilities.formatDate(timeRaw, tz, 'yyyy-MM-dd HH:mm') : null;
+
+  var roll = _equityRollup(_eqReadGrants(gv, gh.map), _eqReadVests(vv, vh.map), price, today);
+  var warnings = roll.warnings.slice();
+  if (price == null) warnings.unshift(EQ_GRANTS_SHEET + '!B1 price is unavailable (' + String(priceRaw) +
+    ') -- GOOGLEFINANCE may be loading or erroring; values below are blank rather than guessed.');
+
+  var pm = _eqPortfolioSdgr();
+  if (!pm.found) warnings.push("Portfolio Management has no 'SDGR Options' row -- net worth is not counting SDGR.");
+  else if (_eqIsErr(pm.value)) warnings.push("Portfolio Management 'SDGR Options' shows " + pm.value + ' -- net worth excludes SDGR until it resolves.');
+  else if (typeof pm.value === 'number' && price != null && Math.abs(pm.value - roll.vestedIntrinsic) > 1)
+    warnings.push("Portfolio Management 'SDGR Options' = " + pm.value + ' but these grants give ' + roll.vestedIntrinsic +
+      ' -- check its formula is =SUM(\'' + EQ_GRANTS_SHEET + '\'!J4:J).');
+
+  var c = cfg();
+  return {
+    price: price, priceTime: priceTime, asOf: today,
+    model: { vol: c.sdgrVol, riskFree: c.sdgrRiskFree, taxRate: c.equityTaxRate, pteDays: c.optionPteDays },
+    grants: roll.grants, vestedIntrinsic: roll.vestedIntrinsic,
+    netWorthSdgr: (pm.found && typeof pm.value === 'number') ? pm.value : null,
+    warnings: warnings
+  };
+}
+
+// -- POST: addEquityGrant (_withIdem) ------------------------------
+// Vest rows are written FIRST and the grant row LAST: the grant row is the
+// commit marker. A failure between the two leaves orphan vest rows, which
+// getEquity reports, and the next id skips past them (ids are taken as the max
+// across BOTH sheets + 1, so a new grant can never inherit stray vest rows).
+function addEquityGrant(p) {
+  var today = _eqToday();
+  var prep = _equityValidateGrant(p, today);
+  if (prep.error) return prep;
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var gs = ss.getSheetByName(EQ_GRANTS_SHEET), vs = ss.getSheetByName(EQ_VESTS_SHEET);
+  if (!gs || !vs) return { error: 'Equity Grants / Equity Vests sheet missing (create them by hand -- INDEX section 8).' };
+
+  var lock = LockService.getScriptLock();
+  var gotLock = false;
+  try { gotLock = lock.tryLock(5000); } catch (e) {}
+  if (!gotLock) return { error: 'Could not acquire lock -- please try again.' };
+  try {
+    invalidateSheet(EQ_GRANTS_SHEET); invalidateSheet(EQ_VESTS_SHEET);
+    var gv = readSheet(gs), vv = readSheet(vs);
+    var gh = _eqHeaderMap(gv[EQ_GRANT_HDR_ROW - 1], EQ_GRANT_COLS.slice(0, 10));
+    if (gh.missing.length) return { error: EQ_GRANTS_SHEET + ' row ' + EQ_GRANT_HDR_ROW + ' is missing header(s): ' + gh.missing.join(', ') };
+    var vh = _eqHeaderMap(vv[EQ_VEST_HDR_ROW - 1], EQ_VEST_COLS);
+    if (vh.missing.length) return { error: EQ_VESTS_SHEET + ' row ' + EQ_VEST_HDR_ROW + ' is missing header(s): ' + vh.missing.join(', ') };
+    var gm = gh.map, vm = vh.map;
+
+    var existing = _eqReadGrants(gv, gm);
+    var dup = _eqFindDupGrant(existing, prep);
+    if (dup) return { error: 'Matches grant #' + dup.id + ' (row ' + dup.row + ': same strike and size' +
+      (dup.type && dup.grantDate ? ', type and grant date' : '; that row looks like a placeholder') +
+      '). Delete that row in the Sheet first, or it would be counted twice.' };
+
+    var maxId = 0, lastIdRow = EQ_GRANT_DATA_ROW - 1, i;
+    for (i = EQ_GRANT_DATA_ROW - 1; i < gv.length; i++) {
+      var gid = gv[i][gm.id];
+      if (gid === '' || gid == null) continue;
+      lastIdRow = i + 1;
+      var n = Number(gid);
+      if (Math.round(n) === n && n > maxId) maxId = n;
+    }
+    for (i = EQ_VEST_DATA_ROW - 1; i < vv.length; i++) {
+      var vn = Number(vv[i][vm.grant_id]);
+      if (Math.round(vn) === vn && vn > maxId) maxId = vn;
+    }
+    var newId = maxId + 1;
+    var gRow = lastIdRow + 1;
+    // The target row may hold filled-down formulas (fine -- overwritten) but
+    // never hand-typed data without an id.
+    if (gRow - 1 < gv.length) {
+      var tr = gv[gRow - 1];
+      var keys = ['type', 'grant_date', 'expiry_date', 'strike', 'granted', 'exercised'];
+      for (i = 0; i < keys.length; i++) {
+        var cv = tr[gm[keys[i]]];
+        if (cv !== '' && cv != null) return { error: EQ_GRANTS_SHEET + ' row ' + gRow + ' has data but no id -- fix that row first.' };
+      }
+    }
+
+    // 1) vest rows (noon dates: a timezone mismatch can't move them a day)
+    var vWidth = Math.max(vm.grant_id, vm.vest_date, vm.shares) + 1;
+    var vStart = Math.max(vs.getLastRow() + 1, EQ_VEST_DATA_ROW);
+    var vRows = prep.vests.map(function(v) {
+      var row = []; for (var c = 0; c < vWidth; c++) row.push('');
+      row[vm.grant_id] = newId; row[vm.vest_date] = new Date(v.date + 'T12:00:00'); row[vm.shares] = v.shares;
+      return row;
+    });
+    vs.getRange(vStart, 1, vRows.length, vWidth).setValues(vRows);
+    vs.getRange(vStart, vm.vest_date + 1, vRows.length, 1).setNumberFormat('yyyy-mm-dd');
+
+    // 2) grant row (commit marker): values, then the H/I/J formulas
+    var gWidth = 0;
+    for (var key in gm) if (gm[key] + 1 > gWidth && EQ_GRANT_COLS.indexOf(key) >= 0) gWidth = gm[key] + 1;
+    var row = []; for (i = 0; i < gWidth; i++) row.push('');
+    row[gm.id] = newId; row[gm.type] = prep.type;
+    row[gm.grant_date] = new Date(prep.grantDate + 'T12:00:00');
+    row[gm.expiry_date] = prep.expiry ? new Date(prep.expiry + 'T12:00:00') : '';
+    row[gm.strike] = prep.strike; row[gm.granted] = prep.granted; row[gm.exercised] = prep.exercised;
+    if ('notes' in gm) row[gm.notes] = prep.notes;
+    gs.getRange(gRow, 1, 1, gWidth).setValues([row]);
+    var f = _eqGrantFormulas(gRow, gm, vm);
+    gs.getRange(gRow, gm.vested + 1).setFormula(f.vested);
+    gs.getRange(gRow, gm.exercisable + 1).setFormula(f.exercisable);
+    gs.getRange(gRow, gm.intrinsic + 1).setFormula(f.intrinsic);
+    gs.getRange(gRow, gm.id + 1).setNumberFormat('0');
+    gs.getRange(gRow, gm.grant_date + 1).setNumberFormat('yyyy-mm-dd');
+    gs.getRange(gRow, gm.expiry_date + 1).setNumberFormat('yyyy-mm-dd');
+    gs.getRange(gRow, gm.strike + 1).setNumberFormat('$#,##0.00');
+    SpreadsheetApp.flush();
+    invalidateSheet(EQ_GRANTS_SHEET); invalidateSheet(EQ_VESTS_SHEET);
+    invalidateNetWorthCache(); // Portfolio Management 'SDGR Options' sums col J
+    return { ok: true, id: newId, row: gRow, vestRows: vRows.length, vestedNow: prep.vestedNow };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+
 // -- GET: net worth --------------------------------------------
 var NET_WORTH_SHEET      = 'Net Worth';
 var NW_CACHE_KEY         = 'nw_v4_data'; // v4: added investmentsSource/investmentsWarning (bump on every shape change)
@@ -2649,10 +3065,26 @@ function _computeNetWorth() {
   // -- Current investment accounts (rows 2-17, col B=label, C=value) --
   var accounts = {}, investments = 0, liquid = 0;
   var seenLabels = {};
-  values.slice(0, 20).forEach(function(r) {
+  var badRows = [];
+  // Account rows end where the weekly tracker begins -- found by label, not a
+  // fixed 20-row window. The fixed window silently dropped whatever an
+  // inserted row pushed past it ('Liquid' already fell out after the 'Max
+  // Trump Account' insert; 'SDGR Options' was two inserts from the edge).
+  var acctEnd = 20;
+  for (var ae = 0; ae < Math.min(values.length, 40); ae++) {
+    var a0 = String(values[ae][0]||'').trim(), a1 = String(values[ae][1]||'').trim();
+    if (a0 === 'Net worth tracker' || a1 === 'Net worth tracker' || a1 === 'Date') { acctEnd = ae; break; }
+  }
+  values.slice(0, acctEnd).forEach(function(r) {
     var label = String(r[1]||'').trim(), val = parseFloat(r[2]);
-    if (isNaN(val)) return;
-    if (label === 'Net worth' || label === 'Net worth (ex SDGR)') return;
+    if (label === 'Net worth' || label === 'Net worth (ex SDGR)') return; // totals, not accounts
+    if (label === 'Liquid' && isNaN(val)) return;                          // subtotal; a numeric one is read below
+    if (isNaN(val)) {
+      // An error value in a labelled row used to vanish silently -- e.g.
+      // 'SDGR Options' showing #N/A dropped SDGR from net worth with no sign.
+      if (label && typeof r[2] === 'string' && /^#/.test(r[2].trim())) badRows.push(label + ' = ' + r[2].trim());
+      return;
+    }
     if (label === 'Liquid') { liquid = val; return; }
     if (label && val > 0) {
       // Deduplicate: if label already seen, append a counter
@@ -2704,7 +3136,12 @@ function _computeNetWorth() {
   }
   if (investmentsDerived <= 0) {
     investmentsWarning = 'No investment account rows were readable in Portfolio Management ' +
-      '(expected labels in col B, values in col C, rows 1-20).';
+      '(expected labels in col B, values in col C, above the \'Net worth tracker\' header).';
+  }
+  if (badRows.length) {
+    var badMsg = 'Portfolio Management col C shows an error for ' + badRows.join(', ') +
+      ' -- excluded from investments until it resolves.';
+    investmentsWarning = investmentsWarning ? (investmentsWarning + ' ' + badMsg) : badMsg;
   }
 
   // -- Weekly investment history (Portfolio Management rows 25+, cols B=date, C=value) --
