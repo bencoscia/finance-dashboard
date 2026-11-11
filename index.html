@@ -117,8 +117,24 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 .qa-check-row label{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
 
 /* ── SETUP ── */
-#setup-overlay{position:fixed;inset:0;background:var(--bg);z-index:200;display:none;align-items:center;justify-content:center;padding:24px}
-.setup-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:32px;max-width:560px;width:100%;box-shadow:var(--shadow)}
+#setup-overlay{position:fixed;inset:0;background:var(--bg);z-index:200;display:none;align-items:flex-start;justify-content:center;padding:24px;overflow-y:auto;overscroll-behavior:contain}
+/* auto margins centre the card but, unlike align-items:center, never push its top out of reach when the Timing panel makes it taller than the screen */
+.setup-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:32px;max-width:560px;width:100%;box-shadow:var(--shadow);margin:auto 0}
+/* ── TIMING PANEL (perf log, UX_SPEC Phase 0) ── */
+.perf-panel{margin-top:18px;border-top:1px solid var(--border);padding-top:12px}
+.perf-panel summary{font-family:var(--mono);font-size:12px;color:var(--muted);cursor:pointer;padding:6px 0}
+.perf-panel[open] summary{color:var(--text);font-weight:600}
+.perf-note{font-size:12px !important;margin:6px 0 10px !important}
+.perf-btns{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+.perf-msg{font-size:12px;color:var(--muted)}
+.perf-h{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--faint);margin:12px 0 4px}
+.perf-wrap{overflow-x:auto;max-height:340px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--r)}
+.perf-tbl{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:11px;font-variant-numeric:tabular-nums}
+.perf-tbl th,.perf-tbl td{padding:4px 8px;text-align:left;white-space:nowrap;border-bottom:1px solid var(--border)}
+.perf-tbl th{color:var(--faint);font-weight:500;position:sticky;top:0;background:var(--surface)}
+.perf-tbl td.num,.perf-tbl th.num{text-align:right}
+.perf-tbl tr.fail td{font-weight:600}
+.perf-ta{width:100%;height:120px;font-family:var(--mono);font-size:11px;margin-bottom:8px}
 .setup-card h2{font-family:var(--mono);font-size:15px;font-weight:500;margin-bottom:6px;color:var(--text)}
 .setup-card p{font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:16px}
 .setup-steps{counter-reset:steps;list-style:none;margin-bottom:20px}
@@ -895,6 +911,17 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     <div id="setup-back-wrap" style="display:none;text-align:center;margin-top:10px">
       <a data-action="hideSetup" style="font-size:12px;color:var(--muted);cursor:pointer;text-decoration:underline">← Back to dashboard</a>
     </div>
+    <details class="perf-panel" id="perf-panel">
+      <summary>Timing</summary>
+      <p class="perf-note">Stored on this device only: action names and milliseconds, nothing else. <strong>Clear</strong> before each test condition (wifi / cellular / desktop) so medians don't mix. <code>boot.*</code> rows are ms since launch; every other row is a duration.</p>
+      <div class="perf-btns">
+        <button class="rbtn" data-action="perfCopy">Copy</button>
+        <button class="rbtn" data-action="perfRefreshUi">Reload</button>
+        <button class="rbtn" data-action="perfClearUi">Clear</button>
+        <span class="perf-msg" id="perf-copy-msg"></span>
+      </div>
+      <div id="perf-body"></div>
+    </details>
   </div>
 </div>
 
@@ -1497,6 +1524,8 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 
 <script src="config.js"></script>  <!-- local-only, gitignored; defines window.CONFIG.SCRIPT_URL (see config.example.js) -->
 <script>
+// Captured before anything else runs: boot.script in the perf log (ms since navigation start).
+var PERF_SCRIPT_T = (window.performance && performance.now) ? performance.now() : 0;
 // ── state ──
 // Local-timezone date string (YYYY-MM-DD). NEVER use toISOString() for
 // "today" -- it returns UTC, which after ~7-8pm Eastern is tomorrow's date.
@@ -1588,6 +1617,8 @@ function initEventListeners(){
   on('pay-modal-backdrop',  function(e){ if(e.target===this) hidePayModal(); });
   on('split-modal-backdrop',function(e){ if(e.target===this) hideSplitModal(); });
   on('eq-add-backdrop',     function(e){ if(e.target===this) hideEqAdd(); });
+  var perfPanel = $('perf-panel');   // Settings -> Timing: render only when opened
+  if(perfPanel) perfPanel.addEventListener('toggle', function(){ if(perfPanel.open) renderPerfPanel(); });
 
   // Static input/select handlers — property assignments, never inline attributes
   // (Invariant 2: zero on*= in markup; the escaping bug class stays extinct).
@@ -1950,7 +1981,9 @@ function bootDashboard() {
     $('src-badge').textContent = '● live';
     $('src-badge').className   = 'badge live';
     showBanner('Loading data…', 'loading');
+    perfBootStart();
     apiFetch(url, 'all').then(function(data){
+      perfBoot('all');
       renderAll(data); showBanner('Ready', 'ok');
     }).catch(function(e){
       showBanner('Could not load: ' + e.message, 'err');
@@ -2013,22 +2046,163 @@ async function netAttempt(url, opts){
   return data;
 }
 
+// ── PERF LOG (UX_SPEC Phase 0) ───────────────────────────────
+// Ring buffer of timings in localStorage['fin_perflog'] (last 200), modelled on fin_netlog.
+// Stores names, milliseconds and timestamps ONLY: never amounts, descriptions, error text or
+// URLs (the script id is a bearer secret). Every request is timed in netWithRetry; boot and
+// save milestones are added by perfBoot / perfTrace. Read it with perfLog() in the console or
+// Settings -> Timing on the phone.
+var PERF_LOG_KEY = 'fin_perflog';
+var PERF_LOG_MAX = 200;
+var _perfBuf = null;          // in-memory mirror, loaded once per page
+var _perfBootSeen = {};       // boot milestones are recorded once per page load
+var _perfQuotaWarned = false;
+
+function perfNow(){ return (window.performance && performance.now) ? performance.now() : Date.now(); }
+function _perfLoad(){
+  if(_perfBuf === null){ var l = lsGetJSON(PERF_LOG_KEY, []); _perfBuf = Array.isArray(l) ? l : []; }
+  return _perfBuf;
+}
+// Numeric fields only (server section timings, e.g. {_t:{cardTotals:4200,...}}).
+function _perfNums(o){
+  var out = {}, any = false;
+  if(!o || typeof o !== 'object') return null;
+  Object.keys(o).forEach(function(k){ if(typeof o[k] === 'number' && isFinite(o[k])){ out[k] = Math.round(o[k]); any = true; } });
+  return any ? out : null;
+}
+// extra: numbers, booleans, short fixed tokens, or a {name: number} map. Callers pass only
+// names we control -- never user data.
+function perfMark(name, ms, extra){
+  var log = _perfLoad();
+  var e = { t: new Date().toISOString(), n: String(name), ms: Math.round(ms) };
+  if(extra) Object.keys(extra).forEach(function(k){
+    var v = extra[k];
+    if(v == null) return;
+    if(typeof v === 'number'){ if(isFinite(v)) e[k] = Math.round(v); }
+    else if(typeof v === 'boolean') e[k] = v;
+    else if(typeof v === 'object'){ var nv = _perfNums(v); if(nv) e[k] = nv; }
+    else e[k] = String(v).slice(0, 24);
+  });
+  log.push(e);
+  if(log.length > PERF_LOG_MAX) log.splice(0, log.length - PERF_LOG_MAX);
+  if(!lsSetJSON(PERF_LOG_KEY, log) && !_perfQuotaWarned){
+    _perfQuotaWarned = true;   // quota / private mode: keep timing in memory for this page only
+    console.error('perf log: localStorage write failed; timings kept in memory only');
+  }
+  return e;
+}
+// Boot milestone: ms since navigation start, once per page load.
+function perfBoot(name){
+  if(_perfBootSeen[name]) return;
+  _perfBootSeen[name] = 1;
+  perfMark('boot.' + name, perfNow());
+}
+function perfBootStart(){
+  var sa = (window.navigator && navigator.standalone === true) ||
+           (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+  _perfBootSeen['script'] = 1;
+  perfMark('boot.script', PERF_SCRIPT_T, { w: window.innerWidth, app: !!sa });
+}
+// Save trace: t0 = the tap; each stage is logged once as <name>.<stage>, ms since the tap.
+function perfTrace(name){ return { name: name, t0: perfNow(), done: {} }; }
+function perfStep(tr, stage, extra){
+  if(!tr || tr.done[stage]) return;
+  tr.done[stage] = 1;
+  perfMark(tr.name + '.' + stage, perfNow() - tr.t0, extra);
+}
+function _perfMedian(a){
+  var s = a.slice().sort(function(x, y){ return x - y; }), n = s.length;
+  if(!n) return null;
+  return n % 2 ? s[(n - 1) / 2] : Math.round((s[n/2 - 1] + s[n/2]) / 2);
+}
+function perfSummary(){
+  var by = {};
+  _perfLoad().forEach(function(e){ (by[e.n] = by[e.n] || []).push(e.ms); });
+  return Object.keys(by).sort().map(function(n){
+    var v = by[n];
+    return { name: n, n: v.length, median: _perfMedian(v), min: Math.min.apply(null, v), max: Math.max.apply(null, v) };
+  });
+}
+function _perfDetail(e){
+  var bits = [];
+  if(e.a > 1) bits.push('\u00d7' + e.a + ' attempts');
+  if(e.ok === false) bits.push('\u2717 failed' + (e.st != null ? ' (' + e.st + ')' : ''));
+  if(e.srv != null) bits.push('server ' + e.srv + ' ms');
+  if(e.via) bits.push('via ' + e.via);
+  if(e.w != null) bits.push('w ' + e.w + (e.app ? ' \u00b7 home-screen app' : ' \u00b7 browser'));
+  if(e.tt) bits.push(Object.keys(e.tt).map(function(k){ return k + ' ' + e.tt[k]; }).join(', '));
+  return bits.join(' \u00b7 ');
+}
+function perfText(){
+  var lines = ['# medians (ms)', 'name\tn\tmedian\tmin\tmax'];
+  perfSummary().forEach(function(s){ lines.push([s.name, s.n, s.median, s.min, s.max].join('\t')); });
+  lines.push('', '# log (newest first)', 'time\tname\tms\tdetail');
+  _perfLoad().slice().reverse().forEach(function(e){ lines.push([e.t, e.n, e.ms, _perfDetail(e)].join('\t')); });
+  return lines.join('\n');
+}
+function _perfMs(v){ return v == null ? '\u2014' : Number(v).toLocaleString('en-US'); }
+function renderPerfPanel(){
+  var body = $('perf-body'); if(!body) return;
+  var log = _perfLoad();
+  if(!log.length){ body.innerHTML = '<div class="perf-msg">No timings recorded yet.</div>'; return; }
+  var h = '<div class="perf-h">Medians</div><div class="perf-wrap"><table class="perf-tbl"><thead><tr>' +
+          '<th>name</th><th class="num">n</th><th class="num">median ms</th><th class="num">min</th><th class="num">max</th></tr></thead><tbody>';
+  perfSummary().forEach(function(s){
+    h += '<tr><td>' + esc(s.name) + '</td><td class="num">' + s.n + '</td><td class="num">' + _perfMs(s.median) +
+         '</td><td class="num">' + _perfMs(s.min) + '</td><td class="num">' + _perfMs(s.max) + '</td></tr>';
+  });
+  h += '</tbody></table></div><div class="perf-h">Recent \u00b7 newest first</div><div class="perf-wrap"><table class="perf-tbl"><thead><tr>' +
+       '<th>time</th><th>name</th><th class="num">ms</th><th>detail</th></tr></thead><tbody>';
+  log.slice(-80).reverse().forEach(function(e){
+    var tm = new Date(e.t).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    h += '<tr' + (e.ok === false ? ' class="fail"' : '') + '><td>' + esc(tm) + '</td><td>' + esc(e.n) +
+         '</td><td class="num">' + _perfMs(e.ms) + '</td><td>' + esc(_perfDetail(e)) + '</td></tr>';
+  });
+  body.innerHTML = h + '</tbody></table></div>';
+}
+function perfRefreshUi(){ renderPerfPanel(); var m = $('perf-copy-msg'); if(m) m.textContent = ''; }
+function perfClearUi(){ _perfBuf = []; lsSetJSON(PERF_LOG_KEY, []); renderPerfPanel(); var m = $('perf-copy-msg'); if(m) m.textContent = '\u2713 cleared'; }
+function perfCopy(){
+  var txt = perfText(), msg = $('perf-copy-msg');
+  function said(ok){ if(msg) msg.textContent = ok ? '\u2713 copied' : '\u26a0 copy blocked \u2014 select the text box above and copy it by hand'; }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(function(){ said(true); }, function(){ said(_perfCopyFallback(txt)); });
+  } else said(_perfCopyFallback(txt));
+}
+function _perfCopyFallback(txt){
+  var body = $('perf-body'); if(!body) return false;
+  var ta = document.createElement('textarea');
+  ta.className = 'perf-ta'; ta.value = txt; ta.setAttribute('readonly', '');
+  body.insertBefore(ta, body.firstChild);
+  ta.focus(); ta.select(); try { ta.setSelectionRange(0, txt.length); } catch(e){}
+  var ok = false; try { ok = document.execCommand('copy'); } catch(e){}
+  if(ok) ta.parentNode.removeChild(ta);   // on failure it stays, selected, for a manual copy
+  return ok;
+}
+window.perfLog = function(){ console.table(_perfLoad().slice().reverse()); console.table(perfSummary()); return _perfLoad().length + ' entries'; };
+window.perfLogClear = function(){ _perfBuf = []; lsSetJSON(PERF_LOG_KEY, []); return 'cleared'; };
+
 async function netWithRetry(kind, action, makeReq, canRetry){
-  var last;
+  var last, t0 = perfNow(), attempts = 0;
   for(var attempt = 0; attempt <= NET_BACKOFF_MS.length; attempt++){
+    attempts = attempt + 1;
     try {
       var req = makeReq();
       var data = await netAttempt(req.url, req.opts);
       if(attempt > 0) netMarkRecovered();
+      // srv/_t are only present once the backend reports them (UX_SPEC 1B); absent fields are dropped.
+      perfMark(kind + ' ' + action, perfNow() - t0,
+        { a: attempts, srv: data && data._ms, tt: data && data._t, via: (data && data.fresh) ? 'fresh' : null });
       return data;
     } catch(e){
       last = e;
-      if(e.app) throw e;
+      if(e.app){ perfMark(kind + ' ' + action, perfNow() - t0, { a: attempts, ok: false, st: 'app' }); throw e; }
       netRecord(kind, action, attempt + 1, e.status, e.where, false);
       if(!e.retryable || !canRetry || attempt === NET_BACKOFF_MS.length) break;
       await netSleep(NET_BACKOFF_MS[attempt]);
     }
   }
+  perfMark(kind + ' ' + action, perfNow() - t0, { a: attempts, ok: false, st: last && last.status });
   throw last;
 }
 
@@ -2098,6 +2272,7 @@ async function refreshData(){
 
 // ── render all ──
 function renderAll(data){
+  var _raT0=perfNow();
   allData=data;
   if(data.config) applyConfig(data.config); // apply server config first
   var monthly=data.monthly||[], budget=data.budget||13205;
@@ -2144,6 +2319,8 @@ function renderAll(data){
     // try once more so the header band and This Week card still fill.
     setTimeout(function(){ if(!nwData) loadNetWorth(); }, 15000);
   }
+  perfMark('renderAll', perfNow()-_raT0);
+  perfBoot('rendered');
 }
 
 // Phones can't fit 19 x-axis labels on a 350px canvas: window the budget
@@ -2325,6 +2502,7 @@ function renderThisWeek(){
   [twChecking, twCards, twDaycare, twBudget, twNetWorth].forEach(function(fn){
     try { fn(); } catch(e) { console.error('ThisWeek card failed:', fn.name, e); }
   });
+  if(allData) perfBoot('thisweek');   // checking, cards, daycare, budget all drawn from allData
   try { loadDebtChart(); } catch(e) { console.error('debt chart failed:', e); }
 }
 
@@ -2423,6 +2601,7 @@ function twNetWorth(){
   var el=$('tw-networth'); if(!el) return;
   var h='<div class="tw-eyebrow">Net worth</div>';
   if(!nwData){ el.innerHTML=h+'<div class="tw-big">—</div><div class="tw-sub">loading…</div>'; return; }
+  perfBoot('tw.networth');
   var ms=nwData.projections&&nwData.projections[1]&&nwData.projections[1].milestone;
   h+='<div class="tw-big">'+fmt(nwData.netWorth)+'</div>'+
      '<div class="tw-sub">investments '+fmt(nwData.investments)+
@@ -2727,24 +2906,39 @@ async function submitQuickAdd(){
   // surfaces as a cryptic fetch error instead of a clean banner.
   if(isDemo || !SCRIPT_URL){ hideQuickAdd(); showBanner('Demo mode — nothing saved','ok'); return; }
   btn.disabled=true; btn.textContent='Saving…';
+  var trace=perfTrace('save.qa.'+qaType);   // t0 = the Save tap
+  var qaClosed=false;                       // after close, errors go to a banner, not the hidden modal
   // Secondary-write outcomes, shown in the FINAL banner -- a banner shown mid-save
   // is overwritten by the closing 'Saved' (partial failures used to vanish).
   var qaWarn=[], qaInfo=[];
   try{
     if(qaType==='txn'){
+      // Flush a tag typed but never Enter-ed -- silently dropping it is the
+      // kind of quiet data loss this dashboard shouldn't do. Then capture every
+      // field the follow-up writes need: they run after the modal has closed.
+      var _pendTag = $('qa-tag-input');
+      if(_pendTag && _pendTag.value.trim()) qaAddStagedTag(_pendTag.value);
+      var qx = { date:$('qa-date').value, desc:$('qa-desc').value.trim(), pm:$('qa-pm').value,
+                 hsa:!!($('qa-hsa-flag') && $('qa-hsa-flag').checked), tags:qaStagedTags.slice() };
       var txnResult = await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('txn'), month:mkey(month),
-        date:$('qa-date').value, description:$('qa-desc').value.trim(), amount:amt,
-        method:$('qa-pm').value, category:'onetime', discretionary:$('qa-disc').checked,
+        date:qx.date, description:qx.desc, amount:amt,
+        method:qx.pm, category:'onetime', discretionary:$('qa-disc').checked,
         ben:$('qa-ben').checked, jenna:$('qa-jenna').checked});
+      perfStep(trace,'post');
       window._qaLastTxnId = txnResult && txnResult.id;
+      // The txn is saved: refresh tiles and close now. The HSA draft and tags
+      // below are follow-ups whose outcome lands in the final banner.
+      afterWrite(txnResult, trace);
+      hideQuickAdd(); qaClosed=true; perfStep(trace,'closed');
+      if(qx.hsa || qx.tags.length) showBanner('Saved \u2014 finishing up\u2026','loading');
       // HSA-eligible: create a needs-review draft so the HSA tab flags that a
       // receipt is needed. Second write; if it fails the txn is already saved,
       // so say exactly that rather than pretending the whole save failed.
-      if($('qa-hsa-flag') && $('qa-hsa-flag').checked){
+      if(qx.hsa){
         try {
           var hsaRes = await apiPost(SCRIPT_URL,{action:'addHsaReceipt', idemKey:genIdemKey('hsaAdd'),
-            needsReview:true, dateIncurred:$('qa-date').value, amount:Math.abs(amt),
-            provider:'', description:$('qa-desc').value.trim(), category:'',
+            needsReview:true, dateIncurred:qx.date, amount:Math.abs(amt),
+            provider:'', description:qx.desc, category:'',
             funding:'OOP', receiptLink:''});
           if(hsaRes && hsaRes.duplicateOf != null)
             qaInfo.push('HSA receipt already on file as #'+hsaRes.duplicateOf+' (same date + amount) \u2014 no draft added');
@@ -2757,48 +2951,45 @@ async function submitQuickAdd(){
       // after the txn has an id, since tags attach to a row that didn't
       // exist a moment ago. Honest partial failure: the txn is already saved
       // either way.
-      // Flush a tag typed but never Enter-ed -- silently dropping it is the
-      // kind of quiet data loss this dashboard shouldn't do.
-      var _pendTag = $('qa-tag-input');
-      if(_pendTag && _pendTag.value.trim()) qaAddStagedTag(_pendTag.value);
-      if(qaStagedTags.length && txnResult && txnResult.id != null){
+      if(qx.tags.length && txnResult && txnResult.id != null){
         try {
           await apiPost(SCRIPT_URL,{action:'ledgerSetTags', idemKey:genIdemKey('tag'),
-            id:txnResult.id, tags:qaStagedTags});
-          if(_knownTagCounts) qaStagedTags.forEach(function(t){ if(!_knownTagCounts[t]) _knownTagCounts[t]=1; });
+            id:txnResult.id, tags:qx.tags});
+          if(_knownTagCounts) qx.tags.forEach(function(t){ if(!_knownTagCounts[t]) _knownTagCounts[t]=1; });
         } catch(tagErr){
           qaWarn.push('tags failed to save: '+tagErr.message+' — add them from the transaction list');
         }
       }
       // If the card drawer is open on this card, refresh it so the new txn appears
       var _dr = $('card-drawer');
-      if(_qaDrawerReturn && _qaDrawerReturn.pm===$('qa-pm').value){
+      if(_qaDrawerReturn && _qaDrawerReturn.pm===qx.pm){
         openCardDrawer(_qaDrawerReturn.pm, _qaDrawerReturn.title);
-      } else if(typeof _drawerPm!=='undefined' && _drawerPm===$('qa-pm').value &&
+      } else if(typeof _drawerPm!=='undefined' && _drawerPm===qx.pm &&
          _dr && _dr.classList.contains('open')){
         openCardDrawer(_drawerPm, $('cdr-title').textContent);
       }
       _qaDrawerReturn = null;
       if(curMonthTxn===month) loadTxns(month,true);
-      quickRefresh(); refreshCardBalances();
     } else if(qaType==='groceries'||qaType==='gas'){
       if(!$('qa-pm').value){ $('qa-err').textContent='Select a payment method.'; return; }
-      await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('var'), month:mkey(month),
+      var varRes = await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('var'), month:mkey(month),
         category:qaType, date:$('qa-date').value, amount:Math.abs(amt),
         method:$('qa-pm').value,
         description:qaType==='groceries'?$('qa-store').value.trim():'Gas',
         discretionary:false, ben:true, jenna:true});
+      perfStep(trace,'post');
       if(curMonthFx===month) loadFixed(month,true);
-      refreshCardBalances();
+      afterWrite(varRes, trace);
     } else if(qaType==='fixed'){
       var fxName=$('qa-fx-name').value.trim();
       if(!fxName){ $('qa-err').textContent='Enter a name.'; btn.disabled=false; btn.textContent='Save'; return; }
       // paid without a date: the server stamps today
-      await apiPost(SCRIPT_URL,{action:'ledgerAddFixed', idemKey:genIdemKey('fx'), month:mkey(month),
+      var fxRes = await apiPost(SCRIPT_URL,{action:'ledgerAddFixed', idemKey:genIdemKey('fx'), month:mkey(month),
         name:fxName, amount:amt, source:$('qa-pm').value,
         paid:$('qa-fx-paid').checked});
+      perfStep(trace,'post');
       loadFixed(month, true);          // refresh the Recurring tab list
-      refreshCardBalances();           // a paid card-source row changes that card's balance
+      afterWrite(fxRes, trace);        // a paid card-source row changes that card's balance
     } else if(qaType==='checking'){
       var chkType=$('qa-chk-type').value;
       // Paychecks are income. Transfers between your own accounts are
@@ -2806,22 +2997,24 @@ async function submitQuickAdd(){
       // method row excludes both directions from income/expense totals
       // while still moving the checking balance (which does balance -= amount
       // for every Checking row, so a NEGATIVE amount credits checking).
+      var chkRes;
       if(chkType==='deposit'){
-        await apiPost(SCRIPT_URL,{action:'ledgerAddIncome', idemKey:genIdemKey('chk'), month:mkey(month),
+        chkRes = await apiPost(SCRIPT_URL,{action:'ledgerAddIncome', idemKey:genIdemKey('chk'), month:mkey(month),
           source:$('qa-desc').value.trim()||'Paycheck',
           amount:Math.abs(amt), date:$('qa-date').value});
       } else if(chkType==='transfer_in'){
-        await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('chk'), month:mkey(month),
+        chkRes = await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('chk'), month:mkey(month),
           description:$('qa-desc').value.trim()||'Transfer in', category:'transfer',
           method:'Checking', amount:-Math.abs(amt), date:$('qa-date').value,
           discretionary:false, ben:false, jenna:false});
       } else {
-        await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('chk'), month:mkey(month),
+        chkRes = await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('chk'), month:mkey(month),
           description:$('qa-desc').value.trim()||'Withdrawal', category:'transfer',
           method:'Checking', amount:Math.abs(amt), date:$('qa-date').value,
           discretionary:false, ben:false, jenna:false});
       }
-      quickRefresh(); refreshCardBalances();
+      perfStep(trace,'post');
+      afterWrite(chkRes, trace);
     } else if(qaType==='hsa'){
       if(amt<=0){ $('qa-err').textContent='Enter a receipt amount greater than zero.'; return; }
       if(qaHsaBusy){ $('qa-err').textContent='Photo still processing — try again in a second.'; return; }
@@ -2851,11 +3044,13 @@ async function submitQuickAdd(){
           funding:$('qa-hsa-funding').value,
           receiptLink:$('qa-hsa-link').value.trim()});
       }
-      loadHsa(true); // authoritative refetch -- separate sheet, not part of quickRefresh/card balances
+      perfStep(trace,'post');
+      loadHsa(true); // authoritative refetch -- separate sheet, not part of the fresh envelope
     } else {
       var key=$('qa-card').value;
-      await apiPost(SCRIPT_URL,{action:'makeCardPayment', idemKey:genIdemKey('pay'), month:month,
+      var payRes = await apiPost(SCRIPT_URL,{action:'makeCardPayment', idemKey:genIdemKey('pay'), month:month,
         cardName:key, amount:amt, date:$('qa-date').value});
+      perfStep(trace,'post');
       if(allData&&allData.cardBalances&&allData.cardBalances.cards&&allData.cardBalances.cards[key]){
         var qc=allData.cardBalances.cards[key];
         qc.balance=Math.round((qc.balance-amt)*100)/100;
@@ -2863,16 +3058,22 @@ async function submitQuickAdd(){
         qc.lastDate=$('qa-date').value;
         loadAccounts();
       }
-      refreshCardBalances();
+      afterWrite(payRes, trace);       // authoritative; also corrects the optimistic tile above
     }
-    hideQuickAdd();
+    hideQuickAdd(); qaClosed=true; perfStep(trace,'closed');
     if(qaWarn.length) showBanner('Saved, but '+qaWarn.join('; ')+'.','err');
     else showBanner('Saved'+(qaInfo.length?' \u2014 '+qaInfo.join('; '):''),'ok');
     renderThisWeek();
   }catch(e){
-    $('qa-err').textContent=(e.message&&e.message.indexOf('fetch')>=0)
-      ?'Network error — refresh to check if saved before trying again.'
-      :('Failed: '+e.message);
+    if(qaClosed){
+      // Primary write already saved and the modal is gone: never report into a hidden field.
+      console.error('Quick Add follow-up failed:', e);
+      showBanner('Saved, but a follow-up step failed: '+e.message,'err');
+    } else {
+      $('qa-err').textContent=(e.message&&e.message.indexOf('fetch')>=0)
+        ?'Network error — refresh to check if saved before trying again.'
+        :('Failed: '+e.message);
+    }
   }finally{
     btn.disabled=false; btn.textContent='Save';
   }
@@ -3776,6 +3977,7 @@ async function loadDebtChart(){
     if((ln && ln.error) || (mg && mg.error)){ debtChartState='idle'; return; } // allow retry
     renderDebtChart(ln, mg);
     debtChartState='done';
+    perfBoot('tw.debt');
   }catch(e){
     debtChartState='idle';
     var sub=$('tw-debt-sub'); if(sub) sub.textContent='Debt projection unavailable right now.';
@@ -3855,33 +4057,73 @@ function demoLoans(){
   ]};
 }
 
-// Quick refresh — only fetches card balances (fast, no all-sheet scan)
-// Immediately update a card's balance in local allData and re-render tiles.
-// Called after any write that changes a card balance so UI updates without waiting for quickRefresh.
-
-async function refreshCardBalances(){
-  if(!SCRIPT_URL || isDemo) return;
-  try {
-    var fresh = await apiFetch(SCRIPT_URL, 'cardBalances');
-    if(fresh && allData){ allData.cardBalances = fresh; loadAccounts(); twCards(); twChecking(); }
-  } catch(e) {}
+// ── WRITE -> FRESH (UX_SPEC section 2) ───────────────────────
+// Invariant: a write returns the new truth; applyFresh is the ONLY code that applies it.
+// Every write that can move a balance or a monthly total calls afterWrite(res) and issues no
+// follow-up reads of its own. Once the backend attaches res.fresh (UX_SPEC 1B) no GET is made.
+// Until then -- or if fresh failed server-side (res.freshError) -- afterWrite fetches quick +
+// cardBalances IN PARALLEL, once, coalesced: a write landing while that fetch is in flight
+// marks it dirty and exactly one more runs after it (never two at once, and never a stale
+// response applied last).
+function applyFresh(fresh){
+  if(!fresh || !allData) return;
+  if(fresh.cardBalances) allData.cardBalances = fresh.cardBalances;
+  if(Array.isArray(fresh.monthly)) allData.monthly = fresh.monthly;
+  if(Array.isArray(fresh.months))  allData.months  = fresh.months;
+  if(fresh.updated){
+    var ts=$('ts');
+    if(ts) ts.textContent='updated '+new Date(fresh.updated).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  }
+  var monthly=allData.monthly||[], budget=allData.budget||13205;
+  // Each render isolated: one failure must not strand the rest (audit bug Q pattern).
+  [
+    ['loadAccounts',    function(){ loadAccounts(); }],
+    ['renderCardStrip', function(){ renderCardStrip(); }],
+    ['twChecking',      function(){ twChecking(); }],
+    ['twCards',         function(){ twCards(); }],
+    ['twBudget',        function(){ twBudget(); }],
+    ['renderMonthly',   function(){ renderMonthly(monthly, budget); }],
+    ['renderBreakdown', function(){ renderBreakdown(monthly); }],
+    ['renderCashflow',  function(){ renderCashflow(monthly); }],
+    ['renderVsTypical', function(){ renderVsTypical(monthly); }]
+  ].forEach(function(p){
+    try { p[1](); } catch(e){ console.error('applyFresh: '+p[0]+' failed:', e); }
+  });
 }
 
-async function quickRefresh(){
-  if(!SCRIPT_URL || isDemo) return;
-  try {
-    // NOTE: action=quick's response has never included cardBalances (checked
-    // 2026-07 while chasing a stale-checking-balance report) -- fetch it
-    // directly so quickRefresh is a real refresh on its own, and no future
-    // call site can reintroduce this by forgetting refreshCardBalances().
-    var data = await apiFetch(SCRIPT_URL, 'quick');
-    if(data.updated) $('ts').textContent = 'updated '+new Date(data.updated).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    var fresh = await apiFetch(SCRIPT_URL, 'cardBalances');
-    if(fresh) allData.cardBalances = fresh;
-    loadAccounts();
-    renderCardStrip(); // refresh strip on transactions tab too
-    twCards(); twChecking();
-  } catch(e){ /* silent fail — not critical */ }
+var _fbRunning = false, _fbDirty = false, _fbWaiting = [];
+// res: the POST result (may be null for a batch of writes). trace: a perfTrace from the tap,
+// or a short label (then the logged time is the refresh lag only).
+function afterWrite(res, trace){
+  if(isDemo || !SCRIPT_URL) return;
+  if(typeof trace === 'string') trace = perfTrace('write.'+trace);
+  if(res && res.fresh){
+    applyFresh(res.fresh);
+    perfStep(trace, 'consistent', { via:'envelope' });
+    return;
+  }
+  if(res && res.freshError) console.error('fresh envelope failed server-side; falling back to GETs:', res.freshError);
+  if(trace) _fbWaiting.push(trace);
+  if(_fbRunning){ _fbDirty = true; return; }
+  _fbRun();
+}
+function _fbRun(){
+  _fbRunning = true; _fbDirty = false;
+  var batch = _fbWaiting; _fbWaiting = [];
+  var q = apiFetch(SCRIPT_URL, 'quick').catch(function(){ return null; });
+  var b = apiFetch(SCRIPT_URL, 'cardBalances').catch(function(){ return null; });
+  Promise.all([q, b]).then(function(r){
+    var qd = r[0], bd = r[1];
+    if(qd || bd) applyFresh({ monthly: qd && qd.monthly, months: qd && qd.months,
+                              updated: qd && qd.updated, cardBalances: bd });
+    var ok = !!(qd && bd);
+    batch.forEach(function(tr){ perfStep(tr, 'consistent', { via:'fallback', ok: ok }); });
+    // Never silent: tiles that failed to refresh are stale, so say so (unless a rerun is queued).
+    if(!ok && !_fbDirty)
+      showBanner('Saved, but '+(!bd && !qd ? 'balances and budget' : !bd ? 'balances' : 'budget totals')+
+                 ' didn\u2019t refresh \u2014 tap \u21bb to update.', 'err');
+  }).catch(function(e){ console.error('afterWrite refresh failed:', e); })
+    .then(function(){ _fbRunning = false; if(_fbDirty) _fbRun(); });
 }
 // ── TAGS ─────────────────────────────────────────────────────
 // Tags live on the Txns sheet (col K) like every other txn attribute — NOT in
@@ -4159,7 +4401,7 @@ function migrateLocalPending(){
       if(lastErr && !okCount) showBanner('Pending flags not moved to the sheet yet: '+lastErr,'err');
       else if(okCount || rejected) showBanner('Moved '+okCount+' pending flag'+(okCount===1?'':'s')+' to the sheet'+
         (rejected ? ' \u00b7 '+rejected+' stale flag'+(rejected===1?'':'s')+' dropped (no matching txn)' : ''),'ok');
-      if(okCount){ refreshCardBalances(); if(curMonthTxn) loadTxns(curMonthTxn,true); }
+      if(okCount){ afterWrite(null, 'pendmig'); if(curMonthTxn) loadTxns(curMonthTxn,true); }
       return;
     }
     var k=keys[i++], cut=k.lastIndexOf(':');
@@ -4554,12 +4796,11 @@ async function saveRow(i,isNew){
         showBanner('Moved to '+targetMonth+' \u2014 no longer shown in '+curMonthTxn,'ok');
         txns.splice(i,1);
         renderTxnTable(); updateSum();
-        quickRefresh(); refreshCardBalances();
+        afterWrite(result, 'saveRow');
         return;
       }
       showBanner('Saved','ok');
-      quickRefresh();
-      refreshCardBalances();
+      afterWrite(result, 'saveRow');
     } catch(e){
       inputs.forEach(function(el){el.disabled=false;});
       if(saveBtn){saveBtn.textContent='save';}
@@ -4582,11 +4823,10 @@ async function delRow(i){
   if(isDemo || !SCRIPT_URL || removed.id == null) return;
   showBanner('Deleting…','loading');
   try {
-    await apiPost(SCRIPT_URL,{action:'ledgerDeleteTxn', idemKey:genIdemKey('del'), id:removed.id});
+    var delRes = await apiPost(SCRIPT_URL,{action:'ledgerDeleteTxn', idemKey:genIdemKey('del'), id:removed.id});
     showBanner('Deleted','ok');
     // No row-shift bookkeeping: rows are located by stable id, not position.
-    quickRefresh();
-    refreshCardBalances();
+    afterWrite(delRes, 'delRow');
   } catch(e){
     // Restore the row -- the server still has it
     txns.splice(i,0,removed); renderTxnTable();
@@ -4716,7 +4956,7 @@ function qaAddFromDrawer(){
 }
 
 // Quick Add preset to one payment method. Used by the account tiles' + Add
-// (ret=null: the tile re-renders via refreshCardBalances after save) and by
+// (ret=null: the tile re-renders via afterWrite after save) and by
 // the drawer's + Add (ret={pm,title}: the drawer reopens after save).
 function qaOpenForPm(pm, ret){
   _qaDrawerReturn = ret || null;
@@ -4997,7 +5237,7 @@ async function saveVarEntry(category){
         method:   payVal,
         discretionary: false, ben: true, jenna: true,
       };
-      await apiPost(SCRIPT_URL, varPayload);
+      var varAddRes = await apiPost(SCRIPT_URL, varPayload);
     }
     // Optimistically update local varEntries and render immediately
     if(!varEntries) varEntries = { groceries:{ entries:[] }, gas:{ entries:[] } };
@@ -5007,7 +5247,7 @@ async function saveVarEntry(category){
     renderFixedTab();
 
     showBanner((isGroc?'Grocery':'Gas')+' entry of '+fmt(amtVal,2)+' added to '+curMonthFx, 'ok');
-    refreshCardBalances();
+    afterWrite(varAddRes, 'varAdd');
     // Reconcile with server to pick up the assigned ids
     if(!isDemo && SCRIPT_URL && curMonthFx){
       var fresh = await apiFetch(SCRIPT_URL, 'variableEntries', {month: curMonthFx});
@@ -5067,7 +5307,7 @@ async function saveVarEdit(prefix, idx, id){
   try {
     if(!isDemo && SCRIPT_URL){
       if(!pay){ showBanner('Select a payment method','err'); return; }
-      await apiPost(SCRIPT_URL, {
+      var varUpdRes = await apiPost(SCRIPT_URL, {
         action:    'ledgerUpdateTxn',
         idemKey:   genIdemKey('var'),
         id:        id,
@@ -5090,6 +5330,7 @@ async function saveVarEdit(prefix, idx, id){
     }
     showBanner('Entry updated','ok');
     renderFixedTab();
+    afterWrite(varUpdRes, 'varUpdate');   // amount/method change moves a card balance and the month total
   } catch(e){
     showBanner('Save failed: '+e.message,'err');
   }
@@ -5101,21 +5342,21 @@ async function delVarEntry(prefix, idx, id){
   showBanner('Deleting…','loading');
   try {
     if(!isDemo && SCRIPT_URL){
-      await apiPost(SCRIPT_URL, {
+      var varDelRes = await apiPost(SCRIPT_URL, {
         action:  'ledgerDeleteTxn',
         idemKey: genIdemKey('del'),
         id:      id,
       });
     }
+    afterWrite(varDelRes, 'varDelete');
     // Remove from local state
     if(varEntries && varEntries[cat]){
       varEntries[cat].entries.splice(idx, 1);
     }
     showBanner('Entry deleted','ok');
-    // Reverse the charge immediately
-    var deletedEntry = varEntries && varEntries[cat] ? varEntries[cat].entries[idx] : null;
-    if(deletedEntry && deletedEntry.payment && deletedEntry.cost)
-    // Reload from server so local state matches the sheet
+    // Reload from server so local state matches the sheet. (A leftover
+    // 'reverse the charge' stub used to sit here as a dangling if() that made
+    // this reload conditional on the NEXT entry existing -- removed.)
     if(!isDemo && SCRIPT_URL && curMonthFx){
       var fresh = await apiFetch(SCRIPT_URL, 'variableEntries', {month: curMonthFx});
       if(fresh && !fresh.error) varEntries = fresh;
@@ -5365,8 +5606,8 @@ async function togglePaid(i){
 
   if(!isDemo&&SCRIPT_URL){
     try {
-      await apiPost(SCRIPT_URL,{action:'ledgerUpdateFixed', idemKey:genIdemKey('fx'), id:f.id, paid:nowPaid, paid_date:paidDate});
-      refreshCardBalances();
+      var paidRes = await apiPost(SCRIPT_URL,{action:'ledgerUpdateFixed', idemKey:genIdemKey('fx'), id:f.id, paid:nowPaid, paid_date:paidDate});
+      afterWrite(paidRes, 'togglePaid');
     } catch(e){
       // Revert on failure
       fixedData.fixed[i]=f; updateFxRow(i); updateFxProgress();
@@ -5450,7 +5691,8 @@ async function saveFixedCost(i, td, inp){
   updateFxProgress();
   if(!isDemo&&SCRIPT_URL){
     try {
-      await apiPost(SCRIPT_URL,{action:'ledgerUpdateFixed', idemKey:genIdemKey('fx'), id:f.id, amount:newCost});
+      var costRes = await apiPost(SCRIPT_URL,{action:'ledgerUpdateFixed', idemKey:genIdemKey('fx'), id:f.id, amount:newCost});
+      afterWrite(costRes, 'fixedCost');     // re-pricing a paid row moves its source balance + the month total
     } catch(e){
       fixedData.fixed[i]=f; td.textContent=fmt(f.cost,2);
       showBanner('Save failed: '+e.message,'err');
@@ -5882,7 +6124,7 @@ async function submitSplit(){
         if(parts.length === 1){
           // Single line: an in-place rewrite (possibly a category change)
           var p1 = parts[0];
-          await apiPost(SCRIPT_URL, {
+          var splitRes = await apiPost(SCRIPT_URL, {
             action: 'ledgerUpdateTxn', idemKey: genIdemKey('txn'), id: t.id,
             month: mkey(curMonthTxn), date: t.date,
             description: p1.description, amount: p1.amount, method: p1.method,
@@ -5890,14 +6132,15 @@ async function submitSplit(){
             ben: p1.ben, jenna: p1.jenna,
           });
         } else {
-          await apiPost(SCRIPT_URL, {
+          splitRes = await apiPost(SCRIPT_URL, {
             action: 'ledgerSplitTxn', idemKey: genIdemKey('split'), id: t.id, parts: parts,
           });
         }
       } else {
         // Unsaved new row — add each part individually
         for(var i = 0; i < parts.length; i++){
-          await apiPost(SCRIPT_URL, Object.assign({
+          // sequential: the LAST result's fresh envelope reflects every part
+          splitRes = await apiPost(SCRIPT_URL, Object.assign({
             action: 'ledgerAddTxn', idemKey: genIdemKey('txn'),
             month: mkey(curMonthTxn), date: t.date,
           }, parts[i]));
@@ -5943,7 +6186,7 @@ async function submitSplit(){
     if(!isDemo && SCRIPT_URL){
       await loadTxns(curMonthTxn, true);
     } else renderTxnTable();
-    quickRefresh();
+    afterWrite(typeof splitRes !== 'undefined' ? splitRes : null, 'split');
   } catch(e){
     $('split-modal-err').textContent   = 'Save failed: ' + e.message;
     $('split-submit-btn').disabled     = false;
@@ -6020,26 +6263,27 @@ async function submitChkEntry(){
 
   var isTransferIn = amount >= 0 && $('chk-is-transfer').checked;
   try {
+    var chkModalRes;
     if(isTransferIn){
       // Money arriving from another of your own accounts: not income, not an
       // expense. category:'transfer' + a NEGATIVE checking-method amount is
       // what excludes it from both totals while still crediting checking
       // (ledgerCheckingBalance does balance -= amount for every Checking row).
-      await apiPost(SCRIPT_URL, {
+      chkModalRes = await apiPost(SCRIPT_URL, {
         action:  'ledgerAddTxn', idemKey: genIdemKey('chk'),
         month:   mkey(month), description: desc || 'Transfer in',
         category:'transfer', method: 'Checking', amount: -Math.abs(amount),
         date:    date, discretionary: false, ben: false, jenna: false
       });
     } else if(amount >= 0){
-      await apiPost(SCRIPT_URL, {
+      chkModalRes = await apiPost(SCRIPT_URL, {
         action:  'ledgerAddIncome', idemKey: genIdemKey('chk'),
         month:   mkey(month), source: desc, amount: amount, date: date
       });
     } else {
       // Withdrawals are transfer txns from checking (money movement, not
       // negative income as the old sheet stored them)
-      await apiPost(SCRIPT_URL, {
+      chkModalRes = await apiPost(SCRIPT_URL, {
         action:  'ledgerAddTxn', idemKey: genIdemKey('chk'),
         month:   mkey(month), description: desc || 'Withdrawal',
         category:'transfer', method: 'Checking', amount: Math.abs(amount),
@@ -6051,7 +6295,7 @@ async function submitChkEntry(){
       (isTransferIn?'Transfer':amount>=0?'Deposit':'Withdrawal')+' of '+fmt(Math.abs(amount),2)+' recorded in '+month,
       'ok'
     );
-    quickRefresh(); refreshCardBalances();
+    afterWrite(chkModalRes, 'checking');
   } catch(e){
     $('chk-modal-err').textContent  = 'Failed: ' + e.message;
     $('chk-submit-btn').disabled    = false;
@@ -6111,6 +6355,9 @@ async function voidPayment(sheetKey, displayName, amount, dateStr){
         Math.round((allData.cardBalances.cards[sheetKey].balance + Math.abs(result.voidedAmount)) * 100) / 100;
       loadAccounts();
     }
+    // Authoritative: the optimistic edit above can't know the NEW last payment, so the
+    // tile's Void target would otherwise point at the payment just voided (audit bug T).
+    afterWrite(result, 'void');
   } catch(e){
     showBanner('Void failed: '+e.message,'err');
   }
@@ -6165,7 +6412,7 @@ async function submitPayment(){
       loadAccounts();
     }
     // Authoritative refresh in the background (cache was invalidated server-side)
-    refreshCardBalances();
+    afterWrite(result, 'payment');
   } catch(e){
     $('pay-modal-err').textContent = 'Network error — refresh to check if payment was recorded before trying again.';
     $('pay-submit-btn').disabled   = false;
@@ -6712,7 +6959,7 @@ function toggleRowPending(i){
   apiPost(SCRIPT_URL,{action:'ledgerSetPending', idemKey:genIdemKey('pend'), id:t.id, pending:want})
     .then(function(r){
       if(r && r.error) throw new Error(r.error);
-      refreshCardBalances(); // tiles carry pending counts
+      afterWrite(r, 'pending'); // tiles carry pending counts
     })
     .catch(function(e){
       t.pending = !want; paint();
