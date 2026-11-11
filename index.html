@@ -874,6 +874,15 @@ tr:hover .racts,tr.editing .racts{opacity:1}
      title. Keeps the sticky header short so it stops eating vertical scroll space. */
   .hdr{ flex-wrap:nowrap; gap:8px; padding-bottom:10px; }   /* top/left/right set with the safe-area rule above */
   .hdr h1{ font-size:16px; }
+  /* The controls must never be pushed off-screen (the calc button, added later, pushed
+     settings past the right edge at 390px). Title side shrinks and truncates; controls don't. */
+  .hdr .hdr-long{ display:none; }                 /* "Ledger", same as the Home Screen name */
+  .hdr-l{ min-width:0; overflow:hidden; }
+  .hdr h1{ overflow:hidden; text-overflow:ellipsis; }
+  .hdr-r{ flex-shrink:0; gap:6px; }
+  .hdr-add{ padding:7px 12px; white-space:nowrap; }
+  .icon-btn{ padding:6px 10px; }
+  .hdr .icon-btn::after, .hdr .hdr-add::after{ inset:-7px -3px; }  /* <= half the 6px gap */
   .ts{ display:none; }
   .hdr .hide-mobile{ display:none; }
   .btn-lbl{ display:none; }
@@ -929,7 +938,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 <div id="dashboard" style="display:none">
   <header class="hdr">
     <div class="hdr-l">
-      <h1>Household Ledger</h1>
+      <h1><span class="hdr-long">Household </span>Ledger</h1>
       <span class="badge live" id="src-badge">● live</span>
     </div>
     <div class="hdr-r">
@@ -1555,6 +1564,11 @@ var smo = function(s){
   if(p.length<2 || !p[1]) return String(s||'');
   return p[0].slice(0,3)+' '+p[1].slice(2);
 };
+// '2026-07' -> 'Jul 2026' (window labels, where a 2-digit year reads ambiguously)
+function mkeyWords(mk){
+  var m=/^(\d{4})-(\d{2})$/.exec(String(mk||''));
+  return m ? MKEY_NAMES[parseInt(m[2],10)-1].slice(0,3)+' '+m[1] : String(mk||'');
+}
 // '2026-07' -> 'Jul 26'. The ledger speaks YYYY-MM; smo speaks 'Month YYYY'.
 function mkeyLabel(mk){
   var m=/^(\d{4})-(\d{2})$/.exec(String(mk||''));
@@ -2196,6 +2210,12 @@ async function netWithRetry(kind, action, makeReq, canRetry){
       // srv/_t are only present once the backend reports them (UX_SPEC 1B); absent fields are dropped.
       perfMark(kind + ' ' + action, perfNow() - t0,
         { a: attempts, srv: data && data._ms, tt: data && data._t, via: (data && data.fresh) ? 'fresh' : null });
+      // Server-side rows (UX_SPEC 1B), logged separately so they get medians:
+      // srv <kind> <action> = Apps Script execution only; client ms minus this = Google + network.
+      if(data && typeof data._ms === 'number') perfMark('srv ' + kind + ' ' + action, data._ms);
+      if(data && data._t && typeof data._t === 'object') Object.keys(data._t).forEach(function(k){
+        if(typeof data._t[k] === 'number') perfMark('srv ' + action + '.' + k, data._t[k]);
+      });
       return data;
     } catch(e){
       last = e;
@@ -2923,17 +2943,24 @@ async function submitQuickAdd(){
       if(_pendTag && _pendTag.value.trim()) qaAddStagedTag(_pendTag.value);
       var qx = { date:$('qa-date').value, desc:$('qa-desc').value.trim(), pm:$('qa-pm').value,
                  hsa:!!($('qa-hsa-flag') && $('qa-hsa-flag').checked), tags:qaStagedTags.slice() };
-      var txnResult = await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('txn'), month:mkey(month),
+      var txnPayload = {action:'ledgerAddTxn', idemKey:genIdemKey('txn'), month:mkey(month),
         date:qx.date, description:qx.desc, amount:amt,
         method:qx.pm, category:'onetime', discretionary:$('qa-disc').checked,
-        ben:$('qa-ben').checked, jenna:$('qa-jenna').checked});
+        ben:$('qa-ben').checked, jenna:$('qa-jenna').checked};
+      // Tags ride on the same POST (UX_SPEC 1B). A backend that honoured them answers
+      // tagsWritten:true; an older one ignores the field, and the follow-up below writes them.
+      if(qx.tags.length) txnPayload.tags = qx.tags;
+      var txnResult = await apiPost(SCRIPT_URL, txnPayload);
+      var tagsPending = qx.tags.length && !(txnResult && txnResult.tagsWritten === true);
+      if(qx.tags.length && !tagsPending && _knownTagCounts)
+        qx.tags.forEach(function(t){ if(!_knownTagCounts[t]) _knownTagCounts[t]=1; });
       perfStep(trace,'post');
       window._qaLastTxnId = txnResult && txnResult.id;
       // The txn is saved: refresh tiles and close now. The HSA draft and tags
       // below are follow-ups whose outcome lands in the final banner.
       afterWrite(txnResult, trace);
       hideQuickAdd(); qaClosed=true; perfStep(trace,'closed');
-      if(qx.hsa || qx.tags.length) showBanner('Saved \u2014 finishing up\u2026','loading');
+      if(qx.hsa || tagsPending) showBanner('Saved \u2014 finishing up\u2026','loading');
       // HSA-eligible: create a needs-review draft so the HSA tab flags that a
       // receipt is needed. Second write; if it fails the txn is already saved,
       // so say exactly that rather than pretending the whole save failed.
@@ -2954,7 +2981,7 @@ async function submitQuickAdd(){
       // after the txn has an id, since tags attach to a row that didn't
       // exist a moment ago. Honest partial failure: the txn is already saved
       // either way.
-      if(qx.tags.length && txnResult && txnResult.id != null){
+      if(tagsPending && txnResult && txnResult.id != null){
         try {
           await apiPost(SCRIPT_URL,{action:'ledgerSetTags', idemKey:genIdemKey('tag'),
             id:txnResult.id, tags:qx.tags});
@@ -6753,7 +6780,7 @@ function loadAccounts(){
         '<div class="acct-util-bar"><div class="acct-util-fill '+uc+'" style="width:'+Math.min(100,u*100).toFixed(1)+'%"></div></div>'+
         '<div class="acct-util-label">'+
         '<span>'+(u*100).toFixed(1)+'% of '+fmt(limit)+' limit</span>'+
-        (txnCount?'<span>'+txnCount+' txns all-time</span>':'')+'</div>';
+        (txnCount?'<span>'+txnCount+((allData&&allData.cardTotals&&allData.cardTotals.from)?' charges, TTM':' txns, TTM')+'</span>':'')+'</div>';
     }
 
     // Statement balance: what was owed at the last close (what you actually
@@ -6782,7 +6809,10 @@ function loadAccounts(){
     var histHtml = '';
     if(histTotal != null){
       var ttmAvg = monthsCount > 0 ? histTotal / monthsCount : 0;
-      histHtml = '<div class="acct-updated">TTM avg: '+fmt(ttmAvg,2)+'/mo <span style="color:var(--faint)">('+fmt(histTotal,2)+' over '+monthsCount+' mo)</span></div>';
+      // Ledger-backed totals (UX_SPEC 2A) carry from/to: say the window in words.
+      var ctW = allData && allData.cardTotals;
+      var winTxt = (ctW && ctW.from && ctW.to) ? mkeyWords(ctW.from)+' to '+mkeyWords(ctW.to)+', ' : '';
+      histHtml = '<div class="acct-updated">TTM avg: '+fmt(ttmAvg,2)+'/mo <span style="color:var(--faint)">('+winTxt+fmt(histTotal,2)+' over '+monthsCount+' mo)</span></div>';
     } else {
       histHtml = '<div class="acct-updated" style="color:var(--faint)">no transactions found</div>';
     }
