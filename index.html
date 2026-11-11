@@ -688,15 +688,13 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .pay-field input{width:100%;font-family:var(--mono);font-size:13px;padding:9px 12px;border:1px solid var(--border2);border-radius:var(--r);background:var(--surface2);color:var(--text);outline:none;transition:border-color .15s}
 .pay-field input:focus{border-color:var(--blue-lt)}
 .pay-modal-btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
-/* Quick Add (UX_SPEC 3C): in-modal note for Save + another, sign toggle, prefill hint */
+/* Quick Add (UX_SPEC 3C): in-modal note for Save + another, sign toggle */
 .qa-note{flex:1 1 100%;font-family:var(--mono);font-size:12px;color:var(--text);line-height:1.4}
 .qa-note:empty{display:none}
 .qa-amt-row{display:flex;gap:8px;align-items:stretch}
 .qa-amt-row input{flex:1 1 auto;min-width:0}
 .qa-sign{flex:0 0 auto;font-family:var(--mono);font-size:12px;padding:0 12px;border:1px solid var(--border2);border-radius:var(--r);background:var(--surface);color:var(--muted);cursor:pointer;white-space:nowrap}
 .qa-sign[aria-pressed="true"]{color:var(--text);font-weight:700;border-style:dashed;border-color:var(--text)}
-.qa-prefill{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:5px;font-style:italic}
-.qa-prefill:empty{display:none}
 /* Phone navigation (UX_SPEC 3D): More button + sheet exist only below 768px */
 .tab-more{display:none}
 .more-backdrop{position:fixed;inset:0;z-index:48;background:rgba(0,0,0,.25)}
@@ -919,6 +917,15 @@ tr:hover .racts,tr.editing .racts{opacity:1}
   .nw-snap-field input[type=date]::-webkit-date-and-time-value,
   .var-add-form input[type=date]::-webkit-date-and-time-value,
   .ei[type=date]::-webkit-date-and-time-value{ text-align:left; }
+  /* With appearance:none, iOS draws the date value at the TOP of a fixed-height box
+     (text inputs are centred natively; dates are not). A line box equal to the
+     content height (height - 2px border) centres it, on the input and on the
+     value pseudo-element, whichever iOS applies. */
+  .pay-field input[type=date], .nw-snap-field input[type=date], .var-add-form input[type=date],
+  .pay-field input[type=date]::-webkit-date-and-time-value,
+  .nw-snap-field input[type=date]::-webkit-date-and-time-value,
+  .var-add-form input[type=date]::-webkit-date-and-time-value{ line-height:42px; margin:0; padding:0; }
+  .ei[type=date], .ei[type=date]::-webkit-date-and-time-value{ line-height:34px; margin:0; padding:0; }
   .qa-amt-row .qa-sign{ height:44px; }
   /* inline grocery/gas add forms: a two-column grid replaces the fixed 90/120/130px widths */
   .var-add-form.open{ display:grid; grid-template-columns:1fr 1fr; align-items:end; }
@@ -2910,7 +2917,6 @@ function showQuickAdd(e){
   qaRenderSeg(); qaRenderFields();
   $('qa-err').textContent=''; qaNote('');
   $('qa-modal-backdrop').style.display='flex';
-  qaEnsureDescSource();
   qaFocusFirst();   // synchronous: still inside the tap, so iOS raises the keyboard
 }
 function hideQuickAdd(){ var b=$('qa-modal-backdrop'); if(b) b.style.display='none'; qaHsaPhotoReset(); }
@@ -2939,12 +2945,8 @@ function qaSetType(e){
   // Keep the chosen payment method across type tabs (e.g. opened from a card
   // tile as a txn, switched to groceries) -- re-rendering would reset it.
   var prevPm = $('qa-pm') ? $('qa-pm').value : '';
-  var prevTouched = $('qa-pm') ? $('qa-pm').dataset.touched : '';
   qaType=el.dataset.qaType; qaStagedTags=[]; qaRenderSeg(); qaRenderFields();
-  if(prevPm && $('qa-pm')){
-    $('qa-pm').value = prevPm; $('qa-pm').dataset.dflt = prevPm;
-    if(prevTouched) $('qa-pm').dataset.touched = prevTouched;
-  }
+  if(prevPm && $('qa-pm')) $('qa-pm').value = prevPm;
 }
 function qaRenderSeg(){
   document.querySelectorAll('.qa-seg-btn').forEach(function(b){
@@ -3010,9 +3012,7 @@ function qaRenderFields(){
     f.innerHTML=
       field('Date','<input type="date" id="qa-date" value="'+today+'">')+
       field('Books month',qaMonthSelect(today))+
-      field('Description','<input type="text" id="qa-desc" list="qa-desc-suggest" autocomplete="off" placeholder="e.g. Target">'+
-        '<datalist id="qa-desc-suggest">'+qaDescOptionsHtml()+'</datalist>'+
-        '<div class="qa-prefill" id="qa-prefill"></div>')+
+      field('Description','<input type="text" id="qa-desc" placeholder="e.g. Target">')+
       // The iOS decimal pad has no minus key, so the sign lives in a toggle (UX_SPEC 3C trap).
       '<div class="pay-field"><label id="qa-amt-lbl">Amount ($)</label><div class="qa-amt-row">'+
         '<input type="number" id="qa-amt" step="0.01" placeholder="0.00">'+
@@ -3085,8 +3085,6 @@ function qaRenderFields(){
       field('Payment date','<input type="date" id="qa-date" value="'+today+'">');
   }
   qaWireKeys();
-  var pmEl=$('qa-pm'); if(pmEl) pmEl.dataset.dflt = pmEl.value;
-  var discEl=$('qa-disc'); if(discEl) discEl.dataset.dflt = discEl.checked ? '1' : '';
 }
 
 // ── HSA receipt photo: camera -> canvas JPEG -> 1-page PDF, all client-side ──
@@ -3352,88 +3350,16 @@ function qaFieldsKeydown(e){
 function qaFieldsInput(e){
   var t=e.target; if(!t) return;
   if(t.id==='qa-amt') qaAmtNormalize();
-  else if(t.id==='qa-desc') qaDescChanged();
 }
 function qaFieldsChange(e){
   var t=e.target; if(!t) return;
-  // Only a real user change marks a field as theirs; programmatic prefill fires no event.
-  if(t.id==='qa-pm' || t.id==='qa-disc') t.dataset.touched='1';
-  if(t.id==='qa-desc') qaDescChanged();
   if(t.id==='qa-amt') qaAmtNormalize();
 }
-// Open on the first entry field (description / store / name), else the amount.
-// Deliberate change from the spec's "focus the amount": with Enter chaining
-// description -> amount -> done, starting at the description means the prefill has
-// already chosen the payment method by the time the amount is typed.
+// Open on the first entry field (description / store / name), else the amount:
+// Enter then chains description -> amount -> done in form order.
 function qaFocusFirst(){
   var ch=qaChain(); if(!ch.length) return;
   try { ch[0].focus({preventScroll:true}); } catch(e){ ch[0].focus(); }
-}
-
-// Description suggestions + prefill. Sources: the loaded Transactions month (txns),
-// the newest two months fetched once per session on first Quick Add open (2C made
-// txns lazy, so without this the list would be empty on a phone), and descriptions
-// saved this session. Suggestions only: nothing here is sent anywhere or persisted.
-var _qaDescRows = [], _qaDescFetch = null, _qaDescExtra = [];
-function qaEnsureDescSource(){
-  if(_qaDescFetch) return;
-  if(isDemo){ _qaDescRows = demoTxns(); _qaDescFetch = Promise.resolve(); return; }
-  if(!SCRIPT_URL || !allData || !allData.months || !allData.months.length) return;
-  var months = allData.months.slice(0, 2);
-  _qaDescFetch = Promise.all(months.map(function(m){
-    if(m===curMonthTxn && txns && txns.length) return Promise.resolve({transactions:[]});   // already in txns
-    return apiFetch(SCRIPT_URL,'transactions',{month:m});
-  })).then(function(rs){
-    var rows=[]; rs.forEach(function(r){ if(r && r.transactions) rows = rows.concat(r.transactions); });
-    _qaDescRows = rows;
-    qaRefreshDescList();
-  }).catch(function(err){
-    console.error('Quick Add description suggestions unavailable:', err);
-    _qaDescFetch = null;   // try again on the next open; the form works without them
-  });
-}
-function qaDescRemember(entry){
-  var f=entry && entry.ctx && entry.ctx.form; if(!f || !f.desc) return;
-  _qaDescExtra.push({description:f.desc, paymentMethod:f.pm, discretionary:!!f.disc, date:f.date});
-}
-// lowercased description -> most recent row {desc, pm, disc, date}
-function qaDescIndex(){
-  var idx={}, all=[].concat(_qaDescRows, (txns||[]), _qaDescExtra);
-  all.forEach(function(t){
-    var d=String(t.description||'').trim(); if(!d || !t.paymentMethod) return;
-    var k=d.toLowerCase(), cur=idx[k], dt=String(t.date||'');
-    if(!cur || dt>=cur.date) idx[k]={desc:d, pm:t.paymentMethod, disc:!!t.discretionary, date:dt};
-  });
-  return idx;
-}
-function qaDescOptionsHtml(){
-  var idx=qaDescIndex();
-  return Object.keys(idx).map(function(k){ return idx[k]; })
-    .sort(function(a,b){ return a.date<b.date?1:a.date>b.date?-1:0; })
-    .slice(0, 300)
-    .map(function(r){ return '<option value="'+esc(r.desc)+'">'; }).join('');
-}
-function qaRefreshDescList(){ var dl=$('qa-desc-suggest'); if(dl) dl.innerHTML=qaDescOptionsHtml(); }
-function _qaHasOption(sel, v){ for(var i=0;i<sel.options.length;i++) if(sel.options[i].value===v) return true; return false; }
-// Exact (case-insensitive) match fills payment method and Discretionary from the most
-// recent matching row -- only fields the user has not touched. When the match is lost
-// those fields return to their defaults, so a stale prefill never outlives its cause.
-function qaDescChanged(){
-  if(qaType!=='txn') return;
-  var d=$('qa-desc'), pm=$('qa-pm'), disc=$('qa-disc'), hint=$('qa-prefill');
-  if(!d) return;
-  var hit=qaDescIndex()[d.value.trim().toLowerCase()] || null, filled=[];
-  if(pm && !pm.dataset.touched){
-    if(hit && _qaHasOption(pm, hit.pm)){ pm.value=hit.pm; filled.push('payment method'); }
-    else pm.value = pm.dataset.dflt || '';
-  }
-  if(disc && !disc.dataset.touched){
-    if(hit){ disc.checked=hit.disc; filled.push('discretionary'); }
-    else disc.checked = disc.dataset.dflt==='1';
-  }
-  if(hint) hint.textContent = (hit && filled.length)
-    ? '\u21ba ' + filled.join(' + ') + ' filled from ' + hit.desc + (hit.date ? ' on ' + hit.date : '') + ' \u2014 change them if this one differs'
-    : '';
 }
 
 // Save + another: clear what differs per entry, keep date / books month / payment method.
@@ -3442,9 +3368,7 @@ function qaClearForAnother(){
   var tag=$('qa-tag-input'); if(tag) tag.value='';
   qaStagedTags=[]; try { renderQaTagChips(); } catch(e){}
   var hsa=$('qa-hsa-flag'); if(hsa) hsa.checked=false;        // never carry an HSA draft into the next entry
-  var pm=$('qa-pm'); if(pm) pm.dataset.dflt = pm.value;        // kept method becomes the fallback
-  var disc=$('qa-disc'); if(disc && !disc.dataset.touched) disc.checked = disc.dataset.dflt==='1';
-  var hint=$('qa-prefill'); if(hint) hint.textContent='';
+  var disc=$('qa-disc'); if(disc) disc.checked=false;          // per-entry judgement; Ben/Jenna carry over
   qaSign=1; qaSignUi();
   $('qa-err').textContent='';
   qaFocusFirst();
@@ -3646,7 +3570,7 @@ async function outboxSend(entry, trace){
   }
   perfStep(trace, 'post');
   outboxRemove(entry.key);
-  if(entry.type==='txn'){ window._qaLastTxnId = res && res.id; qaDescRemember(entry); }
+  if(entry.type==='txn') window._qaLastTxnId = res && res.id;
   afterWrite(res, trace);
   var warn = [], info = [];
   try { await _outboxFollowups(entry, res, warn, info); }
@@ -3736,8 +3660,6 @@ function outboxEdit(key){
   set('qa-date', f.date); set('qa-amt', f.amt); set('qa-desc', f.desc); set('qa-pm', f.pm);
   set('qa-store', f.store); set('qa-fx-name', f.fxName); set('qa-chk-type', f.chkType);
   chk('qa-disc', f.disc); chk('qa-ben', f.ben); chk('qa-jenna', f.jenna); chk('qa-fx-paid', f.fxPaid); chk('qa-hsa-flag', f.hsa);
-  // Restored values are the user's own: no description prefill may overwrite them.
-  ['qa-pm','qa-disc'].forEach(function(id){ var el=$(id); if(el) el.dataset.touched='1'; });
   qaAmtNormalize();   // a negative restored amount becomes magnitude + "refund"
   try { renderQaTagChips(); } catch(e){}
 }
@@ -5646,12 +5568,9 @@ function qaAddFromDrawer(){
 function qaOpenForPm(pm, ret){
   _qaDrawerReturn = ret || null;
   qaType='txn'; qaStagedTags=[]; qaRenderSeg(); qaRenderFields();
-  // A preset method is the user's choice (they tapped that card), so a description
-  // match must never overwrite it.
-  var pmSel=$('qa-pm'); if(pmSel){ pmSel.value=pm||''; pmSel.dataset.dflt=pmSel.value; pmSel.dataset.touched='1'; }
+  var pmSel=$('qa-pm'); if(pmSel) pmSel.value=pm||'';
   $('qa-err').textContent=''; qaNote('');
   $('qa-modal-backdrop').style.display='flex';
-  qaEnsureDescSource();
   qaFocusFirst();   // synchronous (the old 50 ms timeout ran outside the tap, so iOS kept the keyboard down)
 }
 
