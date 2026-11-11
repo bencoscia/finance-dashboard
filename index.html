@@ -201,6 +201,12 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 .banner{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:12px 16px;font-size:13px;color:var(--muted);display:flex;align-items:center;gap:10px;margin-bottom:20px}
 .banner.err{background:var(--terra-bg);border-color:var(--terra-bd);color:var(--terra)}
 .banner.ok{background:var(--green-bg);border-color:var(--green-bd);color:var(--green)}
+/* ── STALE MODE (UX_SPEC 2B): the screen is a saved snapshot, not a server response ──
+   Marked in TEXT (the note) plus italic, never by colour alone. Blocked controls are
+   dimmed by a stylesheet generated from STALE_BLOCKED (one source of truth). */
+.stale-note{font-family:var(--mono);font-size:12px;font-style:italic;color:var(--muted);padding:2px 0 8px}
+.stale-note[hidden]{display:none}
+.banner .bn-retry{margin-left:auto}
 .spinner{width:13px;height:13px;border:2px solid var(--border2);border-top-color:var(--blue);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0}
 
 /* ── TABS ── */
@@ -950,6 +956,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
       <button class="icon-btn" data-action="showSetup">⚙<span class="btn-lbl"> settings</span></button>
     </div>
   </header>
+  <div class="stale-note" id="stale-note" role="status" hidden></div>
   <div class="gl-strip">
     <div class="gl-band" id="gl-band" title="Investments toward $1,000,000">
       <svg class="gl-svg gl-base" viewBox="0 0 800 28" preserveAspectRatio="none" aria-hidden="true">
@@ -1751,6 +1758,12 @@ function initEventListeners(){
     var el = e.target.closest('[data-action]');
     if(!el) return;
     var action = el.dataset.action;
+    // Stale mode (D1): row/balance actions are inert until fresh data lands.
+    if(STALE_BLOCKED[action] && _stale){
+      e.preventDefault(); e.stopPropagation();
+      staleBlocks();
+      return;
+    }
     if(ACTION_MAP[action]){
       if(el.tagName === 'A') e.preventDefault();
       e.stopPropagation();
@@ -1968,15 +1981,17 @@ async function connectSheet(){
   var btn=$('connect-btn'); btn.disabled=true; btn.textContent='Connecting…';
   try {
     var data=await apiFetch(url,'all');
+    if(url!==SCRIPT_URL) snapClear();   // a different deployment: never paint the old one's data
     SCRIPT_URL=url; lsSet('fin_url',url);
     hideSetup(); $('src-badge').textContent='● live'; $('src-badge').className='badge live';
-    renderAll(data); showBanner('Connected to Google Sheet','ok');
+    staleOff();
+    renderAll(data); snapSave(); showBanner('Connected to Google Sheet','ok');
   } catch(e){
     $('setup-err').textContent='Connection failed: '+e.message+'. Make sure access is set to "Anyone".';
   } finally { btn.disabled=false; btn.textContent='Connect'; }
 }
 function useDemoData(){
-  isDemo=true; hideSetup(); $('src-badge').textContent='demo'; $('src-badge').className='badge demo';
+  isDemo=true; staleOff(); hideSetup(); $('src-badge').textContent='demo'; $('src-badge').className='badge demo';
   var d = demoData();
   d.accounts      = demoAccounts();
   d.cardTotals    = demoCardTotals();
@@ -1997,13 +2012,24 @@ function bootDashboard() {
     $('dashboard').style.display = 'block';
     $('src-badge').textContent = '● live';
     $('src-badge').className   = 'badge live';
-    showBanner('Loading data…', 'loading');
     perfBootStart();
+    // Snapshot paint (UX_SPEC 2B): show the last server response at once, marked
+    // stale, then replace it when `all` lands. Paint only -- see snapSave.
+    var snap = snapLoad(url);
+    if(snap){
+      staleOn(snap.savedAt);
+      try { renderAll(snap.data); perfBoot('snapshot'); }
+      catch(e){ console.error('snapshot render failed; discarding it:', e); snapClear(); staleOff(); }
+    }
+    showBanner(snap ? 'Refreshing\u2026' : 'Loading data\u2026', 'loading');
     apiFetch(url, 'all').then(function(data){
       perfBoot('all');
-      renderAll(data); showBanner('Ready', 'ok');
+      staleOff();
+      renderAll(data); snapSave(); perfBoot('fresh');
+      showBanner('Ready', 'ok');
     }).catch(function(e){
-      showBanner('Could not load: ' + e.message, 'err');
+      if(_stale) staleFailed(e.message);
+      else showBanner('Could not load: ' + e.message, 'err');
     });
   } else {
     // No URL available -- e.g. on GitHub Pages, where the gitignored config.js
@@ -2011,6 +2037,98 @@ function bootDashboard() {
     // Show the setup screen so the URL can be entered and saved to this browser.
     showSetup();
   }
+}
+
+// ── SNAPSHOT + STALE MODE (UX_SPEC 2B) ───────────────────────
+// localStorage['fin_snap'] = { v, savedAt, fp, data }: the last `all` response as
+// rendered (allData). Rules:
+//   * PAINT ONLY. Never the base for arithmetic sent to the server, never written
+//     back, and never saved from data that itself came from a snapshot (_stale).
+//   * Bump SNAP_VERSION on ANY change to the `all` response shape (INDEX section 10),
+//     together with the server cache version. A mismatch is discarded silently.
+//   * fp ties a snapshot to the Script URL it came from (a short hash, not the URL);
+//     a changed URL can never paint another deployment's data. Never saved in demo.
+//   * While stale, every control in STALE_BLOCKED is inert (decision D1). Quick Add
+//     creates stay enabled: idempotent appends that reference no displayed row.
+var SNAP_KEY = 'fin_snap', SNAP_VERSION = 1, SNAP_MAX_AGE_MS = 7 * 86400000;
+var _stale = false, _staleSince = 0;
+
+function _snapFp(u){
+  var h = 5381, s = String(u || '');
+  for(var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+function snapSave(){
+  if(isDemo || !SCRIPT_URL || !allData || _stale) return;
+  try {
+    localStorage.setItem(SNAP_KEY, JSON.stringify({ v: SNAP_VERSION, savedAt: Date.now(), fp: _snapFp(SCRIPT_URL), data: allData }));
+  } catch(e){
+    perfMark('snap.saveFailed', 0);   // quota / private mode: carry on without a snapshot
+  }
+}
+function snapLoad(url){
+  var raw = null;
+  try { raw = localStorage.getItem(SNAP_KEY); } catch(e){}
+  if(!raw) return null;
+  try {
+    var s = JSON.parse(raw);
+    if(!s || s.v !== SNAP_VERSION || s.fp !== _snapFp(url) || !s.data || !Array.isArray(s.data.monthly)) return null;
+    if(!(s.savedAt > 0) || Date.now() - s.savedAt > SNAP_MAX_AGE_MS) return null;
+    return s;
+  } catch(e){ return null; }
+}
+function snapClear(){ try { localStorage.removeItem(SNAP_KEY); } catch(e){} }
+
+// 'as of 9:14 AM' today, 'as of Tue 9:14 AM' otherwise
+function _staleWhen(ms){
+  var d = new Date(ms), now = new Date();
+  var t = d.toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
+  return (d.toDateString() === now.toDateString()) ? t : d.toLocaleDateString([], { weekday:'short' }) + ' ' + t;
+}
+function staleOn(savedAt){
+  _stale = true; _staleSince = savedAt;
+  document.body.classList.add('stale');
+  _staleStyle();
+  var n = $('stale-note');
+  if(n){ n.textContent = 'as of ' + _staleWhen(savedAt) + ' \u00b7 refreshing\u2026'; n.hidden = false; }
+}
+function staleOff(){
+  _stale = false;
+  document.body.classList.remove('stale');
+  var n = $('stale-note'); if(n) n.hidden = true;
+}
+// The fresh fetch failed: stay stale (never drop the marking on a failed refresh)
+// and say so in a banner that does not auto-dismiss, with a Retry.
+function staleFailed(msg){
+  var n = $('stale-note');
+  if(n){ n.textContent = 'saved data from ' + _staleWhen(_staleSince) + ' \u00b7 not refreshed'; n.hidden = false; }
+  clearTimeout(bannerTimer);
+  var b = $('banner');
+  b.style.display = 'flex'; b.className = 'banner err';
+  b.innerHTML = '<span>\u26a0 Showing saved data from ' + esc(_staleWhen(_staleSince)) + ' \u2014 could not refresh (' + esc(msg || 'network') + ').</span>' +
+                '<button class="rbtn bn-retry" data-action="refreshData">Retry</button>';
+}
+// Controls that act on a displayed row or balance (D1). Gated in the click
+// dispatcher; the same map generates the dimming CSS, so the two can't drift.
+var STALE_BLOCKED = {
+  editRow:1, delRow:1, showSplitModal:1, splitFromAddRow:1, submitSplit:1, drawerEditTxn:1,
+  togglePaid:1, editFixedName:1, editFixedCost:1, toggleRowPending:1,
+  editVarEntry:1, saveVarEdit:1, delVarEntry:1,
+  voidCard:1,
+  reimburseHsa:1, submitHsaReimburse:1, approveHsa:1, editHsa:1, submitHsaEdit:1, deleteHsa:1
+};
+var _staleStyleDone = false;
+function _staleStyle(){
+  if(_staleStyleDone) return; _staleStyleDone = true;
+  var sel = Object.keys(STALE_BLOCKED).map(function(a){ return 'body.stale [data-action="' + a + '"]'; }).join(',');
+  var st = document.createElement('style');
+  st.textContent = sel + '{opacity:.4;cursor:not-allowed}' + 'body.stale .lbal-input{opacity:.4}';
+  document.head.appendChild(st);
+}
+function staleBlocks(what){
+  if(!_stale) return false;
+  showBanner('Refreshing \u2014 ' + (what || 'that control') + ' unlocks when fresh data lands.', 'loading');
+  return true;
 }
 
 // ── network layer: bounded retry + failure log ──
@@ -2281,18 +2399,23 @@ async function refreshData(){
   try {
     var data=await apiFetch(SCRIPT_URL,'all');
     loanData=null;
-    renderAll(data); showBanner('Refreshed','ok');
+    staleOff();
+    renderAll(data); snapSave(); showBanner('Refreshed','ok');
     equityLoadedAt = 0; // next Net Worth view refetches the quote
     if($('tab-networth') && $('tab-networth').classList.contains('active')) loadEquity(true);
     if(curMonthTxn) loadTxns(curMonthTxn,true);
     if(curMonthFx)  loadFixed(curMonthFx,true);
-  } catch(e){ showBanner('Refresh failed: '+e.message,'err'); }
+  } catch(e){
+    if(_stale) staleFailed(e.message);
+    else showBanner('Refresh failed: '+e.message,'err');
+  }
   finally {
     if(btn){ btn.disabled = false; btn.style.opacity = ''; }
     if(ri)  ri.style.animation = '';
   }
 }
 
+var _nwWarmScheduled = false;
 // ── render all ──
 function renderAll(data){
   var _raT0=perfNow();
@@ -2316,27 +2439,27 @@ function renderAll(data){
   var firstMonth=months[0]||'';
   // populate both month selectors and default to most recent
   ['msel-txn','msel-fx'].forEach(function(id){
-    var sel=$(id); sel.innerHTML='<option value="">— select month —</option>';
+    var sel=$(id), keep=sel.value;   // a re-render (snapshot -> fresh, refresh) keeps the chosen month
+    sel.innerHTML='<option value="">— select month —</option>';
     months.forEach(function(m){ var o=document.createElement('option'); o.value=o.textContent=m; sel.appendChild(o); });
-    if(firstMonth) sel.value=firstMonth;
+    if(keep && months.indexOf(keep)>=0) sel.value=keep;
+    else if(firstMonth) sel.value=firstMonth;
   });
   renderMonthly(monthly,budget);
   renderBreakdown(monthly);
   renderCashflow(monthly);
   renderVsTypical(monthly);
-  fetchKnownTags();
-  migrateLocalTags();
+  // Transactions / Recurring / tag census load on first open of their tab (UX_SPEC 2C):
+  // This Week uses none of them, and they were 4 GETs + 1 POST on every boot.
+  // (refreshData reloads whichever of those tabs is already loaded.)
+  migrateLocalTags();      // both no-op unless a legacy localStorage key still exists
   migrateLocalPending();
-  // auto-load most recent month for both tabs
-  if(firstMonth){
-    loadTxns(firstMonth,true);
-    loadFixed(firstMonth,true);
-  }
   loadAccounts();
   renderThisWeek();
   // Warm net worth in the background so the header band fills without a
   // tab visit (server caches it 5 min; nwData prevents refetch on tab click)
-  if(!isDemo && SCRIPT_URL && !nwData){
+  if(!isDemo && SCRIPT_URL && !nwData && !_nwWarmScheduled){
+    _nwWarmScheduled = true;   // renderAll runs twice on a snapshot boot: schedule once
     setTimeout(function(){ loadNetWorth(); }, 1200);
     // If the first warm attempt failed (slow compute / dropped response),
     // try once more so the header band and This Week card still fill.
@@ -2644,6 +2767,7 @@ var qaStagedTags = [];
 function showQuickAdd(e){
   var el = e && e.target && e.target.closest ? e.target.closest('[data-action]') : null;
   qaType = (el && el.dataset.qaType) || 'txn';
+  fetchKnownTags();   // lazy tag census for the datalist (UX_SPEC 2C); no-op once loaded
   qaStagedTags = [];
   _qaDrawerReturn = null;
   qaRenderSeg(); qaRenderFields();
@@ -3556,6 +3680,12 @@ function renderLoans(data){
 // as the source of truth (interest/totals are sheet formulas — re-deriving
 // them locally would drift from the sheet's day-count convention).
 function saveLoanBalance(inp){
+  if(_stale){
+    var li=parseInt(inp.getAttribute('data-idx'),10), ll=(loanData&&loanData.loans||[])[li];
+    if(ll) inp.value=(ll.balance||0).toFixed(2);
+    staleBlocks('loan balance edits');
+    return;
+  }
   var idx=parseInt(inp.getAttribute('data-idx'),10);
   var row=inp.getAttribute('data-row');
   var loans=(loanData&&loanData.loans)||[];
@@ -3999,8 +4129,11 @@ async function loadDebtChart(){
     var ln, mg;
     if(isDemo){ ln=loanData||demoLoans(); mg=mortgageData||demoMortgage(); }
     else{
-      ln = loanData    || await apiFetch(SCRIPT_URL,'loans');
-      mg = mortgageData || await apiFetch(SCRIPT_URL,'mortgage');
+      var both = await Promise.all([                // parallel (was serial: ~2.5 s saved)
+        loanData     ? Promise.resolve(loanData)     : apiFetch(SCRIPT_URL,'loans'),
+        mortgageData ? Promise.resolve(mortgageData) : apiFetch(SCRIPT_URL,'mortgage')
+      ]);
+      ln = both[0]; mg = both[1];
       if(ln && !ln.error) loanData    = loanData    || ln;   // warm caches for the tabs
       if(mg && !mg.error) mortgageData = mortgageData || mg;
     }
@@ -4119,6 +4252,7 @@ function applyFresh(fresh){
   ].forEach(function(p){
     try { p[1](); } catch(e){ console.error('applyFresh: '+p[0]+' failed:', e); }
   });
+  snapSave();   // no-op while stale: a partial refresh over a snapshot is never saved
 }
 
 var _fbRunning = false, _fbDirty = false, _fbWaiting = [];
@@ -4177,10 +4311,15 @@ function getAllKnownTags(){
   txns.forEach(function(t){ (t.tags||[]).forEach(function(tag){ if(!counts[tag]) counts[tag]=1; }); });
   return counts;
 }
+// Lazy + once (UX_SPEC 2C): first Transactions open or first Quick Add open.
+// Local tag adds keep _knownTagCounts current afterwards; a failure allows a retry.
+var _tagsInFlight = false;
 function fetchKnownTags(){
-  if(isDemo || !SCRIPT_URL) return;
+  if(isDemo || !SCRIPT_URL || _knownTagCounts || _tagsInFlight) return;
+  _tagsInFlight = true;
   apiFetch(SCRIPT_URL,'ledgerTags').then(function(d){ if(d && d.tags) _knownTagCounts=d.tags; })
-    .catch(function(){ /* picker falls back to loaded-month tags */ });
+    .catch(function(){ /* picker falls back to loaded-month tags */ })
+    .then(function(){ _tagsInFlight = false; });
 }
 function persistTags(t){
   if(isDemo || !SCRIPT_URL || t.id==null) return;
@@ -8161,6 +8300,11 @@ function showTab(id,btn){
     window.scrollTo(0,0);
     try { btn.scrollIntoView({block:'nearest', inline:'nearest'}); } catch(e){}
   }
+  if(id==='txns'){
+    fetchKnownTags();
+    if(!curMonthTxn && $('msel-txn').value) loadTxns($('msel-txn').value, true);
+  }
+  if(id==='fixed' && !curMonthFx && $('msel-fx').value) loadFixed($('msel-fx').value, true);
   if(id==='loans')    loadLoans();
   if(id==='mortgage') loadMortgage();
   if(id==='networth'){ loadNetWorth(); loadEquity(); }
