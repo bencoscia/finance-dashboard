@@ -277,11 +277,20 @@ function ledgerAddTxn(p) {
     var values = readSheet(sheet);
     var newId = _ledgerNextId(values);
     var row = Math.max(sheet.getLastRow() + 1, 2);
-    sheet.getRange(row, 1, 1, 10).setValues([[newId].concat(v.rec)]);
+    // Optional tags (UX_SPEC 1B): written to col K in the SAME setValues, so a
+    // Quick Add with tags is one POST. tagsWritten tells the client this backend
+    // honoured them; an older backend omits it and the client falls back to ledgerSetTags.
+    var tagsGiven = (p.tags !== undefined && p.tags !== null);
+    var cleanTags = tagsGiven ? _ledgerCleanTags(p.tags) : [];
+    var rowVals = [newId].concat(v.rec);
+    if (cleanTags.length) rowVals.push(cleanTags.join(', '));
+    sheet.getRange(row, 1, 1, rowVals.length).setValues([rowVals]);
     SpreadsheetApp.flush();
     invalidateLedgerCache();
     invalidateSheet(LEDGER_TXNS);
-    return { ok: true, id: newId, month: v.rec[1] };
+    var res = { ok: true, id: newId, month: v.rec[1] };
+    if (tagsGiven) { res.tagsWritten = true; res.tags = cleanTags; }
+    return res;
   });
 }
 
@@ -1215,14 +1224,7 @@ function ledgerAddIncome(p) {
 // the client always sends the row's full tag list.
 function ledgerSetTags(p) {
   if (!p.id) return { error: 'ledgerSetTags needs id.' };
-  var tags = p.tags;
-  if (typeof tags === 'string') { try { tags = JSON.parse(tags); } catch (e) { tags = String(p.tags).split(','); } }
-  if (!tags) tags = [];
-  var clean = [], i;
-  for (i = 0; i < tags.length; i++) {
-    var t = String(tags[i]).trim().toLowerCase();
-    if (t && t.indexOf(',') < 0 && clean.indexOf(t) < 0) clean.push(t);
-  }
+  var clean = _ledgerCleanTags(p.tags); // perf.gs -- shared with ledgerAddTxn
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(LEDGER_TXNS);
   if (!sheet) return { error: 'Sheet not found: ' + LEDGER_TXNS };

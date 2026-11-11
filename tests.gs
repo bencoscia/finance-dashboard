@@ -1263,6 +1263,7 @@ function _runTestSuite(includeSlow) {
     step('testApproveDeleteHsa', testApproveDeleteHsa);
     step('testEquity', testEquity);
     step('testMonthCacheTiers', testMonthCacheTiers);
+    step('testLedgerCardTotals', testLedgerCardTotals);   // perf.gs (UX_SPEC 2A + tag normaliser)
 
     if (includeSlow) {
       // These scan all month sheets -- slow but thorough
