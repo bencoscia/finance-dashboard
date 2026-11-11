@@ -1264,6 +1264,7 @@ function _runTestSuite(includeSlow) {
     step('testEquity', testEquity);
     step('testMonthCacheTiers', testMonthCacheTiers);
     step('testLedgerCardTotals', testLedgerCardTotals);   // perf.gs (UX_SPEC 2A + tag normaliser)
+    step('testFreshEnvelope', testFreshEnvelope);         // perf.gs (UX_SPEC 1B)
 
     if (includeSlow) {
       // These scan all month sheets -- slow but thorough

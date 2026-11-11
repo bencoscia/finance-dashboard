@@ -65,6 +65,53 @@ function _perfMergeT(base, sub, prefix) {
 // Apps Script re-evaluates globals per execution, so these never leak across requests.
 var _perfCardT = null, _perfMonthsT = null;
 
+// -- Payload caches for sheets that are read rarely but sat on the hot path --
+// Bump a key's version whenever that function's return shape changes.
+var PERF_LOANS_KEY = 'loans_v1';
+var PERF_ACCTS_KEY = 'accts_v1';
+var PERF_PAYLOAD_TTL = 300; // 5 min, same as the other payload caches
+
+// Read-through CacheService cache. Error results are never cached, and an
+// oversized or failed put just means the next request recomputes.
+function _perfCached(key, fn) {
+  var cache = CacheService.getScriptCache();
+  try { var hit = cache.get(key); if (hit) return JSON.parse(hit); } catch (e) {}
+  var out = fn();
+  if (out && !out.error) { try { cache.put(key, JSON.stringify(out), PERF_PAYLOAD_TTL); } catch (e2) {} }
+  return out;
+}
+function invalidateLoanAcctCache() {
+  try { CacheService.getScriptCache().removeAll([PERF_LOANS_KEY, PERF_ACCTS_KEY]); } catch (e) {}
+}
+
+// -- Fresh envelope (UX_SPEC 1B): what changed, returned by the write itself --
+// Same shapes as all.cardBalances / all.monthly / all.months, so the client's
+// applyFresh is the one code path for both. If the `all` shape changes, bump the
+// server cache versions AND the client's SNAP_VERSION together.
+function _perfBuildFresh() {
+  var cb = getCardBalances();                 // card cache was just invalidated -> recompute
+  if (cb && cb.error) throw new Error('cardBalances: ' + cb.error);
+  var q = getQuickData();                     // {monthly, months, updated[, _t]}
+  var out = { cardBalances: cb, monthly: q.monthly, months: q.months, updated: q.updated };
+  _perfFreshT = _perfMergeT(_perfMergeT({}, cb && cb._t, 'cb.'), q && q._t, 'q.');
+  if (cb) delete cb._t;
+  return out;
+}
+var _perfFreshT = null;
+
+// Attach builder() as data.fresh. Error results are left alone; a builder
+// failure is reported as data.freshError (the client falls back to two GETs).
+function _perfAttachFresh(data, builder) {
+  if (!data || typeof data !== 'object' || data.error) return data;
+  var t0 = Date.now();
+  _perfFreshT = null;
+  try { data.fresh = builder(); }
+  catch (e) { data.freshError = String((e && e.message) || e); }
+  var t = { fresh: Date.now() - t0 };
+  data._t = _perfMergeT(t, _perfFreshT, '');
+  return data;
+}
+
 // 'YYYY-MM' + n months -> 'YYYY-MM'
 function _perfMkAdd(mk, n) {
   var y = parseInt(mk.slice(0, 4), 10), m = parseInt(mk.slice(5, 7), 10) - 1 + n;
@@ -145,6 +192,37 @@ function ledgerCardTotals() {
 }
 
 // -- Tests (pure; fixtures only) ----------------------------------------------
+function testFreshEnvelope() {
+  section('Fresh envelope (UX_SPEC 1B)');
+  var e1 = _perfAttachFresh({ error: 'x' }, function () { return { monthly: [] }; });
+  assert(e1.fresh === undefined && e1.freshError === undefined, 'error result: no envelope attached');
+  var a1 = _perfAttachFresh({ ok: true, id: 1 }, function () { return { cardBalances: {}, monthly: [], months: [] }; });
+  assert(a1.ok === true && a1.fresh && a1.fresh.monthly instanceof Array, 'ok result gets fresh');
+  assert(typeof a1._t.fresh === 'number', 'envelope cost reported in _t.fresh');
+  var b1 = _perfAttachFresh({ ok: true }, function () { throw new Error('boom'); });
+  assert(b1.ok === true && b1.fresh === undefined && /boom/.test(b1.freshError), 'builder failure never fails the write');
+
+  // idempotency: the cached result stays small; a replay still gets an envelope
+  var key = '_perf_fresh_' + Date.now(), calls = 0;
+  var r1 = _withIdem({ idemKey: key }, function () { calls++; return { ok: true, id: 7 }; });
+  _perfAttachFresh(r1, function () { return { monthly: [] }; });
+  var cached = JSON.parse(CacheService.getScriptCache().get(key));
+  assert(cached.id === 7 && cached.fresh === undefined && cached._t === undefined, 'idem cache holds the small result only (no fresh, no _t)');
+  var r2 = _withIdem({ idemKey: key }, function () { calls++; return { ok: true, id: 8 }; });
+  assert(r2.id === 7 && calls === 1, 'replay returns the original result without re-running the write');
+  _perfAttachFresh(r2, function () { return { monthly: [] }; });
+  assert(r2.fresh !== undefined, 'replay still carries a fresh envelope');
+  try { CacheService.getScriptCache().remove(key); } catch (e) {}
+
+  // live shape == all (reads only; no writes)
+  var live = _perfBuildFresh(), all = getAllData();
+  var keys = function (o) { return Object.keys(o || {}).filter(function (k) { return k !== '_t'; }).sort(); };
+  assertEqual(keys(live.cardBalances), keys(all.cardBalances), 'fresh.cardBalances keys == all.cardBalances');
+  assertEqual(keys((live.monthly || [])[0]), keys((all.monthly || [])[0]), 'fresh.monthly row keys == all.monthly');
+  assertEqual(live.months, all.months, 'fresh.months == all.months');
+  assert(JSON.stringify(live).length < 90000, 'envelope stays well under the 100 KB CacheService limit');
+}
+
 function testLedgerCardTotals() {
   section('Ledger card totals (D4) + tag normaliser');
   var TH = ['id','date','month','description','amount','method','category','discretionary','ben','jenna','tags','pending'];
@@ -191,6 +269,33 @@ function testLedgerCardTotals() {
   assertEqual(_ledgerCleanTags('["x","X"]'), ['x'], 'tags: JSON string');
   assertEqual(_ledgerCleanTags('x, y'), ['x', 'y'], 'tags: comma string');
   assertEqual(_ledgerCleanTags(undefined), [], 'tags: missing -> []');
+
+  // checking seed now comes from cfg (same TRAP as cutover: no direct Config reads)
+  var os2 = _configDefaults();
+  assert(os2.checkingSeed === null && os2.checkingSeedMonth === '', 'checking seed defaults: null / empty');
+  _applyRawConfig(os2, { 'checking_seed': '1,234.50', 'checking_seed_month': '2026-07' });
+  assertApprox(os2.checkingSeed, 1234.5, 'checking_seed parses money text');
+  assertEqual(os2.checkingSeedMonth, '2026-07', 'checking_seed_month parses YYYY-MM');
+
+  // payload cache round trip (Apps Script only; skipped under node)
+  if (typeof CacheService !== 'undefined') {
+    var tk = '_perf_test_' + Date.now(), calls = 0;
+    var a1 = _perfCached(tk, function () { calls++; return { v: 1 }; });
+    var a2 = _perfCached(tk, function () { calls++; return { v: 2 }; });
+    assert(a1.v === 1 && a2.v === 1 && calls === 1, 'payload cache: second call served from cache');
+    var ek = tk + '_err', ecalls = 0;
+    _perfCached(ek, function () { ecalls++; return { error: 'x' }; });
+    _perfCached(ek, function () { ecalls++; return { error: 'x' }; });
+    assert(ecalls === 2, 'payload cache: error results are not cached');
+    try { CacheService.getScriptCache().removeAll([tk, ek]); } catch (e) {}
+  }
+
+  // ledger_cutover now comes from cfg (UX_SPEC: Config sheet read removed from every request)
+  var oc = _configDefaults();
+  assert(oc.ledgerCutover === false, 'cutover defaults to false');
+  _applyRawConfig(oc, { 'ledger_cutover': true });  assert(oc.ledgerCutover === true,  'cutover: checkbox TRUE');
+  _applyRawConfig(oc, { 'ledger_cutover': 'FALSE' }); assert(oc.ledgerCutover === false, 'cutover: text FALSE');
+  _applyRawConfig(oc, { 'ledger_cutover': ' true ' }); assert(oc.ledgerCutover === true, 'cutover: text true, padded');
 
   // lap timers
   var lt = _perfLaps(); _perfLap(lt, 'a'); _perfLap(lt, 'a'); _perfLapsDone(lt);

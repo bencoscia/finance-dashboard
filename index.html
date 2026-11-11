@@ -207,6 +207,13 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 .stale-note{font-family:var(--mono);font-size:12px;font-style:italic;color:var(--muted);padding:2px 0 8px}
 .stale-note[hidden]{display:none}
 .banner .bn-retry{margin-left:auto}
+/* ── OUTBOX STRIP (UX_SPEC 1C): pending / failed creates, said in words + italic/weight ── */
+.outbox-strip{display:flex;flex-direction:column;gap:6px;padding:0 0 10px}
+.outbox-strip[hidden]{display:none}
+.ob-line{font-size:13px;display:flex;flex-wrap:wrap;align-items:center;gap:8px;justify-content:space-between}
+.ob-sending{font-style:italic;color:var(--muted)}
+.ob-failed,.ob-unconfirmed{font-weight:600;border:1px solid var(--terra-bd);background:var(--terra-bg);color:var(--terra);border-radius:var(--r);padding:8px 10px}
+.ob-btns{display:flex;gap:6px}
 .spinner{width:13px;height:13px;border:2px solid var(--border2);border-top-color:var(--blue);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0}
 
 /* ── TABS ── */
@@ -957,6 +964,7 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     </div>
   </header>
   <div class="stale-note" id="stale-note" role="status" hidden></div>
+  <div class="outbox-strip" id="outbox-strip" role="status" aria-live="polite" hidden></div>
   <div class="gl-strip">
     <div class="gl-band" id="gl-band" title="Investments toward $1,000,000">
       <svg class="gl-svg gl-base" viewBox="0 0 800 28" preserveAspectRatio="none" aria-hidden="true">
@@ -2013,6 +2021,7 @@ function bootDashboard() {
     $('src-badge').textContent = '● live';
     $('src-badge').className   = 'badge live';
     perfBootStart();
+    outboxBoot();   // leftover creates from a previous session (UX_SPEC 1C)
     // Snapshot paint (UX_SPEC 2B): show the last server response at once, marked
     // stale, then replace it when `all` lands. Paint only -- see snapSave.
     var snap = snapLoad(url);
@@ -2166,10 +2175,24 @@ window.netLog = function(){ var l = lsGetJSON(NET_LOG_KEY, []); console.table(l)
 window.netLogClear = function(){ lsSetJSON(NET_LOG_KEY, []); return 'cleared'; };
 
 // One attempt. Returns {data} on success, throws an Error tagged with .retryable/.status/.where.
+// Per-attempt timeout. iOS holds a request open while the phone has no network
+// (measured: 55-60 s) instead of failing it, which left Retry showing nothing.
+// Reads abort at 20 s; writes get 45 s (a legit write + fresh envelope is ~5 s,
+// and an aborted POST may still land, so it must not be cut short casually).
+// Aborts are retryable; netWithRetry only retries a POST that carries an idemKey.
+var NET_TIMEOUT_GET_MS = 20000, NET_TIMEOUT_POST_MS = 45000;
 async function netAttempt(url, opts){
-  var res;
+  var res, ctl = (typeof AbortController === 'function') ? new AbortController() : null, timer = null;
+  var limit = (opts && opts.method === 'POST') ? NET_TIMEOUT_POST_MS : NET_TIMEOUT_GET_MS;
+  if(ctl){ opts = Object.assign({}, opts, { signal: ctl.signal }); timer = setTimeout(function(){ ctl.abort(); }, limit); }
   try { res = await fetch(url, opts); }
-  catch(e){ var ne = new Error('network error (' + e.message + ')'); ne.retryable = true; ne.status = 0; ne.where = '(no response)'; throw ne; }
+  catch(e){
+    if(timer) clearTimeout(timer);
+    var aborted = e && (e.name === 'AbortError');
+    var ne = new Error(aborted ? ('timed out after ' + Math.round(limit/1000) + ' s') : ('network error (' + e.message + ')'));
+    ne.retryable = true; ne.status = aborted ? 'timeout' : 0; ne.where = '(no response)'; throw ne;
+  }
+  if(timer) clearTimeout(timer);
   if(!res.ok){
     var he = new Error('HTTP ' + res.status); he.status = res.status; he.where = netWhere(res.url);
     he.retryable = !!NET_RETRY_STATUS[res.status]; throw he;
@@ -2779,9 +2802,9 @@ async function submitQuickAddSplit(){
   // Same save as submitQuickAdd's txn branch, then jump into the split modal.
   if(qaType!=='txn') return;
   var month = qaResolvedMonth();
-  await submitQuickAdd();                      // validates, saves, closes on success
-  var newId = window._qaLastTxnId;
-  if(newId == null) return;                    // save failed; submitQuickAdd showed the error
+  var res = await submitQuickAdd();            // closes at once; resolves when the outbox send lands
+  var newId = res && res.id;
+  if(newId == null) return;                    // validation or save failed; already reported
   window._qaLastTxnId = null;
   try {
     curMonthTxn = month;
@@ -3040,144 +3063,44 @@ function mkey(name){
   return p[1]+'-'+('0'+(i+1)).slice(-2);
 }
 
-async function submitQuickAdd(){
+async function submitQuickAdd(opts){
+  opts = opts || {};
   window._qaLastTxnId = null;
   var btn=$('qa-submit-btn');
   var month=qaResolvedMonth();
   var amtEl=$('qa-amt');
   var amt=amtEl?parseFloat(amtEl.value):NaN;
   $('qa-err').textContent='';
-  if(isNaN(amt)){ $('qa-err').textContent='Enter an amount.'; return; }
-  if(!month && qaType!=='hsa'){ $('qa-err').textContent='No month loaded yet — refresh first.'; return; }
+  if(isNaN(amt)){ $('qa-err').textContent='Enter an amount.'; return null; }
+  if(!month && qaType!=='hsa'){ $('qa-err').textContent='No month loaded yet — refresh first.'; return null; }
   // Demo guard covers ALL entry types -- without it, an empty SCRIPT_URL
   // surfaces as a cryptic fetch error instead of a clean banner.
-  if(isDemo || !SCRIPT_URL){ hideQuickAdd(); showBanner('Demo mode — nothing saved','ok'); return; }
-  btn.disabled=true; btn.textContent='Saving…';
+  if(isDemo || !SCRIPT_URL){ hideQuickAdd(); showBanner('Demo mode — nothing saved','ok'); return null; }
   var trace=perfTrace('save.qa.'+qaType);   // t0 = the Save tap
-  var qaClosed=false;                       // after close, errors go to a banner, not the hidden modal
-  // Secondary-write outcomes, shown in the FINAL banner -- a banner shown mid-save
-  // is overwritten by the closing 'Saved' (partial failures used to vanish).
-  var qaWarn=[], qaInfo=[];
+
+  // Creates go through the outbox (UX_SPEC 1C): validate, record intent, close at
+  // once, send in the background. Card payments and HSA receipts keep the blocking
+  // modal (a payment moves a displayed balance; a photo upload is large + one-shot).
+  if(OUTBOX_TYPES[qaType]){
+    var entry = qaBuildEntry(month, amt);
+    if(entry.error){ $('qa-err').textContent = entry.error; return null; }
+    outboxPut(entry);
+    hideQuickAdd(); perfStep(trace,'closed');
+    return outboxSend(entry, trace);
+  }
+
+  btn.disabled=true; btn.textContent='Saving…';
+  var qaInfo=[];
   try{
-    if(qaType==='txn'){
-      // Flush a tag typed but never Enter-ed -- silently dropping it is the
-      // kind of quiet data loss this dashboard shouldn't do. Then capture every
-      // field the follow-up writes need: they run after the modal has closed.
-      var _pendTag = $('qa-tag-input');
-      if(_pendTag && _pendTag.value.trim()) qaAddStagedTag(_pendTag.value);
-      var qx = { date:$('qa-date').value, desc:$('qa-desc').value.trim(), pm:$('qa-pm').value,
-                 hsa:!!($('qa-hsa-flag') && $('qa-hsa-flag').checked), tags:qaStagedTags.slice() };
-      var txnPayload = {action:'ledgerAddTxn', idemKey:genIdemKey('txn'), month:mkey(month),
-        date:qx.date, description:qx.desc, amount:amt,
-        method:qx.pm, category:'onetime', discretionary:$('qa-disc').checked,
-        ben:$('qa-ben').checked, jenna:$('qa-jenna').checked};
-      // Tags ride on the same POST (UX_SPEC 1B). A backend that honoured them answers
-      // tagsWritten:true; an older one ignores the field, and the follow-up below writes them.
-      if(qx.tags.length) txnPayload.tags = qx.tags;
-      var txnResult = await apiPost(SCRIPT_URL, txnPayload);
-      var tagsPending = qx.tags.length && !(txnResult && txnResult.tagsWritten === true);
-      if(qx.tags.length && !tagsPending && _knownTagCounts)
-        qx.tags.forEach(function(t){ if(!_knownTagCounts[t]) _knownTagCounts[t]=1; });
-      perfStep(trace,'post');
-      window._qaLastTxnId = txnResult && txnResult.id;
-      // The txn is saved: refresh tiles and close now. The HSA draft and tags
-      // below are follow-ups whose outcome lands in the final banner.
-      afterWrite(txnResult, trace);
-      hideQuickAdd(); qaClosed=true; perfStep(trace,'closed');
-      if(qx.hsa || tagsPending) showBanner('Saved \u2014 finishing up\u2026','loading');
-      // HSA-eligible: create a needs-review draft so the HSA tab flags that a
-      // receipt is needed. Second write; if it fails the txn is already saved,
-      // so say exactly that rather than pretending the whole save failed.
-      if(qx.hsa){
-        try {
-          var hsaRes = await apiPost(SCRIPT_URL,{action:'addHsaReceipt', idemKey:genIdemKey('hsaAdd'),
-            needsReview:true, dateIncurred:qx.date, amount:Math.abs(amt),
-            provider:'', description:qx.desc, category:'',
-            funding:'OOP', receiptLink:''});
-          if(hsaRes && hsaRes.duplicateOf != null)
-            qaInfo.push('HSA receipt already on file as #'+hsaRes.duplicateOf+' (same date + amount) \u2014 no draft added');
-          loadHsa(true);
-        } catch(hsaErr){
-          qaWarn.push('the HSA draft failed: '+hsaErr.message+' — add it from the HSA tab');
-        }
-      }
-      // Staged tags: same pattern as the HSA draft above -- a second write
-      // after the txn has an id, since tags attach to a row that didn't
-      // exist a moment ago. Honest partial failure: the txn is already saved
-      // either way.
-      if(tagsPending && txnResult && txnResult.id != null){
-        try {
-          await apiPost(SCRIPT_URL,{action:'ledgerSetTags', idemKey:genIdemKey('tag'),
-            id:txnResult.id, tags:qx.tags});
-          if(_knownTagCounts) qx.tags.forEach(function(t){ if(!_knownTagCounts[t]) _knownTagCounts[t]=1; });
-        } catch(tagErr){
-          qaWarn.push('tags failed to save: '+tagErr.message+' — add them from the transaction list');
-        }
-      }
-      // If the card drawer is open on this card, refresh it so the new txn appears
-      var _dr = $('card-drawer');
-      if(_qaDrawerReturn && _qaDrawerReturn.pm===qx.pm){
-        openCardDrawer(_qaDrawerReturn.pm, _qaDrawerReturn.title);
-      } else if(typeof _drawerPm!=='undefined' && _drawerPm===qx.pm &&
-         _dr && _dr.classList.contains('open')){
-        openCardDrawer(_drawerPm, $('cdr-title').textContent);
-      }
-      _qaDrawerReturn = null;
-      if(curMonthTxn===month) loadTxns(month,true);
-    } else if(qaType==='groceries'||qaType==='gas'){
-      if(!$('qa-pm').value){ $('qa-err').textContent='Select a payment method.'; return; }
-      var varRes = await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('var'), month:mkey(month),
-        category:qaType, date:$('qa-date').value, amount:Math.abs(amt),
-        method:$('qa-pm').value,
-        description:qaType==='groceries'?$('qa-store').value.trim():'Gas',
-        discretionary:false, ben:true, jenna:true});
-      perfStep(trace,'post');
-      if(curMonthFx===month) loadFixed(month,true);
-      afterWrite(varRes, trace);
-    } else if(qaType==='fixed'){
-      var fxName=$('qa-fx-name').value.trim();
-      if(!fxName){ $('qa-err').textContent='Enter a name.'; btn.disabled=false; btn.textContent='Save'; return; }
-      // paid without a date: the server stamps today
-      var fxRes = await apiPost(SCRIPT_URL,{action:'ledgerAddFixed', idemKey:genIdemKey('fx'), month:mkey(month),
-        name:fxName, amount:amt, source:$('qa-pm').value,
-        paid:$('qa-fx-paid').checked});
-      perfStep(trace,'post');
-      loadFixed(month, true);          // refresh the Recurring tab list
-      afterWrite(fxRes, trace);        // a paid card-source row changes that card's balance
-    } else if(qaType==='checking'){
-      var chkType=$('qa-chk-type').value;
-      // Paychecks are income. Transfers between your own accounts are
-      // neither income nor an expense: category 'transfer' + a Checking-
-      // method row excludes both directions from income/expense totals
-      // while still moving the checking balance (which does balance -= amount
-      // for every Checking row, so a NEGATIVE amount credits checking).
-      var chkRes;
-      if(chkType==='deposit'){
-        chkRes = await apiPost(SCRIPT_URL,{action:'ledgerAddIncome', idemKey:genIdemKey('chk'), month:mkey(month),
-          source:$('qa-desc').value.trim()||'Paycheck',
-          amount:Math.abs(amt), date:$('qa-date').value});
-      } else if(chkType==='transfer_in'){
-        chkRes = await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('chk'), month:mkey(month),
-          description:$('qa-desc').value.trim()||'Transfer in', category:'transfer',
-          method:'Checking', amount:-Math.abs(amt), date:$('qa-date').value,
-          discretionary:false, ben:false, jenna:false});
-      } else {
-        chkRes = await apiPost(SCRIPT_URL,{action:'ledgerAddTxn', idemKey:genIdemKey('chk'), month:mkey(month),
-          description:$('qa-desc').value.trim()||'Withdrawal', category:'transfer',
-          method:'Checking', amount:Math.abs(amt), date:$('qa-date').value,
-          discretionary:false, ben:false, jenna:false});
-      }
-      perfStep(trace,'post');
-      afterWrite(chkRes, trace);
-    } else if(qaType==='hsa'){
-      if(amt<=0){ $('qa-err').textContent='Enter a receipt amount greater than zero.'; return; }
-      if(qaHsaBusy){ $('qa-err').textContent='Photo still processing — try again in a second.'; return; }
+    if(qaType==='hsa'){
+      if(amt<=0){ $('qa-err').textContent='Enter a receipt amount greater than zero.'; return null; }
+      if(qaHsaBusy){ $('qa-err').textContent='Photo still processing — try again in a second.'; return null; }
       if(qaHsaPdf){
         // Photo path: one atomic server write saves the PDF to the receipt folder
         // (named DATE~provider~amount.pdf) AND places the row via the folder
         // scan's own dedup. idemKey => apiPost's retry can't create a 2nd file.
         var hProv=$('qa-hsa-provider').value.trim();
-        if(!hProv){ $('qa-err').textContent='Provider is required with a photo — it becomes part of the filename.'; return; }
+        if(!hProv){ $('qa-err').textContent='Provider is required with a photo — it becomes part of the filename.'; return null; }
         btn.textContent='Uploading…';
         var up = await apiPost(SCRIPT_URL,{action:'uploadHsaReceipt', idemKey:genIdemKey('hsaUpload'),
           dateIncurred:$('qa-date').value, amount:amt, provider:hProv,
@@ -3214,23 +3137,226 @@ async function submitQuickAdd(){
       }
       afterWrite(payRes, trace);       // authoritative; also corrects the optimistic tile above
     }
-    hideQuickAdd(); qaClosed=true; perfStep(trace,'closed');
-    if(qaWarn.length) showBanner('Saved, but '+qaWarn.join('; ')+'.','err');
-    else showBanner('Saved'+(qaInfo.length?' \u2014 '+qaInfo.join('; '):''),'ok');
+    hideQuickAdd(); perfStep(trace,'closed');
+    showBanner('Saved'+(qaInfo.length?' \u2014 '+qaInfo.join('; '):''),'ok');
     renderThisWeek();
   }catch(e){
-    if(qaClosed){
-      // Primary write already saved and the modal is gone: never report into a hidden field.
-      console.error('Quick Add follow-up failed:', e);
-      showBanner('Saved, but a follow-up step failed: '+e.message,'err');
-    } else {
-      $('qa-err').textContent=(e.message&&e.message.indexOf('fetch')>=0)
-        ?'Network error — refresh to check if saved before trying again.'
-        :('Failed: '+e.message);
-    }
+    $('qa-err').textContent=(e.message&&e.message.indexOf('fetch')>=0)
+      ?'Network error — refresh to check if saved before trying again.'
+      :('Failed: '+e.message);
   }finally{
     btn.disabled=false; btn.textContent='Save';
   }
+  return null;
+}
+
+// ── OUTBOX (UX_SPEC 1C) ──────────────────────────────────────
+// A log of INTENT, not state: nothing renders from it as if it were saved. Each
+// entry carries the exact payload + its idemKey, so any retry -- automatic in
+// apiPost, a Retry tap, or after a relaunch -- is deduplicated server-side for 6 h
+// (the _withIdem TTL). Lines in the strip under the header say what is happening in
+// words ("saving", "NOT saved", "unconfirmed"), never by colour alone.
+// TRAP: Retry always resends the SAME payload with the SAME key. Editing and
+// resending under the old key would let the server return the first attempt's
+// cached result and silently drop the edit, so Edit (offered only when the server
+// definitely refused the write) always mints a new key.
+var OUTBOX_KEY = 'fin_outbox', OUTBOX_RETRY_MS = 6 * 3600 * 1000;
+var OUTBOX_TYPES = { txn:1, groceries:1, gas:1, fixed:1, checking:1 };
+
+function outboxAll(){ var l = lsGetJSON(OUTBOX_KEY, []); return Array.isArray(l) ? l : []; }
+function _outboxWrite(list){
+  if(!lsSetJSON(OUTBOX_KEY, list)) console.error('outbox: localStorage write failed; entries kept for this page only');
+  _outboxMem = list;
+}
+var _outboxMem = null;
+function _outboxList(){ return _outboxMem || (_outboxMem = outboxAll()); }
+function outboxPut(entry){
+  var list = _outboxList().filter(function(x){ return x.key !== entry.key; });
+  list.push(entry); _outboxWrite(list); renderOutbox();
+}
+function outboxRemove(key){
+  _outboxWrite(_outboxList().filter(function(x){ return x.key !== key; })); renderOutbox();
+}
+function _outboxGet(key){ var l=_outboxList(); for(var i=0;i<l.length;i++) if(l[i].key===key) return l[i]; return null; }
+
+// Validate the open form and turn it into an outbox entry. Pure read of the form.
+function qaBuildEntry(month, amt){
+  var t = qaType, v = function(id){ var el=$(id); return el ? el.value : ''; };
+  var c = function(id){ var el=$(id); return !!(el && el.checked); };
+  var form = { type:t, month:month, date:v('qa-date'), amt:v('qa-amt'), desc:v('qa-desc').trim(), pm:v('qa-pm'),
+               disc:c('qa-disc'), ben:c('qa-ben'), jenna:c('qa-jenna'), store:v('qa-store').trim(),
+               fxName:v('qa-fx-name').trim(), fxPaid:c('qa-fx-paid'), chkType:v('qa-chk-type'), hsa:c('qa-hsa-flag') };
+  var key, payload, label, ctx = { form: form };
+  if(t==='txn'){
+    // Flush a tag typed but never Enter-ed -- silently dropping it is quiet data loss.
+    var pend = $('qa-tag-input');
+    if(pend && pend.value.trim()) qaAddStagedTag(pend.value);
+    form.tags = qaStagedTags.slice();
+    key = genIdemKey('txn');
+    payload = {action:'ledgerAddTxn', idemKey:key, month:mkey(month), date:form.date, description:form.desc,
+               amount:amt, method:form.pm, category:'onetime', discretionary:form.disc, ben:form.ben, jenna:form.jenna};
+    if(form.tags.length) payload.tags = form.tags;
+    label = (form.desc || 'Transaction');
+    // Follow-up keys are minted now so a retry after a relaunch reuses them too.
+    ctx.hsaKey = genIdemKey('hsaAdd'); ctx.tagKey = genIdemKey('tag');
+    ctx.drawer = _qaDrawerReturn ? { pm:_qaDrawerReturn.pm, title:_qaDrawerReturn.title } : null;
+    _qaDrawerReturn = null;
+  } else if(t==='groceries' || t==='gas'){
+    if(!form.pm) return { error:'Select a payment method.' };
+    key = genIdemKey('var');
+    payload = {action:'ledgerAddTxn', idemKey:key, month:mkey(month), category:t, date:form.date, amount:Math.abs(amt),
+               method:form.pm, description:t==='groceries'?form.store:'Gas', discretionary:false, ben:true, jenna:true};
+    label = t==='groceries' ? ('Groceries' + (form.store ? ' \u00b7 '+form.store : '')) : 'Gas';
+  } else if(t==='fixed'){
+    if(!form.fxName) return { error:'Enter a name.' };
+    key = genIdemKey('fx');
+    // paid without a date: the server stamps today
+    payload = {action:'ledgerAddFixed', idemKey:key, month:mkey(month), name:form.fxName, amount:amt,
+               source:form.pm, paid:form.fxPaid};
+    label = form.fxName;
+  } else if(t==='checking'){
+    // Paychecks are income. Transfers between your own accounts are neither income
+    // nor an expense: category 'transfer' + a Checking-method row excludes both
+    // directions from totals while still moving the checking balance (balance -=
+    // amount for every Checking row, so a NEGATIVE amount credits checking).
+    key = genIdemKey('chk');
+    if(form.chkType==='deposit'){
+      payload = {action:'ledgerAddIncome', idemKey:key, month:mkey(month), source:form.desc||'Paycheck',
+                 amount:Math.abs(amt), date:form.date};
+      label = form.desc || 'Paycheck';
+    } else if(form.chkType==='transfer_in'){
+      payload = {action:'ledgerAddTxn', idemKey:key, month:mkey(month), description:form.desc||'Transfer in',
+                 category:'transfer', method:'Checking', amount:-Math.abs(amt), date:form.date,
+                 discretionary:false, ben:false, jenna:false};
+      label = form.desc || 'Transfer in';
+    } else {
+      payload = {action:'ledgerAddTxn', idemKey:key, month:mkey(month), description:form.desc||'Withdrawal',
+                 category:'transfer', method:'Checking', amount:Math.abs(amt), date:form.date,
+                 discretionary:false, ben:false, jenna:false};
+      label = form.desc || 'Withdrawal';
+    }
+  } else return { error:'Unsupported entry type: '+t };
+  return { key:key, type:t, month:month, at:Date.now(), status:'sending', label:label,
+           amount:Math.abs(amt), payload:payload, ctx:ctx };
+}
+
+// Send one entry. Resolves to the server result, or null on failure (the entry is
+// then kept, marked failed, with Retry / Discard in the strip).
+async function outboxSend(entry, trace){
+  entry.status = 'sending'; delete entry.err; delete entry.msg;
+  outboxPut(entry);
+  var res;
+  try { res = await apiPost(SCRIPT_URL, entry.payload); }
+  catch(e){
+    entry.status = 'failed';
+    entry.err = e.app ? 'refused' : 'unknown';   // refused = server answered with an error: definitely not written
+    entry.msg = String(e.message || 'network').slice(0, 160);
+    outboxPut(entry);
+    perfStep(trace, 'failed', { ok:false });
+    showBanner('NOT saved: '+esc(entry.label)+' '+fmt(entry.amount,2)+' \u2014 '+
+      (entry.err==='refused' ? esc(entry.msg) : 'no answer from the server; it may have saved')+'. See the line under the header.', 'err');
+    return null;
+  }
+  perfStep(trace, 'post');
+  outboxRemove(entry.key);
+  if(entry.type==='txn') window._qaLastTxnId = res && res.id;
+  afterWrite(res, trace);
+  var warn = [], info = [];
+  try { await _outboxFollowups(entry, res, warn, info); }
+  catch(fe){ console.error('Quick Add follow-up failed:', fe); warn.push('a follow-up step failed: '+fe.message); }
+  if(warn.length) showBanner('Saved '+esc(entry.label)+', but '+warn.join('; ')+'.','err');
+  else showBanner('Saved '+esc(entry.label)+' '+fmt(entry.amount,2)+(info.length?' \u2014 '+info.join('; '):''),'ok');
+  try { renderThisWeek(); } catch(re){ console.error('renderThisWeek after save failed:', re); }
+  return res;
+}
+
+async function _outboxFollowups(entry, res, warn, info){
+  var f = entry.ctx.form, month = entry.month;
+  if(entry.type==='txn'){
+    var tags = f.tags || [];
+    var tagsPending = tags.length && !(res && res.tagsWritten === true);
+    // HSA-eligible: a needs-review draft so the HSA tab flags that a receipt is
+    // needed. The txn is saved either way, so a failure is reported as exactly that.
+    if(f.hsa){
+      try {
+        var hsaRes = await apiPost(SCRIPT_URL,{action:'addHsaReceipt', idemKey:entry.ctx.hsaKey,
+          needsReview:true, dateIncurred:f.date, amount:entry.amount, provider:'', description:f.desc,
+          category:'', funding:'OOP', receiptLink:''});
+        if(hsaRes && hsaRes.duplicateOf != null)
+          info.push('HSA receipt already on file as #'+hsaRes.duplicateOf+' (same date + amount) \u2014 no draft added');
+        loadHsa(true);
+      } catch(hsaErr){ warn.push('the HSA draft failed: '+hsaErr.message+' \u2014 add it from the HSA tab'); }
+    }
+    // Tags: written by ledgerAddTxn itself on this backend (tagsWritten); an older
+    // backend ignores them and this second write catches up.
+    if(tagsPending && res && res.id != null){
+      try { await apiPost(SCRIPT_URL,{action:'ledgerSetTags', idemKey:entry.ctx.tagKey, id:res.id, tags:tags}); }
+      catch(tagErr){ warn.push('tags failed to save: '+tagErr.message+' \u2014 add them from the transaction list'); tags = []; }
+    }
+    if(tags.length && _knownTagCounts) tags.forEach(function(t){ if(!_knownTagCounts[t]) _knownTagCounts[t]=1; });
+    var dr = $('card-drawer'), back = entry.ctx.drawer;
+    if(back && back.pm===f.pm) openCardDrawer(back.pm, back.title);
+    else if(typeof _drawerPm!=='undefined' && _drawerPm===f.pm && dr && dr.classList.contains('open'))
+      openCardDrawer(_drawerPm, $('cdr-title').textContent);
+    if(curMonthTxn===month) loadTxns(month,true);
+  } else if(entry.type==='groceries' || entry.type==='gas' || entry.type==='fixed'){
+    if(curMonthFx===month) loadFixed(month,true);   // Recurring tab only if it's loaded (UX_SPEC 2C)
+  }
+}
+
+// Strip under the header: one line per entry, newest last.
+function renderOutbox(){
+  var el = $('outbox-strip'); if(!el) return;
+  var list = _outboxList();
+  if(!list.length){ el.hidden = true; el.innerHTML = ''; return; }
+  el.hidden = false;
+  el.innerHTML = list.map(function(x){
+    var what = esc(x.label)+' '+fmt(x.amount,2);
+    var old = Date.now() - x.at > OUTBOX_RETRY_MS;
+    if(x.status==='sending')
+      return '<div class="ob-line ob-sending">\u23f3 saving \u2014 '+what+'</div>';
+    var head = x.status==='failed'
+      ? (x.err==='refused' ? '\u2717 NOT saved (server refused: '+esc(x.msg||'')+')' : '\u2717 NOT confirmed \u2014 no answer; it may have saved')
+      : '\u26a0 unconfirmed \u2014 the app closed while saving ('+esc(_staleWhen(x.at))+')';
+    var btns = '';
+    if(old) head += ' \u2014 over 6 h old: check the Sheet before re-entering';
+    else btns += '<button class="rbtn" data-action="outboxRetry" data-args="'+esc(x.key)+'">Retry</button>';
+    if(x.err==='refused') btns += '<button class="rbtn" data-action="outboxEdit" data-args="'+esc(x.key)+'">Edit</button>';
+    btns += '<button class="rbtn" data-action="outboxDiscard" data-args="'+esc(x.key)+'">Discard</button>';
+    return '<div class="ob-line ob-'+esc(x.status)+'"><span>'+head+': '+what+'</span><span class="ob-btns">'+btns+'</span></div>';
+  }).join('');
+}
+function outboxRetry(key){
+  var x = _outboxGet(String(key)); if(!x) return;
+  if(Date.now() - x.at > OUTBOX_RETRY_MS){ showBanner('Over 6 hours old \u2014 the server no longer remembers it. Check the Sheet, then Discard or re-enter.','err'); return; }
+  outboxSend(x, perfTrace('save.retry.'+x.type));
+}
+function outboxDiscard(key){
+  var x = _outboxGet(String(key)); if(!x) return;
+  if(x.err!=='refused' && !confirm('Discard "'+x.label+'"? If it did reach the server it will still be in the Sheet \u2014 check before re-entering.')) return;
+  outboxRemove(x.key);
+}
+// Only for writes the server refused (so nothing was written): reopen the form
+// with the fields restored; saving mints a NEW idemKey.
+function outboxEdit(key){
+  var x = _outboxGet(String(key)); if(!x || x.err!=='refused') return;
+  var f = x.ctx.form;
+  outboxRemove(x.key);
+  showQuickAdd(null);
+  qaType = f.type; qaStagedTags = (f.tags||[]).slice(); qaRenderSeg(); qaRenderFields();
+  var set = function(id, val){ var el=$(id); if(el && val!=null) el.value = val; };
+  var chk = function(id, val){ var el=$(id); if(el) el.checked = !!val; };
+  set('qa-date', f.date); set('qa-amt', f.amt); set('qa-desc', f.desc); set('qa-pm', f.pm);
+  set('qa-store', f.store); set('qa-fx-name', f.fxName); set('qa-chk-type', f.chkType);
+  chk('qa-disc', f.disc); chk('qa-ben', f.ben); chk('qa-jenna', f.jenna); chk('qa-fx-paid', f.fxPaid); chk('qa-hsa-flag', f.hsa);
+  try { renderQaTagChips(); } catch(e){}
+}
+// Boot: anything still 'sending' means the app closed mid-write -> unconfirmed.
+function outboxBoot(){
+  var list = outboxAll(), changed = false;
+  list.forEach(function(x){ if(x.status==='sending'){ x.status='unconfirmed'; changed = true; } });
+  if(changed) _outboxWrite(list); else _outboxMem = list;
+  renderOutbox();
 }
 
 // ── NET WORTH TAB ─────────────────────────────────────────────
