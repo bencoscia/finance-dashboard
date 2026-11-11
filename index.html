@@ -373,7 +373,6 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .py-recon .ok{color:var(--muted)}
 .py-recon .warn{color:var(--text);font-weight:600}
 .py-hint{font-size:11px;color:var(--faint);font-style:italic;margin-top:6px}
-@media (max-width:768px){.py-wrap{grid-template-columns:1fr}}
 .hsa-proj-grp{font-family:var(--mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:6px 0 8px;border-bottom:1px solid var(--border);padding-bottom:4px}
 .hc-src{font-size:10px;color:var(--c1);font-weight:600}
 .hsa-eng-hd{font-family:var(--display);font-size:15px;color:var(--text);margin:0 0 8px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
@@ -382,7 +381,6 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .hsa-proj-headline .h-item{font-family:var(--mono)}
 .hsa-proj-headline .h-lbl{font-size:11px;color:var(--muted);display:block}
 .hsa-proj-headline .h-val{font-size:19px;color:var(--text)}
-@media (max-width:768px){.hsa-proj-grid{grid-template-columns:repeat(2,1fr)}}
 .fx-table{width:100%;border-collapse:collapse;font-size:13px;background:var(--surface);border-radius:var(--rl);overflow:hidden;border:1px solid var(--border);box-shadow:var(--shadow)}
 .fx-table tr{border-bottom:1px solid var(--border);transition:background .1s}
 .fx-table tr:last-child{border-bottom:none}
@@ -682,14 +680,32 @@ tr:hover .racts,tr.editing .racts{opacity:1}
    scroll fell through to the page behind (bug 2026-11, HSA photo preview). The backdrop is now the
    scroll container; overscroll-behavior stops the scroll chaining to the body at either end. */
 .pay-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:180;display:flex;align-items:flex-start;justify-content:center;padding:40px 24px 24px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
-.pay-modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:28px;max-width:380px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.18);margin:auto}
+.pay-modal{--mp:28px;background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:var(--mp);max-width:380px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.18);margin:auto}
 .pay-modal h3{font-family:var(--mono);font-size:14px;font-weight:500;margin-bottom:4px}
 .pay-modal-sub{font-size:12px;color:var(--muted);margin-bottom:18px}
 .pay-field{margin-bottom:14px}
 .pay-field label{display:block;font-family:var(--mono);font-size:10px;font-weight:500;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}
 .pay-field input{width:100%;font-family:var(--mono);font-size:13px;padding:9px 12px;border:1px solid var(--border2);border-radius:var(--r);background:var(--surface2);color:var(--text);outline:none;transition:border-color .15s}
 .pay-field input:focus{border-color:var(--blue-lt)}
-.pay-modal-btns{display:flex;gap:8px;margin-top:20px}
+.pay-modal-btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
+/* Quick Add (UX_SPEC 3C): in-modal note for Save + another, sign toggle, prefill hint */
+.qa-note{flex:1 1 100%;font-family:var(--mono);font-size:12px;color:var(--text);line-height:1.4}
+.qa-note:empty{display:none}
+.qa-amt-row{display:flex;gap:8px;align-items:stretch}
+.qa-amt-row input{flex:1 1 auto;min-width:0}
+.qa-sign{flex:0 0 auto;font-family:var(--mono);font-size:12px;padding:0 12px;border:1px solid var(--border2);border-radius:var(--r);background:var(--surface);color:var(--muted);cursor:pointer;white-space:nowrap}
+.qa-sign[aria-pressed="true"]{color:var(--text);font-weight:700;border-style:dashed;border-color:var(--text)}
+.qa-prefill{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:5px;font-style:italic}
+.qa-prefill:empty{display:none}
+/* Phone navigation (UX_SPEC 3D): More button + sheet exist only below 768px */
+.tab-more{display:none}
+.more-backdrop{position:fixed;inset:0;z-index:48;background:rgba(0,0,0,.25)}
+.more-sheet{position:fixed;left:0;right:0;bottom:calc(56px + env(safe-area-inset-bottom,0px));z-index:49;background:var(--surface);border-top:1px solid var(--border2);border-radius:var(--rl) var(--rl) 0 0;box-shadow:0 -6px 24px rgba(0,0,0,.14);padding:6px max(8px,env(safe-area-inset-right,0px)) 6px max(8px,env(safe-area-inset-left,0px))}
+.more-backdrop[hidden],.more-sheet[hidden]{display:none}
+.more-item{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;padding:0 14px;background:transparent;border:none;border-left:3px solid transparent;border-bottom:1px solid var(--border);font-family:var(--sans);font-size:15px;color:var(--text);text-align:left;cursor:pointer}
+.more-item:last-child{border-bottom:none}
+.more-item .mi-mark{display:inline-block;width:1em;font-weight:700}
+.more-item.active{font-weight:700;border-left-color:var(--green);background:var(--surface2)}
 .pay-modal-btns .btn-primary{flex:1}
 .pay-modal-btns .btn-cancel{flex:0 0 auto;font-family:var(--sans);font-size:13px;padding:9px 16px;background:transparent;border:1px solid var(--border2);border-radius:var(--r);cursor:pointer;color:var(--muted)}
 .pay-modal-btns .btn-cancel:hover{color:var(--text)}
@@ -759,23 +775,6 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 .split-row{display:grid;grid-template-columns:minmax(150px,1fr) 82px 32px 78px 88px 96px 28px 28px 28px 28px 24px;gap:5px;align-items:center}
 .split-ck-lbl{display:flex;align-items:center;justify-content:center;gap:4px;font-family:var(--mono);font-size:10px;color:var(--muted)}
 .split-ck-lbl .ck-letter{display:none}
-@media (max-width:768px){
-  .split-modal{max-width:100vw!important;padding:14px 10px}
-  .split-row-header{display:none}
-  .split-row{grid-template-columns:repeat(12,1fr);row-gap:7px;padding:9px 0;border-bottom:1px solid var(--border)}
-  .split-row [data-field=desc]{grid-column:1/9;grid-row:1}
-  .split-row .split-computed{grid-column:9/13;grid-row:1}
-  .split-row [data-field=price]{grid-column:1/4}
-  .split-row .lbl-tax{grid-column:4/5}
-  .split-row .split-pm-sel{grid-column:5/9}
-  .split-row .split-var-sel{grid-column:9/13}
-  .split-row .lbl-disc{grid-column:1/4;justify-content:flex-start}
-  .split-row .lbl-ben{grid-column:4/7;justify-content:flex-start}
-  .split-row .lbl-jenna{grid-column:7/10;justify-content:flex-start}
-  .split-row .ia-sum-btn{grid-column:11/12}
-  .split-row .split-del{grid-column:12/13}
-  .split-ck-lbl .ck-letter{display:inline}
-}
 .split-row input[type=text],.split-row input[type=number],.split-pm-sel{font-family:var(--mono);font-size:12px;padding:5px 7px;border:1px solid var(--border2);border-radius:6px;background:var(--surface2);color:var(--text);outline:none;width:100%}
 .split-row input:focus,.split-pm-sel:focus{border-color:var(--blue-lt)}
 .split-row input[type=number]{text-align:right}
@@ -850,18 +849,26 @@ tr:hover .racts,tr.editing .racts{opacity:1}
      Paired with maximum-scale=1 in the viewport meta -- 16px alone proved insufficient on-device. */
   input, select, textarea{ font-size:16px !important; }
 
-  /* BOTTOM TAB BAR: fixed, clear of the home indicator, scrolls sideways (9 tabs never
-     fit 390px). Active = top indicator bar + weight + fill + aria-current, not colour alone. */
+  /* BOTTOM TAB BAR (UX_SPEC 3D): fixed, clear of the home indicator. Four primary tabs
+     plus More, five equal-width buttons -- fits 390px with no sideways scroll. The five
+     secondary tabs (.tab-sec) are reached through the More sheet; their buttons stay in
+     the DOM (desktop shows them, showTab still drives them). Active = top indicator bar
+     + weight + fill + aria-current, not colour alone; More carries the same treatment
+     and names the open tab on a second line. */
   .tabs{ position:fixed; left:0; right:0; bottom:0; z-index:50; margin:0; width:auto;
     background:var(--surface); border-bottom:none; border-top:1px solid var(--border2);
     box-shadow:0 -2px 10px rgba(0,0,0,.06);
     padding:4px max(6px, env(safe-area-inset-right,0px)) calc(4px + env(safe-area-inset-bottom,0px)) max(6px, env(safe-area-inset-left,0px));
-    overflow-x:auto; -webkit-overflow-scrolling:touch; flex-wrap:nowrap; touch-action:pan-x; overscroll-behavior-x:contain;
-    scrollbar-width:none; }
-  .tabs::-webkit-scrollbar{ display:none; }
-  .tab-btn{ flex:0 0 auto; white-space:nowrap; min-height:48px; padding:0 12px; margin:0;
+    overflow:visible; flex-wrap:nowrap; }
+  .tab-btn{ flex:1 1 0; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    min-height:48px; padding:0 2px; margin:0; letter-spacing:.02em;
     border-bottom:none; border-top:3px solid transparent; border-radius:0 0 6px 6px; font-size:11px; }
   .tab-btn.active{ border-top-color:var(--green); background:var(--surface2); font-weight:700; }
+  .tab-btn.tab-sec{ display:none; }
+  .tab-more{ display:flex; flex-direction:column; align-items:center; justify-content:center; line-height:1.15; }
+  .tab-more .tm-cur{ display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis;
+    font-size:9px; text-transform:none; letter-spacing:0; }
+  .tab-more .tm-cur:empty{ display:none; }
   .tab-btn .tl-long{ display:none; }
   .tab-btn .tl-short{ display:inline; }
   /* reserve the bar's height so the last row of a long page scrolls clear of it */
@@ -874,6 +881,75 @@ tr:hover .racts,tr.editing .racts{opacity:1}
 
   /* tall modals scroll clear of the home indicator */
   .pay-modal-backdrop{ padding-bottom:calc(24px + env(safe-area-inset-bottom,0px)); }
+
+  /* ── KEYBOARD (UX_SPEC 3A). iOS does not shrink the layout viewport for the keyboard,
+     so a fixed inset:0 overlay keeps its bottom (and its last fields, and a sticky Save)
+     behind the keyboard. While body.kb-open, every fixed overlay that holds inputs is
+     pinned to the VISUAL viewport (--vvt/--vvh, set by initKeyboardInsets) instead.
+     Deliberate change from the spec's padding-bottom:var(--kb): padding lets the content
+     scroll up, but a position:sticky Save sticks to the scrollport edge, which would
+     still be under the keyboard. Pinning fixes both with one rule per overlay. */
+  body.kb-open .pay-modal-backdrop{ top:var(--vvt,0px); bottom:auto; height:var(--vvh,100%);
+    padding-top:12px; padding-bottom:12px; }
+  body.kb-open .card-drawer{ top:var(--vvt,0px); bottom:auto; height:var(--vvh,100%); }
+  body.kb-open .card-drawer-footer{ padding-bottom:10px; }
+  body.kb-open .calc-pop{ top:calc(var(--vvt,0px) + 8px); max-height:calc(var(--vvh,100vh) - 16px); overflow-y:auto; }
+  body.kb-open .tabs, body.kb-open .more-sheet, body.kb-open .more-backdrop{ display:none; }
+  /* Save row stays reachable without dismissing the keyboard. Negative side margins
+     (= the modal's own padding, --mp) let its surface hide content scrolling behind it. */
+  .pay-modal-btns{ position:sticky; bottom:0; z-index:2; background:var(--surface);
+    margin:16px calc(-1 * var(--mp)) 0; padding:10px var(--mp); border-top:1px solid var(--border); }
+  /* split modal: the backdrop is the only scroller on phones. A nested scroller would
+     make the sticky Save stick to the inner box, whose bottom can sit under the keyboard. */
+  .split-modal{ --mp:10px; max-height:none; overflow:visible; }
+
+  /* ── FIELDS (UX_SPEC 3B). One rule set for every control in a modal field and the
+     inline add forms: same width, height, padding, font. iOS sizes <input type=date> to
+     its content and centres it unless the native appearance is reset. */
+  .pay-field input:not([type=checkbox]):not([type=radio]):not([type=file]),
+  .pay-field select,
+  .nw-snap-field input,
+  .var-add-form input, .var-add-form select{
+    display:block; width:100%; min-width:0; height:44px; margin:0; padding:0 12px;
+    font-family:var(--mono); line-height:normal; border-radius:var(--r); }
+  .pay-field input[type=date], .nw-snap-field input[type=date], .var-add-form input[type=date],
+  .ei[type=date]{
+    -webkit-appearance:none; appearance:none; text-align:left; }
+  .pay-field input[type=date]::-webkit-date-and-time-value,
+  .nw-snap-field input[type=date]::-webkit-date-and-time-value,
+  .var-add-form input[type=date]::-webkit-date-and-time-value,
+  .ei[type=date]::-webkit-date-and-time-value{ text-align:left; }
+  .qa-amt-row .qa-sign{ height:44px; }
+  /* inline grocery/gas add forms: a two-column grid replaces the fixed 90/120/130px widths */
+  .var-add-form.open{ display:grid; grid-template-columns:1fr 1fr; align-items:end; }
+  .var-add-form > div{ min-width:0; }
+  .var-add-form > div:last-child{ grid-column:1/-1; }
+  .var-add-form > div:last-child button{ min-height:44px; flex:1 1 0; }
+  /* table edit rows keep their column widths; every editor in a row shares one height
+     so the date control no longer renders taller/shorter than its neighbours */
+  .ei{ height:36px; }
+
+  /* ── merged from component sections (were three stray 768px blocks) ── */
+  .py-wrap{grid-template-columns:1fr}
+  /* minmax(0,1fr) + min-width:0: the inputs' intrinsic width used to push the HSA tab
+     to ~504px, so the whole page panned sideways on a 390px phone (found 2026-11, 3B) */
+  .hsa-proj-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .hsa-proj-grid input{width:100%;min-width:0}
+  .split-modal{max-width:100vw!important;padding:14px 10px}
+  .split-row-header{display:none}
+  .split-row{grid-template-columns:repeat(12,1fr);row-gap:7px;padding:9px 0;border-bottom:1px solid var(--border)}
+  .split-row [data-field=desc]{grid-column:1/9;grid-row:1}
+  .split-row .split-computed{grid-column:9/13;grid-row:1}
+  .split-row [data-field=price]{grid-column:1/4}
+  .split-row .lbl-tax{grid-column:4/5}
+  .split-row .split-pm-sel{grid-column:5/9}
+  .split-row .split-var-sel{grid-column:9/13}
+  .split-row .lbl-disc{grid-column:1/4;justify-content:flex-start}
+  .split-row .lbl-ben{grid-column:4/7;justify-content:flex-start}
+  .split-row .lbl-jenna{grid-column:7/10;justify-content:flex-start}
+  .split-row .ia-sum-btn{grid-column:11/12}
+  .split-row .split-del{grid-column:12/13}
+  .split-ck-lbl .ck-letter{display:inline}
 
   /* hit areas >=40px without changing the look: an invisible ::after extends each control.
      Extension <= half the gap between neighbours, so no control steals another's taps. */
@@ -992,11 +1068,21 @@ tr:hover .racts,tr.editing .racts{opacity:1}
       <button class="tab-btn"         data-tab="accounts">Accounts</button>
       <button class="tab-btn"         data-tab="txns"><span class="tl-long">Transactions</span><span class="tl-short">Txns</span></button>
       <button class="tab-btn"         data-tab="fixed"><span class="tl-long">Recurring expenses</span><span class="tl-short">Recurring</span></button>
-      <button class="tab-btn"         data-tab="budget">Budget</button>
-      <button class="tab-btn"         data-tab="networth">Net worth</button>
-      <button class="tab-btn"         data-tab="loans"><span class="tl-long">Student Loans</span><span class="tl-short">Loans</span></button>
-      <button class="tab-btn"         data-tab="mortgage">Mortgage</button>
-      <button class="tab-btn"         data-tab="hsa">HSA</button>
+      <button class="tab-btn tab-sec" data-tab="budget">Budget</button>
+      <button class="tab-btn tab-sec" data-tab="networth">Net worth</button>
+      <button class="tab-btn tab-sec" data-tab="loans"><span class="tl-long">Student Loans</span><span class="tl-short">Loans</span></button>
+      <button class="tab-btn tab-sec" data-tab="mortgage">Mortgage</button>
+      <button class="tab-btn tab-sec" data-tab="hsa">HSA</button>
+      <!-- Phone only (UX_SPEC 3D). No data-tab on purpose: [data-tab] elements are bound to showTab. -->
+      <button class="tab-btn tab-more" id="tab-more" type="button" data-action="toggleMoreSheet" aria-haspopup="dialog" aria-expanded="false" aria-controls="more-sheet"><span class="tm-lbl">More</span><span class="tm-cur" id="tab-more-cur"></span></button>
+    </div>
+    <div class="more-backdrop" id="more-backdrop" hidden data-action="closeMoreSheet"></div>
+    <div class="more-sheet" id="more-sheet" hidden role="dialog" aria-label="More tabs">
+      <button class="more-item" type="button" data-action="moreGo" data-args="budget" data-short="Budget"><span class="mi-mark"></span>Budget</button>
+      <button class="more-item" type="button" data-action="moreGo" data-args="networth" data-short="Net worth"><span class="mi-mark"></span>Net worth</button>
+      <button class="more-item" type="button" data-action="moreGo" data-args="loans" data-short="Loans"><span class="mi-mark"></span>Student Loans</button>
+      <button class="more-item" type="button" data-action="moreGo" data-args="mortgage" data-short="Mortgage"><span class="mi-mark"></span>Mortgage</button>
+      <button class="more-item" type="button" data-action="moreGo" data-args="hsa" data-short="HSA"><span class="mi-mark"></span>HSA</button>
     </div>
 
     <!-- THIS WEEK -->
@@ -1522,7 +1608,9 @@ tr:hover .racts,tr.editing .racts{opacity:1}
     <div id="qa-fields"></div>
     <div class="pay-modal-err" id="qa-err"></div>
     <div class="pay-modal-btns">
+      <div class="qa-note" id="qa-note" aria-live="polite"></div>
       <button class="btn-primary" id="qa-submit-btn" data-action="submitQuickAdd">Save</button>
+      <button class="btn-cancel" id="qa-again-btn" data-action="submitQuickAddAgain" style="display:none" title="Saves, then keeps the form open with the date and payment method">Save + another</button>
       <button class="btn-cancel" id="qa-split-btn" data-action="submitQuickAddSplit" style="display:none">Save &amp; split…</button>
       <button class="btn-cancel" data-action="hideQuickAdd">Cancel</button>
     </div>
@@ -1698,6 +1786,11 @@ function initEventListeners(){
     'submitQuickAdd':     submitQuickAdd,
     'qaSetType':          qaSetType,
     'submitQuickAddSplit': submitQuickAddSplit,
+    'submitQuickAddAgain': function(){ submitQuickAdd({again:true}); },
+    'qaToggleSign':       function(){ qaToggleSign(); },
+    'toggleMoreSheet':    function(){ toggleMoreSheet(); },
+    'closeMoreSheet':     function(){ closeMoreSheet(); },
+    'moreGo':             function(e){ var el=e.target.closest('[data-action]'); moreGo(el.dataset.args); },
     'qaAddFromDrawer':    qaAddFromDrawer,
     'qaAddForPm':         function(e){ var el=e.target.closest('[data-action]'); qaOpenForPm(el.dataset.pm, null); },
     'sortTxns':           function(e){ var el=e.target.closest('[data-action]'); sortTxns(el.dataset.sort); },
@@ -1797,7 +1890,28 @@ function initEventListeners(){
     hidePayModal();
     hideEqAdd();
     closeCardDrawer();
+    closeMoreSheet();
   });
+
+  // Phone ergonomics (UX_SPEC 3): keyboard insets, focus reveal, Quick Add keys, More sheet.
+  initKeyboardInsets();
+  document.addEventListener('focusin', kbRevealFocused);
+  if($('qa-fields')){
+    $('qa-fields').addEventListener('keydown', qaFieldsKeydown);
+    $('qa-fields').addEventListener('input',  qaFieldsInput);
+    $('qa-fields').addEventListener('change', qaFieldsChange);
+  }
+  var amtBtnKeepFocus = function(e){
+    // mousedown default moves focus; cancelling it keeps the amount field (and the
+    // iOS keyboard) up while the sign toggle is tapped. pointerdown can't do this.
+    if(e.target.closest && e.target.closest('#qa-sign')) e.preventDefault();
+  };
+  if($('qa-fields')) $('qa-fields').addEventListener('mousedown', amtBtnKeepFocus);
+  if(window.matchMedia){
+    var phoneMq = window.matchMedia('(max-width: 768px)');
+    var onMq = function(){ if(!phoneMq.matches) closeMoreSheet(); };
+    if(phoneMq.addEventListener) phoneMq.addEventListener('change', onMq); else if(phoneMq.addListener) phoneMq.addListener(onMq);
+  }
 }
 
 // All utilities defined at top of script. Call initEventListeners now that DOM is ready.
@@ -2794,8 +2908,10 @@ function showQuickAdd(e){
   qaStagedTags = [];
   _qaDrawerReturn = null;
   qaRenderSeg(); qaRenderFields();
-  $('qa-err').textContent='';
+  $('qa-err').textContent=''; qaNote('');
   $('qa-modal-backdrop').style.display='flex';
+  qaEnsureDescSource();
+  qaFocusFirst();   // synchronous: still inside the tap, so iOS raises the keyboard
 }
 function hideQuickAdd(){ var b=$('qa-modal-backdrop'); if(b) b.style.display='none'; qaHsaPhotoReset(); }
 async function submitQuickAddSplit(){
@@ -2823,8 +2939,12 @@ function qaSetType(e){
   // Keep the chosen payment method across type tabs (e.g. opened from a card
   // tile as a txn, switched to groceries) -- re-rendering would reset it.
   var prevPm = $('qa-pm') ? $('qa-pm').value : '';
+  var prevTouched = $('qa-pm') ? $('qa-pm').dataset.touched : '';
   qaType=el.dataset.qaType; qaStagedTags=[]; qaRenderSeg(); qaRenderFields();
-  if(prevPm && $('qa-pm')) $('qa-pm').value = prevPm;
+  if(prevPm && $('qa-pm')){
+    $('qa-pm').value = prevPm; $('qa-pm').dataset.dflt = prevPm;
+    if(prevTouched) $('qa-pm').dataset.touched = prevTouched;
+  }
 }
 function qaRenderSeg(){
   document.querySelectorAll('.qa-seg-btn').forEach(function(b){
@@ -2881,6 +3001,8 @@ function qaRenderFields(){
   var f=$('qa-fields'); var today=localToday();
   qaHsaPhotoReset(); // any re-render drops a staged photo (fields it belonged to are gone)
   var sb=$('qa-split-btn'); if(sb) sb.style.display = (qaType==='txn') ? '' : 'none';
+  var ab=$('qa-again-btn'); if(ab) ab.style.display = OUTBOX_TYPES[qaType] ? '' : 'none';
+  qaSign = 1;   // refunds are a per-entry choice; every render starts as a charge
   function field(label,inner){ return '<div class="pay-field"><label>'+label+'</label>'+inner+'</div>'; }
   var pmSel='<select id="qa-pm" class="msel" style="width:100%">'+
     PM_OPTIONS.map(function(p){return '<option value="'+esc(p)+'">'+(p||'—')+'</option>';}).join('')+'</select>';
@@ -2888,8 +3010,14 @@ function qaRenderFields(){
     f.innerHTML=
       field('Date','<input type="date" id="qa-date" value="'+today+'">')+
       field('Books month',qaMonthSelect(today))+
-      field('Description','<input type="text" id="qa-desc" placeholder="e.g. Target">')+
-      field('Amount ($)','<input type="number" id="qa-amt" step="0.01" placeholder="0.00">')+
+      field('Description','<input type="text" id="qa-desc" list="qa-desc-suggest" autocomplete="off" placeholder="e.g. Target">'+
+        '<datalist id="qa-desc-suggest">'+qaDescOptionsHtml()+'</datalist>'+
+        '<div class="qa-prefill" id="qa-prefill"></div>')+
+      // The iOS decimal pad has no minus key, so the sign lives in a toggle (UX_SPEC 3C trap).
+      '<div class="pay-field"><label id="qa-amt-lbl">Amount ($)</label><div class="qa-amt-row">'+
+        '<input type="number" id="qa-amt" step="0.01" placeholder="0.00">'+
+        '<button type="button" class="qa-sign" id="qa-sign" data-action="qaToggleSign" aria-pressed="false" title="Switch between a charge and a refund (refunds save as negative amounts)">± charge</button>'+
+      '</div></div>'+
       field('Payment method',pmSel)+
       '<div class="qa-check-row">'+
       '<label><input type="checkbox" id="qa-disc"> Discretionary</label>'+
@@ -2902,6 +3030,7 @@ function qaRenderFields(){
         '<datalist id="qa-tag-suggest">'+Object.keys(getAllKnownTags()).sort().map(function(t){return '<option value="'+esc(t)+'">';}).join('')+'</datalist>');
     renderQaTagChips();
     qaWireMonthSync();
+    qaSignUi();
     var tagInp = $('qa-tag-input');
     if(tagInp){
       tagInp.onkeydown = qaTagInputKeydown;
@@ -2955,6 +3084,9 @@ function qaRenderFields(){
       field('Amount ($)','<input type="number" id="qa-amt" step="0.01" placeholder="0.00">')+
       field('Payment date','<input type="date" id="qa-date" value="'+today+'">');
   }
+  qaWireKeys();
+  var pmEl=$('qa-pm'); if(pmEl) pmEl.dataset.dflt = pmEl.value;
+  var discEl=$('qa-disc'); if(discEl) discEl.dataset.dflt = discEl.checked ? '1' : '';
 }
 
 // ── HSA receipt photo: camera -> canvas JPEG -> 1-page PDF, all client-side ──
@@ -3068,8 +3200,7 @@ async function submitQuickAdd(opts){
   window._qaLastTxnId = null;
   var btn=$('qa-submit-btn');
   var month=qaResolvedMonth();
-  var amtEl=$('qa-amt');
-  var amt=amtEl?parseFloat(amtEl.value):NaN;
+  var amt=qaReadAmount();
   $('qa-err').textContent='';
   if(isNaN(amt)){ $('qa-err').textContent='Enter an amount.'; return null; }
   if(!month && qaType!=='hsa'){ $('qa-err').textContent='No month loaded yet — refresh first.'; return null; }
@@ -3085,6 +3216,23 @@ async function submitQuickAdd(opts){
     var entry = qaBuildEntry(month, amt);
     if(entry.error){ $('qa-err').textContent = entry.error; return null; }
     outboxPut(entry);
+    if(opts.again === true){
+      // Save + another (UX_SPEC 3C): same outbox send, but the form stays open with
+      // date, books month and payment method kept. Cleared + refocused synchronously,
+      // inside the tap, so the iOS keyboard comes straight back up.
+      qaClearForAnother(); perfStep(trace,'cleared');
+      var noteKey = entry.key;
+      qaNote('\u23f3 saving ' + esc(entry.label) + ' ' + fmt(entry.amount,2) + ' \u2014 enter the next one', noteKey);
+      var sent = outboxSend(entry, trace);
+      sent.then(function(res){
+        qaNote(res ? ('\u2713 saved ' + esc(entry.label) + ' ' + fmt(entry.amount,2))
+                   : ('\u2717 NOT saved: ' + esc(entry.label) + ' ' + fmt(entry.amount,2) + ' \u2014 see the line under the header'), noteKey);
+      }, function(err){
+        console.error('Save + another: send failed', err);
+        qaNote('\u2717 NOT confirmed: ' + esc(entry.label) + ' ' + fmt(entry.amount,2) + ' \u2014 see the line under the header', noteKey);
+      });
+      return sent;
+    }
     hideQuickAdd(); perfStep(trace,'closed');
     return outboxSend(entry, trace);
   }
@@ -3150,6 +3298,245 @@ async function submitQuickAdd(opts){
   return null;
 }
 
+
+// ── QUICK ADD PHONE ERGONOMICS (UX_SPEC 3C) ───────────────────
+// Sign: the amount field holds a MAGNITUDE; qaSign holds the sign. One source of
+// truth for the sign, because the iOS decimal pad has no minus key. A negative typed
+// or inserted (desktop keyboard, calculator) is normalised into magnitude + refund.
+var qaSign = 1;
+function qaAmtNormalize(){
+  var a=$('qa-amt'); if(!a || qaType!=='txn') return;
+  var v=parseFloat(a.value);
+  if(!isNaN(v) && v<0){ a.value=String(Math.abs(v)); qaSign=-1; qaSignUi(); }
+}
+function qaToggleSign(){ if(qaType!=='txn') return; qaSign = -qaSign; qaSignUi(); }
+function qaSignUi(){
+  var b=$('qa-sign'), l=$('qa-amt-lbl'), refund = qaSign<0;
+  // Words carry the state (button text + label suffix), plus weight and a dashed
+  // border; never colour alone (Invariant 5).
+  if(b){ b.textContent = refund ? '\u00b1 refund' : '\u00b1 charge'; b.setAttribute('aria-pressed', refund ? 'true' : 'false'); }
+  if(l) l.textContent = refund ? 'Amount ($) \u2014 refund, saves as negative' : 'Amount ($)';
+}
+// Signed amount for submit. Only txn has a sign; other types keep their old parse
+// (groceries/gas/checking take Math.abs downstream; payments and HSA must be > 0).
+function qaReadAmount(){
+  var a=$('qa-amt'); if(!a) return NaN;
+  var v=parseFloat(a.value);
+  if(isNaN(v)) return NaN;
+  return qaType==='txn' ? Math.abs(v)*qaSign : v;
+}
+
+// Keyboard chain: Enter moves to the next entry field, the last one closes the
+// keyboard. enterkeyhint/inputmode are set here, from the rendered DOM, so the hint
+// always matches what Enter actually does (spec: amount "done", text "next").
+function qaChain(){
+  var f=$('qa-fields'); if(!f) return [];
+  return Array.prototype.slice.call(f.querySelectorAll('input[type=text], input[type=number], input[type=url]'))
+    .filter(function(el){ return el.id!=='qa-tag-input' && !el.disabled; });
+}
+function qaWireKeys(){
+  var ch=qaChain();
+  ch.forEach(function(el, i){
+    el.setAttribute('enterkeyhint', i<ch.length-1 ? 'next' : 'done');
+    if(el.type==='number') el.setAttribute('inputmode','decimal');
+  });
+  var tag=$('qa-tag-input'); if(tag) tag.setAttribute('enterkeyhint','enter');   // Enter stages a chip
+}
+function qaFieldsKeydown(e){
+  if(e.key!=='Enter' || e.isComposing) return;
+  var t=e.target; if(!t || t.id==='qa-tag-input') return;
+  var ch=qaChain(), i=ch.indexOf(t); if(i<0) return;
+  e.preventDefault();
+  if(i<ch.length-1) ch[i+1].focus(); else t.blur();
+}
+function qaFieldsInput(e){
+  var t=e.target; if(!t) return;
+  if(t.id==='qa-amt') qaAmtNormalize();
+  else if(t.id==='qa-desc') qaDescChanged();
+}
+function qaFieldsChange(e){
+  var t=e.target; if(!t) return;
+  // Only a real user change marks a field as theirs; programmatic prefill fires no event.
+  if(t.id==='qa-pm' || t.id==='qa-disc') t.dataset.touched='1';
+  if(t.id==='qa-desc') qaDescChanged();
+  if(t.id==='qa-amt') qaAmtNormalize();
+}
+// Open on the first entry field (description / store / name), else the amount.
+// Deliberate change from the spec's "focus the amount": with Enter chaining
+// description -> amount -> done, starting at the description means the prefill has
+// already chosen the payment method by the time the amount is typed.
+function qaFocusFirst(){
+  var ch=qaChain(); if(!ch.length) return;
+  try { ch[0].focus({preventScroll:true}); } catch(e){ ch[0].focus(); }
+}
+
+// Description suggestions + prefill. Sources: the loaded Transactions month (txns),
+// the newest two months fetched once per session on first Quick Add open (2C made
+// txns lazy, so without this the list would be empty on a phone), and descriptions
+// saved this session. Suggestions only: nothing here is sent anywhere or persisted.
+var _qaDescRows = [], _qaDescFetch = null, _qaDescExtra = [];
+function qaEnsureDescSource(){
+  if(_qaDescFetch) return;
+  if(isDemo){ _qaDescRows = demoTxns(); _qaDescFetch = Promise.resolve(); return; }
+  if(!SCRIPT_URL || !allData || !allData.months || !allData.months.length) return;
+  var months = allData.months.slice(0, 2);
+  _qaDescFetch = Promise.all(months.map(function(m){
+    if(m===curMonthTxn && txns && txns.length) return Promise.resolve({transactions:[]});   // already in txns
+    return apiFetch(SCRIPT_URL,'transactions',{month:m});
+  })).then(function(rs){
+    var rows=[]; rs.forEach(function(r){ if(r && r.transactions) rows = rows.concat(r.transactions); });
+    _qaDescRows = rows;
+    qaRefreshDescList();
+  }).catch(function(err){
+    console.error('Quick Add description suggestions unavailable:', err);
+    _qaDescFetch = null;   // try again on the next open; the form works without them
+  });
+}
+function qaDescRemember(entry){
+  var f=entry && entry.ctx && entry.ctx.form; if(!f || !f.desc) return;
+  _qaDescExtra.push({description:f.desc, paymentMethod:f.pm, discretionary:!!f.disc, date:f.date});
+}
+// lowercased description -> most recent row {desc, pm, disc, date}
+function qaDescIndex(){
+  var idx={}, all=[].concat(_qaDescRows, (txns||[]), _qaDescExtra);
+  all.forEach(function(t){
+    var d=String(t.description||'').trim(); if(!d || !t.paymentMethod) return;
+    var k=d.toLowerCase(), cur=idx[k], dt=String(t.date||'');
+    if(!cur || dt>=cur.date) idx[k]={desc:d, pm:t.paymentMethod, disc:!!t.discretionary, date:dt};
+  });
+  return idx;
+}
+function qaDescOptionsHtml(){
+  var idx=qaDescIndex();
+  return Object.keys(idx).map(function(k){ return idx[k]; })
+    .sort(function(a,b){ return a.date<b.date?1:a.date>b.date?-1:0; })
+    .slice(0, 300)
+    .map(function(r){ return '<option value="'+esc(r.desc)+'">'; }).join('');
+}
+function qaRefreshDescList(){ var dl=$('qa-desc-suggest'); if(dl) dl.innerHTML=qaDescOptionsHtml(); }
+function _qaHasOption(sel, v){ for(var i=0;i<sel.options.length;i++) if(sel.options[i].value===v) return true; return false; }
+// Exact (case-insensitive) match fills payment method and Discretionary from the most
+// recent matching row -- only fields the user has not touched. When the match is lost
+// those fields return to their defaults, so a stale prefill never outlives its cause.
+function qaDescChanged(){
+  if(qaType!=='txn') return;
+  var d=$('qa-desc'), pm=$('qa-pm'), disc=$('qa-disc'), hint=$('qa-prefill');
+  if(!d) return;
+  var hit=qaDescIndex()[d.value.trim().toLowerCase()] || null, filled=[];
+  if(pm && !pm.dataset.touched){
+    if(hit && _qaHasOption(pm, hit.pm)){ pm.value=hit.pm; filled.push('payment method'); }
+    else pm.value = pm.dataset.dflt || '';
+  }
+  if(disc && !disc.dataset.touched){
+    if(hit){ disc.checked=hit.disc; filled.push('discretionary'); }
+    else disc.checked = disc.dataset.dflt==='1';
+  }
+  if(hint) hint.textContent = (hit && filled.length)
+    ? '\u21ba ' + filled.join(' + ') + ' filled from ' + hit.desc + (hit.date ? ' on ' + hit.date : '') + ' \u2014 change them if this one differs'
+    : '';
+}
+
+// Save + another: clear what differs per entry, keep date / books month / payment method.
+function qaClearForAnother(){
+  ['qa-amt','qa-desc','qa-store','qa-fx-name'].forEach(function(id){ var el=$(id); if(el) el.value=''; });
+  var tag=$('qa-tag-input'); if(tag) tag.value='';
+  qaStagedTags=[]; try { renderQaTagChips(); } catch(e){}
+  var hsa=$('qa-hsa-flag'); if(hsa) hsa.checked=false;        // never carry an HSA draft into the next entry
+  var pm=$('qa-pm'); if(pm) pm.dataset.dflt = pm.value;        // kept method becomes the fallback
+  var disc=$('qa-disc'); if(disc && !disc.dataset.touched) disc.checked = disc.dataset.dflt==='1';
+  var hint=$('qa-prefill'); if(hint) hint.textContent='';
+  qaSign=1; qaSignUi();
+  $('qa-err').textContent='';
+  qaFocusFirst();
+}
+// In-modal status line (lives in the sticky Save row, so it stays visible with the
+// keyboard up). A later update for an older entry never overwrites a newer one.
+var _qaNoteKey = null;
+function qaNote(html, key){
+  var n=$('qa-note'); if(!n) return;
+  if(key){ if(_qaNoteKey && key!==_qaNoteKey && html.indexOf('\u23f3')!==0) return; _qaNoteKey=key; }
+  else _qaNoteKey=null;
+  n.innerHTML = html || '';
+}
+
+// ── iOS KEYBOARD (UX_SPEC 3A) ─────────────────────────────────
+// iOS keeps the layout viewport when the keyboard opens and shrinks only the visual
+// viewport. This mirrors the visual viewport into CSS variables so fixed overlays can
+// pin themselves to the visible area (CSS: body.kb-open rules in the 768px block).
+// --kb is the keyboard inset; above KB_OPEN_PX it counts as open. Without
+// visualViewport (old browsers) nothing happens and the old layout stands.
+var KB_OPEN_PX = 80;
+function initKeyboardInsets(){
+  var vv = window.visualViewport;
+  if(!vv) return;
+  var root = document.documentElement, raf = 0;
+  function apply(){
+    raf = 0;
+    var kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    root.style.setProperty('--vvh', Math.round(vv.height) + 'px');
+    root.style.setProperty('--vvt', Math.round(vv.offsetTop) + 'px');
+    root.style.setProperty('--kb',  kb + 'px');
+    var open = kb > KB_OPEN_PX;
+    if(document.body.classList.contains('kb-open') !== open) document.body.classList.toggle('kb-open', open);
+  }
+  function schedule(){ if(!raf) raf = requestAnimationFrame(apply); }
+  vv.addEventListener('resize', schedule);
+  vv.addEventListener('scroll', schedule);
+  apply();
+}
+// After the keyboard has finished animating, centre the focused field in its own
+// scroll container (the modal backdrop), above the sticky Save row. Scrolls only that
+// container -- never the page behind it -- and only while the keyboard is up, so
+// desktop and hardware-keyboard use are untouched.
+function kbRevealFocused(e){
+  var t = e.target;
+  if(!t || !t.matches || !t.matches('input, select, textarea')) return;
+  if(!t.closest('.pay-modal-backdrop, .card-drawer, #calc-pop')) return;
+  setTimeout(function(){
+    if(!document.body.classList.contains('kb-open') || document.activeElement !== t) return;
+    var sc = t.closest('.pay-modal-backdrop') || t.closest('.card-drawer-body');
+    if(!sc || sc.scrollHeight <= sc.clientHeight) return;
+    var r = t.getBoundingClientRect(), c = sc.getBoundingClientRect();
+    var foot = sc.querySelector('.pay-modal-btns');
+    var bottom = c.bottom - (foot ? foot.getBoundingClientRect().height : 0);
+    var delta = (r.top + r.height/2) - (c.top + bottom)/2;
+    if(Math.abs(delta) > 8) sc.scrollTop += delta;
+  }, 320);
+}
+
+// ── PHONE NAV: four tabs + More (UX_SPEC 3D) ──────────────────
+// The five secondary tabs keep their .tab-btn[data-tab] buttons (desktop shows them;
+// showTab drives them on every width). Below 768px they are hidden and the More sheet
+// selects them, so resizing past 768px needs no state change: the right button is
+// already active.
+var MORE_TABS = { budget:1, networth:1, loans:1, mortgage:1, hsa:1 };
+function toggleMoreSheet(force){
+  var s=$('more-sheet'), b=$('more-backdrop'), m=$('tab-more'); if(!s) return;
+  var open = (force===undefined) ? s.hidden : !!force;
+  s.hidden = !open; if(b) b.hidden = !open;
+  if(m) m.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+function closeMoreSheet(){ toggleMoreSheet(false); }
+function moreGo(id){
+  closeMoreSheet();
+  var b=document.querySelector('.tab-btn[data-tab="'+id+'"]');
+  if(b) showTab(id, b);
+}
+function syncMoreBtn(id){
+  var m=$('tab-more'); if(!m) return;
+  var on = !!MORE_TABS[id], label='';
+  document.querySelectorAll('.more-item').forEach(function(it){
+    var a = it.dataset.args===id;
+    it.classList.toggle('active', a);
+    if(a){ it.setAttribute('aria-current','page'); label = it.dataset.short || it.textContent; }
+    else it.removeAttribute('aria-current');
+    var mk = it.querySelector('.mi-mark'); if(mk) mk.textContent = a ? '\u2713' : '';
+  });
+  m.classList.toggle('active', on);
+  if(on) m.setAttribute('aria-current','page'); else m.removeAttribute('aria-current');
+  var cur=$('tab-more-cur'); if(cur) cur.textContent = on ? label : '';
+}
+
 // ── OUTBOX (UX_SPEC 1C) ──────────────────────────────────────
 // A log of INTENT, not state: nothing renders from it as if it were saved. Each
 // entry carries the exact payload + its idemKey, so any retry -- automatic in
@@ -3183,7 +3570,7 @@ function _outboxGet(key){ var l=_outboxList(); for(var i=0;i<l.length;i++) if(l[
 function qaBuildEntry(month, amt){
   var t = qaType, v = function(id){ var el=$(id); return el ? el.value : ''; };
   var c = function(id){ var el=$(id); return !!(el && el.checked); };
-  var form = { type:t, month:month, date:v('qa-date'), amt:v('qa-amt'), desc:v('qa-desc').trim(), pm:v('qa-pm'),
+  var form = { type:t, month:month, date:v('qa-date'), amt:String(amt), desc:v('qa-desc').trim(), pm:v('qa-pm'),
                disc:c('qa-disc'), ben:c('qa-ben'), jenna:c('qa-jenna'), store:v('qa-store').trim(),
                fxName:v('qa-fx-name').trim(), fxPaid:c('qa-fx-paid'), chkType:v('qa-chk-type'), hsa:c('qa-hsa-flag') };
   var key, payload, label, ctx = { form: form };
@@ -3259,7 +3646,7 @@ async function outboxSend(entry, trace){
   }
   perfStep(trace, 'post');
   outboxRemove(entry.key);
-  if(entry.type==='txn') window._qaLastTxnId = res && res.id;
+  if(entry.type==='txn'){ window._qaLastTxnId = res && res.id; qaDescRemember(entry); }
   afterWrite(res, trace);
   var warn = [], info = [];
   try { await _outboxFollowups(entry, res, warn, info); }
@@ -3349,6 +3736,9 @@ function outboxEdit(key){
   set('qa-date', f.date); set('qa-amt', f.amt); set('qa-desc', f.desc); set('qa-pm', f.pm);
   set('qa-store', f.store); set('qa-fx-name', f.fxName); set('qa-chk-type', f.chkType);
   chk('qa-disc', f.disc); chk('qa-ben', f.ben); chk('qa-jenna', f.jenna); chk('qa-fx-paid', f.fxPaid); chk('qa-hsa-flag', f.hsa);
+  // Restored values are the user's own: no description prefill may overwrite them.
+  ['qa-pm','qa-disc'].forEach(function(id){ var el=$(id); if(el) el.dataset.touched='1'; });
+  qaAmtNormalize();   // a negative restored amount becomes magnitude + "refund"
   try { renderQaTagChips(); } catch(e){}
 }
 // Boot: anything still 'sending' means the app closed mid-write -> unconfirmed.
@@ -5256,10 +5646,13 @@ function qaAddFromDrawer(){
 function qaOpenForPm(pm, ret){
   _qaDrawerReturn = ret || null;
   qaType='txn'; qaStagedTags=[]; qaRenderSeg(); qaRenderFields();
-  var pmSel=$('qa-pm'); if(pmSel) pmSel.value=pm||'';
-  $('qa-err').textContent='';
+  // A preset method is the user's choice (they tapped that card), so a description
+  // match must never overwrite it.
+  var pmSel=$('qa-pm'); if(pmSel){ pmSel.value=pm||''; pmSel.dataset.dflt=pmSel.value; pmSel.dataset.touched='1'; }
+  $('qa-err').textContent=''; qaNote('');
   $('qa-modal-backdrop').style.display='flex';
-  setTimeout(function(){ var d=$('qa-desc'); if(d) d.focus(); }, 50);
+  qaEnsureDescSource();
+  qaFocusFirst();   // synchronous (the old 50 ms timeout ran outside the tap, so iOS kept the keyboard down)
 }
 
 var _drawerMode = 'card'; // 'card' | 'checking' -- same drawer element, two data sources
@@ -8420,6 +8813,7 @@ function showTab(id,btn){
   document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active');});
   document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');b.removeAttribute('aria-current');});
   $('tab-'+id).classList.add('active'); btn.classList.add('active'); btn.setAttribute('aria-current','page');
+  syncMoreBtn(id); closeMoreSheet();
   // Bottom tab bar (phones) stays put while the page scrolls, so a switch would
   // otherwise open the next tab mid-page. Only on an actual change.
   if(changed){
