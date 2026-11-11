@@ -179,6 +179,7 @@ function invalidateLedgerCache() {
     var c = CacheService.getScriptCache();
     c.remove(LEDGER_CACHE_KEY);
     c.remove(LEDGER_CACHE_VERSION + '_oldshape');
+    c.remove(_perfCardTotalsKey()); // perf.gs: card totals are derived from the same rows
   } catch (e) {}
 }
 
@@ -661,12 +662,17 @@ function ledgerComputeMonths() {
     if (hit) return JSON.parse(hit);
   } catch (e) {}
 
+  var _mt = _perfLaps(); // UX_SPEC 1B: recompute breakdown, reported via getQuickData._t
   var txnRows = readSheet(LEDGER_TXNS);
   if (!txnRows) return [];
+  _perfLap(_mt, 'txnsRead');
   var fixedRows = readSheet(LEDGER_FIXED) || [[]];
   var incomeRows = readSheet(LEDGER_INCOME) || [[]];
+  _perfLap(_mt, 'fixedIncomeRead');
   var agg = _ledgerAggregate(txnRows, fixedRows, incomeRows);
+  _perfLap(_mt, 'aggregate');
   var vh = _ledgerVarhist();
+  _perfLap(_mt, 'varhist');
 
   // per-month FCF fields + income attribution (old _computeOneMonth parity:
   // fcf/savings/daycare use listed amounts regardless of paid status)
@@ -737,7 +743,9 @@ function ledgerComputeMonths() {
     row.daycareNet = Math.round(Math.max(0, daycareNet) * 100) / 100;
     out.push(row);
   }
+  _perfLap(_mt, 'build');
   try { cache.put(CKEY, JSON.stringify(out), 300); } catch (e2) {}
+  _perfMonthsT = _perfLapsDone(_mt);
   return out;
 }
 

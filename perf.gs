@@ -46,6 +46,25 @@ function _ledgerCleanTags(tags) {
   return clean;
 }
 
+// Lap timers for breaking one function's time into named steps.
+// t = _perfLaps(); ...work...; _perfLap(t, 'step'); ...; _perfLapsDone(t) -> {step: ms, ...}
+function _perfLaps() { return { _at: Date.now() }; }
+function _perfLap(t, name) {
+  if (!t) return;
+  var now = Date.now();
+  t[name] = (t[name] || 0) + (now - t._at);
+  t._at = now;
+}
+function _perfLapsDone(t) { if (t) delete t._at; return t; }
+// base + prefixed copy of sub (sub may be null). Returns base.
+function _perfMergeT(base, sub, prefix) {
+  if (sub) for (var k in sub) if (typeof sub[k] === 'number') base[prefix + k] = sub[k];
+  return base;
+}
+// Set by _computeCardBalances / ledgerComputeMonths on a real (uncached) compute.
+// Apps Script re-evaluates globals per execution, so these never leak across requests.
+var _perfCardT = null, _perfMonthsT = null;
+
 // 'YYYY-MM' + n months -> 'YYYY-MM'
 function _perfMkAdd(mk, n) {
   var y = parseInt(mk.slice(0, 4), 10), m = parseInt(mk.slice(5, 7), 10) - 1 + n;
@@ -105,12 +124,24 @@ function _ledgerCardTotals(txnRows, fixedRows, curMonthKey) {
   return { totals: totals, counts: counts, months: months, label: 'TTM', from: from, to: to };
 }
 
+// Cached like the monthly aggregate (same 5-min TTL) and cleared by
+// invalidateLedgerCache, i.e. by every ledger write and by onEdit on Txns /
+// Fixed Log. The key carries the current month, so a month rollover can never
+// serve last month's window.
+function _perfCardTotalsKey() {
+  return LEDGER_CACHE_VERSION + '_cardtotals_' +
+    Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM');
+}
 function ledgerCardTotals() {
+  var cache = CacheService.getScriptCache(), key = _perfCardTotalsKey();
+  try { var hit = cache.get(key); if (hit) return JSON.parse(hit); } catch (e) {}
   var txnRows = readSheet(LEDGER_TXNS);
   if (!txnRows) return { error: 'Sheet not found: ' + LEDGER_TXNS };
   var fixedRows = readSheet(LEDGER_FIXED) || [[]];
   var cur = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM');
-  return _ledgerCardTotals(txnRows, fixedRows, cur);
+  var out = _ledgerCardTotals(txnRows, fixedRows, cur);
+  try { cache.put(key, JSON.stringify(out), 300); } catch (e2) {}
+  return out;
 }
 
 // -- Tests (pure; fixtures only) ----------------------------------------------
@@ -160,6 +191,12 @@ function testLedgerCardTotals() {
   assertEqual(_ledgerCleanTags('["x","X"]'), ['x'], 'tags: JSON string');
   assertEqual(_ledgerCleanTags('x, y'), ['x', 'y'], 'tags: comma string');
   assertEqual(_ledgerCleanTags(undefined), [], 'tags: missing -> []');
+
+  // lap timers
+  var lt = _perfLaps(); _perfLap(lt, 'a'); _perfLap(lt, 'a'); _perfLapsDone(lt);
+  assert(typeof lt.a === 'number' && lt._at === undefined, 'laps accumulate a repeated step and drop _at');
+  assertEqual(_perfMergeT({ x: 1 }, { y: 2, z: 'no' }, 'm.'), { x: 1, 'm.y': 2 }, 'merge prefixes numeric fields only');
+  assertEqual(_perfMergeT({ x: 1 }, null, 'm.'), { x: 1 }, 'merge tolerates null');
 
   // _perfStampMs never touches arrays; _perfTimeIt records even on throw
   var a = [1]; _perfStampMs(a, Date.now()); assert(a._ms === undefined, '_perfStampMs skips arrays');
