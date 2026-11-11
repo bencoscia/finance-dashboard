@@ -1934,6 +1934,9 @@ function showSetup(){
   $('url-input').value = lsGet('fin_url', '');
   $('setup-back-wrap').style.display = allData ? 'block' : 'none';
   $('setup-overlay').style.display='flex';
+  // <details> stays open across showSetup calls and 'toggle' only fires on a state
+  // change, so a panel left open would show the log as of when it was opened.
+  var pp=$('perf-panel'); if(pp && pp.open) renderPerfPanel();
 }
 function hideSetup(){
   $('setup-overlay').style.display='none';
