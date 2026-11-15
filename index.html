@@ -8354,26 +8354,65 @@ function equityCompute(d, sig){
 function eqPct(x, d){ return x == null || isNaN(x) ? '\u2014' : (x*100).toFixed(d == null ? 1 : d) + '%'; }
 function eqN(n){ return n == null || isNaN(n) ? '\u2014' : Math.round(n).toLocaleString('en-US'); }
 
+// Pure. Projected RSU refresh grants (an assumption, never data): one grant
+// per year on the anniversary of the latest RSU grant, sized from that
+// grant's shares x (1+growth)^k, vesting on the same day offsets with the
+// same cumulative fractions (cumulative-floor, last tranche takes the rest).
+// Off (null) when Config rsu_refresh_growth is blank or no RSU grant has vests.
+function eqRsuRefreshPlan(d){
+  var md = d.model || {}, g = md.rsuGrowth, n = md.rsuYears == null ? 5 : md.rsuYears;
+  if(g == null || !(n > 0)) return null;
+  var base = null;
+  (d.grants || []).forEach(function(x){
+    if(x.type === 'RSU' && (x.vests || []).length && eqRealDate(x.grantDate) && (!base || x.grantDate > base.grantDate)) base = x;
+  });
+  if(!base) return null;
+  var g0 = eqIsoMs(base.grantDate), tot = 0, cum = 0;
+  base.vests.forEach(function(v){ tot += v.shares; });
+  if(!(tot > 0)) return null;
+  var pat = base.vests.map(function(v){ cum += v.shares; return { off: Math.round((eqIsoMs(v.date) - g0)/EQ_DAY_MS), frac: cum/tot }; });
+  var grants = [];
+  for(var k = 1; k <= n; k++){
+    var gd = eqAddMonths(base.grantDate, 12*k), N = Math.round(tot*Math.pow(1 + g, k)), prev = 0;
+    var vests = pat.map(function(p, i){
+      var c = i === pat.length - 1 ? N : Math.floor(N*p.frac), sh = c - prev; prev = c;
+      return { date: new Date(eqIsoMs(gd) + p.off*EQ_DAY_MS).toISOString().slice(0, 10), shares: sh };
+    }).filter(function(v){ return v.shares > 0; });
+    grants.push({ date: gd, shares: N, vests: vests });
+  }
+  // Years after the last projected grant's year are missing later grants, so
+  // the projection is cut there rather than drawing an artificial decline.
+  return { base: base, baseShares: tot, growth: g, years: n, grants: grants, lastYear: +grants[grants.length - 1].date.slice(0, 4) + 1 };
+}
+
 // Pure. Future RSU vests (date > asOf) bucketed by calendar year, valued at
-// price S. Pre-tax gross = shares x S; after-tax only when taxRate is known.
-// Source of truth is each grant's vests[] from the server (same rows that
-// feed col H) -- never re-derived from granted/vested counts.
-// Returns [{ year, shares, gross, net, parts:[{id, shares}] }] sorted by year.
-function eqRsuByYear(d){
+// price S. Scheduled = each grant's server vests[] (same rows that feed col H);
+// projected = plan grants (kept separate so the chart can mark them).
+// After-tax only when taxRate is known. Years past plan.lastYear are dropped
+// when a plan exists. Returns [{ year, shares, gross, projShares, projGross,
+// total, net, parts:[{id, shares}], projParts:[{date, shares}] }] by year.
+function eqRsuByYear(d, plan){
   var S = d.price, tax = d.model ? d.model.taxRate : null, asOf = d.asOf || '', by = {};
+  function bucket(y){ return by[y] || (by[y] = { year: y, shares: 0, projShares: 0, parts: {}, projParts: {} }); }
   (d.grants || []).forEach(function(g){
     if(g.type !== 'RSU') return;
     (g.vests || []).forEach(function(v){
       if(!v.date || !(v.date > asOf) || !(v.shares > 0)) return;
-      var y = v.date.slice(0, 4), b = by[y] || (by[y] = { year: y, shares: 0, parts: {} });
-      b.shares += v.shares; b.parts[g.id] = (b.parts[g.id] || 0) + v.shares;
+      var b = bucket(v.date.slice(0, 4)); b.shares += v.shares; b.parts[g.id] = (b.parts[g.id] || 0) + v.shares;
     });
   });
-  return Object.keys(by).sort().map(function(y){
-    var b = by[y], gross = S > 0 ? b.shares*S : null;
-    return { year: y, shares: b.shares, gross: gross,
-      net: (gross != null && tax != null) ? gross*(1 - tax) : null,
-      parts: Object.keys(b.parts).map(function(id){ return { id: id, shares: b.parts[id] }; }) };
+  if(plan) plan.grants.forEach(function(pg){
+    pg.vests.forEach(function(v){
+      if(!(v.date > asOf) || +v.date.slice(0, 4) > plan.lastYear) return;
+      var b = bucket(v.date.slice(0, 4)); b.projShares += v.shares; b.projParts[pg.date] = (b.projParts[pg.date] || 0) + v.shares;
+    });
+  });
+  return Object.keys(by).sort().filter(function(y){ return !plan || +y <= plan.lastYear || by[y].shares > 0; }).map(function(y){
+    var b = by[y], ok = S > 0, gross = ok ? b.shares*S : null, pgross = ok ? b.projShares*S : null, total = ok ? gross + pgross : null;
+    return { year: y, shares: b.shares, gross: gross, projShares: b.projShares, projGross: pgross, total: total,
+      net: (total != null && tax != null) ? total*(1 - tax) : null,
+      parts: Object.keys(b.parts).map(function(id){ return { id: id, shares: b.parts[id] }; }),
+      projParts: Object.keys(b.projParts).sort().map(function(dt){ return { date: dt, shares: b.projParts[dt] }; }) };
   });
 }
 
@@ -8382,7 +8421,7 @@ function demoEquity(){
   function yr(k){ return (y + k) + t.slice(4); }
   return {
     price: 30, priceTime: t + ' 16:00', asOf: t, demo: true,
-    model: { vol: 0.6, riskFree: 0.04, taxRate: 0.32, pteDays: 90 },
+    model: { vol: 0.6, riskFree: 0.04, taxRate: 0.32, pteDays: 90, rsuGrowth: 0.10, rsuYears: 4 },
     vestedIntrinsic: 20000, netWorthSdgr: 20000, warnings: [],
     grants: [
       { id:'1', type:'NSO', grantDate:yr(-6), expiry:yr(4), strike:70, granted:4000, exercised:0, vested:4000, unvested:0, exercisable:4000, intrinsic:0, expired:false, nextVest:null, notes:'demo', warnings:[] },
@@ -8506,7 +8545,7 @@ function renderEquity(d){
       '<div class="chart-wrap" style="height:240px"><canvas id="c-equity"></canvas></div></div>';
     html += '<div class="chart-card eq-chart-card" id="eq-rsu-card">' +
       '<div class="chart-head"><span class="chart-title">RSU vest income by year</span>' +
-      '<span class="eq-dim" style="margin-left:8px">scheduled vests \u00b7 at today\u2019s ' + (S > 0 ? fmt(S, 2) : '\u2014') + '</span></div>' +
+      '<span class="eq-dim" style="margin-left:8px" id="eq-rsu-sub">at today\u2019s ' + (S > 0 ? fmt(S, 2) : '\u2014') + '</span></div>' +
       '<div class="chart-wrap" style="height:220px"><canvas id="c-eq-rsu"></canvas></div>' +
       '<div class="eq-foot" id="eq-rsu-foot"></div></div>';
     html += eqCalcShell(grants);
@@ -8587,20 +8626,39 @@ function renderEquityChart(d, sig){
 function renderEqRsuChart(d){
   if(cEqRsu){ cEqRsu.destroy(); cEqRsu = null; }
   var card = $('eq-rsu-card'), cv = $('c-eq-rsu'), foot = $('eq-rsu-foot');
-  var rows = eqRsuByYear(d), tax = d.model ? d.model.taxRate : null;
+  var plan = eqRsuRefreshPlan(d), rows = eqRsuByYear(d, plan), tax = d.model ? d.model.taxRate : null;
   if(!card || !cv || !rows.length || !(d.price > 0)){ if(card) card.style.display = 'none'; return; }
-  var total = 0, totSh = 0; rows.forEach(function(r){ total += r.gross; totSh += r.shares; });
-  if(foot) foot.innerHTML = '<b>' + fmt(total) + '</b> pre-tax over ' + rows.length + ' yr (' + eqN(totSh) + ' sh)' +
-    (tax != null ? ' \u00b7 ' + fmt(total*(1 - tax)) + ' after ' + eqPct(tax, 1) : ' \u00b7 set equity_tax_rate for after-tax') +
-    '. Flat price, current grants only \u2014 future refresh grants are not in it, so the late-year decline is an artifact, not a forecast. Contingent on staying: unvested RSUs forfeit on leaving.';
-  // Light bar fill so the dark after-tax markers stay readable on top (lightness contrast, not hue).
+  var sch = 0, proj = 0, schSh = 0, projSh = 0;
+  rows.forEach(function(r){ sch += r.gross; proj += r.projGross; schSh += r.shares; projSh += r.projShares; });
+  var tot = sch + proj, span = rows[0].year + '–' + rows[rows.length - 1].year;
+  if($('eq-rsu-sub')) $('eq-rsu-sub').textContent = (plan ? 'scheduled + projected refresh grants' : 'scheduled vests') + ' · at today’s ' + fmt(d.price, 2);
+  if(foot) foot.innerHTML = '<b>' + fmt(tot) + '</b> pre-tax ' + span +
+    (plan ? ' = ' + fmt(sch) + ' scheduled (' + eqN(schSh) + ' sh) + ' + fmt(proj) + ' projected (' + eqN(projSh) + ' sh)' : ' (' + eqN(schSh) + ' sh)') +
+    (tax != null ? ' · ' + fmt(tot*(1 - tax)) + ' after ' + eqPct(tax, 1) : ' · set equity_tax_rate for after-tax') + '. ' +
+    (plan
+      ? '<b>Projection:</b> ' + plan.years + ' refresh grant' + (plan.years > 1 ? 's' : '') + ' on grant #' + esc(plan.base.id) + '’s anniversary (' + esc(plan.base.grantDate.slice(5)) +
+        '), sized from its ' + eqN(plan.baseShares) + ' sh growing ' + eqPct(plan.growth, 1) + '/yr, vesting on its schedule; chart stops at ' + plan.lastYear +
+        ' (later years would miss grants not yet projected). An assumption from Config, never in net worth. '
+      : 'Current grants only — set <b>rsu_refresh_growth</b> in Config (0 = flat) to project future refresh grants. ') +
+    'Flat price; contingent on staying (unvested RSUs forfeit on leaving).';
+  // Light fill for scheduled, diagonal hatch for projected, dark dashed line +
+  // diamonds for after-tax: separated by fill pattern, mark type and label, not hue (Invariant 5).
   var t = chartTheme(), m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(t.c1 || ''),
-      barFill = m ? 'rgba(' + parseInt(m[1], 16) + ',' + parseInt(m[2], 16) + ',' + parseInt(m[3], 16) + ',0.35)' : t.c1;
+      rgb = m ? parseInt(m[1], 16) + ',' + parseInt(m[2], 16) + ',' + parseInt(m[3], 16) : null,
+      barFill = rgb ? 'rgba(' + rgb + ',0.35)' : t.c1, hatch = t.c1;
+  try {
+    var pc = document.createElement('canvas'); pc.width = pc.height = 8;
+    var px = pc.getContext('2d'); px.strokeStyle = t.c1; px.lineWidth = 1.5;
+    px.beginPath(); px.moveTo(0, 8); px.lineTo(8, 0); px.moveTo(-2, 2); px.lineTo(2, -2); px.moveTo(6, 10); px.lineTo(10, 6); px.stroke();
+    hatch = px.createPattern(pc, 'repeat') || t.c1;
+  } catch(pe){ hatch = t.c1; }
   var sets = [
-    { type: 'bar', label: 'Pre-tax (shares \u00d7 today\u2019s price)', data: rows.map(function(r){ return Math.round(r.gross); }),
+    { type: 'bar', label: 'Scheduled vests (pre-tax)', data: rows.map(function(r){ return Math.round(r.gross); }), stack: 'g',
       backgroundColor: barFill, borderColor: t.c1, borderWidth: 1.5, pointStyle: 'rect', order: 2 }
   ];
-  if(tax != null) sets.push({ type: 'line', label: 'After ' + eqPct(tax, 0) + ' tax', data: rows.map(function(r){ return Math.round(r.net); }),
+  if(plan) sets.push({ type: 'bar', label: 'Projected refresh grants (+' + eqPct(plan.growth, 0) + '/yr)', data: rows.map(function(r){ return Math.round(r.projGross); }), stack: 'g',
+      backgroundColor: hatch, borderColor: t.c1, borderWidth: 1.5, borderDash: [4, 3], pointStyle: 'rect', order: 2 });
+  if(tax != null) sets.push({ type: 'line', label: 'After ' + eqPct(tax, 0) + ' tax (total)', data: rows.map(function(r){ return Math.round(r.net); }), stack: 'n',
     borderColor: cssv('--text', '#222'), backgroundColor: cssv('--text', '#222'), borderWidth: 2, borderDash: [6, 4],
     pointStyle: 'rectRot', pointRadius: 5, fill: false, tension: 0, order: 1 });
   card.style.display = 'block';
@@ -8613,13 +8671,16 @@ function renderEqRsuChart(d){
         legend: { display: true, labels: { color: t.tick, font: { size: 11 }, boxWidth: 24, usePointStyle: true } },
         tooltip: { callbacks: {
           label: function(ctx){ return ctx.dataset.label + ': ' + fmt(ctx.parsed.y); },
-          afterBody: function(it){ var r = rows[it[0].dataIndex];
-            return [eqN(r.shares) + ' sh: ' + r.parts.map(function(p){ return '#' + p.id + ' ' + eqN(p.shares); }).join(', ')]; }
+          afterBody: function(it){ var r = rows[it[0].dataIndex], out = [];
+            if(r.shares) out.push('Scheduled ' + eqN(r.shares) + ' sh: ' + r.parts.map(function(p){ return '#' + p.id + ' ' + eqN(p.shares); }).join(', '));
+            if(r.projShares) out.push('Projected ' + eqN(r.projShares) + ' sh: ' + r.projParts.map(function(p){ return p.date.slice(0, 4) + ' grant ' + eqN(p.shares); }).join(', '));
+            if(r.projShares) out.push('Total pre-tax ' + fmt(r.total));
+            return out; }
         } }
       },
       scales: {
-        x: { ticks: { color: t.tick, font: { size: 10 } }, grid: { display: false }, border: { display: false } },
-        y: { beginAtZero: true, ticks: { color: t.tick, font: { size: 10 }, callback: function(v){ return '$' + Math.round(v/1000) + 'k'; } }, grid: { color: t.grid }, border: { display: false } }
+        x: { stacked: true, ticks: { color: t.tick, font: { size: 10 } }, grid: { display: false }, border: { display: false } },
+        y: { stacked: true, beginAtZero: true, ticks: { color: t.tick, font: { size: 10 }, callback: function(v){ return '$' + Math.round(v/1000) + 'k'; } }, grid: { color: t.grid }, border: { display: false } }
       }
     }
   });
