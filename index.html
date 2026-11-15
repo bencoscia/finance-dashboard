@@ -8220,7 +8220,7 @@ async function submitHsaReimburse(){
 // Black-Scholes values are display-only and never enter net worth: employee
 // options can't be sold or hedged and unvested ones are forfeited on leaving,
 // so B-S is an upper bound on their value to the holder.
-var equityData = null, equityLoadedAt = 0, cEquity = null, eqCalcState = null, eqAddWired = false;
+var equityData = null, equityLoadedAt = 0, cEquity = null, cEqRsu = null, eqCalcState = null, eqAddWired = false;
 var EQ_VOL_BAND = 0.10;              // +/- band shown around Config sdgr_vol
 var EQ_STALE_MS = 10 * 60 * 1000;    // refetch price/grants when the tab reopens after 10 min
 var EQ_DAY_MS   = 86400000;
@@ -8354,6 +8354,29 @@ function equityCompute(d, sig){
 function eqPct(x, d){ return x == null || isNaN(x) ? '\u2014' : (x*100).toFixed(d == null ? 1 : d) + '%'; }
 function eqN(n){ return n == null || isNaN(n) ? '\u2014' : Math.round(n).toLocaleString('en-US'); }
 
+// Pure. Future RSU vests (date > asOf) bucketed by calendar year, valued at
+// price S. Pre-tax gross = shares x S; after-tax only when taxRate is known.
+// Source of truth is each grant's vests[] from the server (same rows that
+// feed col H) -- never re-derived from granted/vested counts.
+// Returns [{ year, shares, gross, net, parts:[{id, shares}] }] sorted by year.
+function eqRsuByYear(d){
+  var S = d.price, tax = d.model ? d.model.taxRate : null, asOf = d.asOf || '', by = {};
+  (d.grants || []).forEach(function(g){
+    if(g.type !== 'RSU') return;
+    (g.vests || []).forEach(function(v){
+      if(!v.date || !(v.date > asOf) || !(v.shares > 0)) return;
+      var y = v.date.slice(0, 4), b = by[y] || (by[y] = { year: y, shares: 0, parts: {} });
+      b.shares += v.shares; b.parts[g.id] = (b.parts[g.id] || 0) + v.shares;
+    });
+  });
+  return Object.keys(by).sort().map(function(y){
+    var b = by[y], gross = S > 0 ? b.shares*S : null;
+    return { year: y, shares: b.shares, gross: gross,
+      net: (gross != null && tax != null) ? gross*(1 - tax) : null,
+      parts: Object.keys(b.parts).map(function(id){ return { id: id, shares: b.parts[id] }; }) };
+  });
+}
+
 function demoEquity(){
   var t = localToday(), y = +t.slice(0,4);
   function yr(k){ return (y + k) + t.slice(4); }
@@ -8364,7 +8387,8 @@ function demoEquity(){
     grants: [
       { id:'1', type:'NSO', grantDate:yr(-6), expiry:yr(4), strike:70, granted:4000, exercised:0, vested:4000, unvested:0, exercisable:4000, intrinsic:0, expired:false, nextVest:null, notes:'demo', warnings:[] },
       { id:'2', type:'NSO', grantDate:yr(-2), expiry:yr(8), strike:22, granted:4000, exercised:0, vested:2500, unvested:1500, exercisable:2500, intrinsic:20000, expired:false, nextVest:{ date:eqAddMonths(t,1), shares:83 }, notes:'', warnings:[] },
-      { id:'3', type:'RSU', grantDate:yr(-1), expiry:'', strike:0, granted:1200, exercised:0, vested:600, unvested:600, exercisable:0, intrinsic:0, expired:false, nextVest:{ date:eqAddMonths(t,3), shares:150 }, notes:'', warnings:[] }
+      { id:'3', type:'RSU', grantDate:yr(-1), expiry:'', strike:0, granted:1200, exercised:0, vested:600, unvested:600, exercisable:0, intrinsic:0, expired:false, nextVest:{ date:eqAddMonths(t,3), shares:300 }, notes:'', warnings:[],
+        vests:[{ date:eqAddMonths(t,-9), shares:300 }, { date:eqAddMonths(t,-1), shares:300 }, { date:eqAddMonths(t,3), shares:300 }, { date:eqAddMonths(t,15), shares:300 }] }
     ]
   };
 }
@@ -8420,6 +8444,7 @@ function renderEquity(d){
       html += '<div class="tbl-empty">No grants yet \u2014 use <b>+ Add grant</b>.</div>';
       box.innerHTML = eqShell(html);
       if(cEquity){ cEquity.destroy(); cEquity = null; }
+      if(cEqRsu){ cEqRsu.destroy(); cEqRsu = null; }
       return;
     }
 
@@ -8479,6 +8504,11 @@ function renderEquity(d){
       '<div class="chart-head"><span class="chart-title">Option value vs SDGR price</span>' +
       '<span class="eq-dim" style="margin-left:8px">today\u2019s grants \u00b7 \u03c3 ' + (sig ? eqPct(sig, 0) : '\u2014') + '</span></div>' +
       '<div class="chart-wrap" style="height:240px"><canvas id="c-equity"></canvas></div></div>';
+    html += '<div class="chart-card eq-chart-card" id="eq-rsu-card">' +
+      '<div class="chart-head"><span class="chart-title">RSU vest income by year</span>' +
+      '<span class="eq-dim" style="margin-left:8px">scheduled vests \u00b7 at today\u2019s ' + (S > 0 ? fmt(S, 2) : '\u2014') + '</span></div>' +
+      '<div class="chart-wrap" style="height:220px"><canvas id="c-eq-rsu"></canvas></div>' +
+      '<div class="eq-foot" id="eq-rsu-foot"></div></div>';
     html += eqCalcShell(grants);
 
     box.innerHTML = eqShell(html);
@@ -8486,6 +8516,8 @@ function renderEquity(d){
     // failure must not take the numbers down with it).
     try { renderEquityChart(d, sig); }
     catch(ce){ console.error('renderEquityChart failed:', ce); if($('eq-chart-card')) $('eq-chart-card').style.display = 'none'; }
+    try { renderEqRsuChart(d); }
+    catch(re){ console.error('renderEqRsuChart failed:', re); if($('eq-rsu-card')) $('eq-rsu-card').style.display = 'none'; }
     try { eqCalcInit(d); }
     catch(ke){ console.error('eqCalcInit failed:', ke); if($('eqc-out')) $('eqc-out').innerHTML = '<div class="nw-warn">\u26a0 Calculator failed: ' + esc(ke.message) + '</div>'; }
   } catch(err){
@@ -8546,6 +8578,50 @@ function renderEquityChart(d, sig){
       }
     },
     plugins: [nowLine]
+  });
+}
+
+// Future RSU income per calendar year. Pre-tax = solid bars; after-tax =
+// dashed line with diamond markers -- separated by mark type + dash + legend
+// label, not hue (Invariant 5). Hidden (not zero-filled) when nothing is pending.
+function renderEqRsuChart(d){
+  if(cEqRsu){ cEqRsu.destroy(); cEqRsu = null; }
+  var card = $('eq-rsu-card'), cv = $('c-eq-rsu'), foot = $('eq-rsu-foot');
+  var rows = eqRsuByYear(d), tax = d.model ? d.model.taxRate : null;
+  if(!card || !cv || !rows.length || !(d.price > 0)){ if(card) card.style.display = 'none'; return; }
+  var total = 0, totSh = 0; rows.forEach(function(r){ total += r.gross; totSh += r.shares; });
+  if(foot) foot.innerHTML = '<b>' + fmt(total) + '</b> pre-tax over ' + rows.length + ' yr (' + eqN(totSh) + ' sh)' +
+    (tax != null ? ' \u00b7 ' + fmt(total*(1 - tax)) + ' after ' + eqPct(tax, 1) : ' \u00b7 set equity_tax_rate for after-tax') +
+    '. Flat price, current grants only \u2014 future refresh grants are not in it, so the late-year decline is an artifact, not a forecast. Contingent on staying: unvested RSUs forfeit on leaving.';
+  // Light bar fill so the dark after-tax markers stay readable on top (lightness contrast, not hue).
+  var t = chartTheme(), m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(t.c1 || ''),
+      barFill = m ? 'rgba(' + parseInt(m[1], 16) + ',' + parseInt(m[2], 16) + ',' + parseInt(m[3], 16) + ',0.35)' : t.c1;
+  var sets = [
+    { type: 'bar', label: 'Pre-tax (shares \u00d7 today\u2019s price)', data: rows.map(function(r){ return Math.round(r.gross); }),
+      backgroundColor: barFill, borderColor: t.c1, borderWidth: 1.5, pointStyle: 'rect', order: 2 }
+  ];
+  if(tax != null) sets.push({ type: 'line', label: 'After ' + eqPct(tax, 0) + ' tax', data: rows.map(function(r){ return Math.round(r.net); }),
+    borderColor: cssv('--text', '#222'), backgroundColor: cssv('--text', '#222'), borderWidth: 2, borderDash: [6, 4],
+    pointStyle: 'rectRot', pointRadius: 5, fill: false, tension: 0, order: 1 });
+  card.style.display = 'block';
+  cEqRsu = new Chart(cv, {
+    type: 'bar',
+    data: { labels: rows.map(function(r){ return r.year; }), datasets: sets },
+    options: {
+      responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: true, labels: { color: t.tick, font: { size: 11 }, boxWidth: 24, usePointStyle: true } },
+        tooltip: { callbacks: {
+          label: function(ctx){ return ctx.dataset.label + ': ' + fmt(ctx.parsed.y); },
+          afterBody: function(it){ var r = rows[it[0].dataIndex];
+            return [eqN(r.shares) + ' sh: ' + r.parts.map(function(p){ return '#' + p.id + ' ' + eqN(p.shares); }).join(', ')]; }
+        } }
+      },
+      scales: {
+        x: { ticks: { color: t.tick, font: { size: 10 } }, grid: { display: false }, border: { display: false } },
+        y: { beginAtZero: true, ticks: { color: t.tick, font: { size: 10 }, callback: function(v){ return '$' + Math.round(v/1000) + 'k'; } }, grid: { color: t.grid }, border: { display: false } }
+      }
+    }
   });
 }
 
