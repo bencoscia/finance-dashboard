@@ -180,6 +180,7 @@ function invalidateLedgerCache() {
     c.remove(LEDGER_CACHE_KEY);
     c.remove(LEDGER_CACHE_VERSION + '_oldshape');
     c.remove(_perfCardTotalsKey()); // perf.gs: card totals are derived from the same rows
+    c.remove(LEDGER_CACHE_VERSION + '_monthnames');
   } catch (e) {}
 }
 
@@ -275,9 +276,12 @@ function ledgerAddTxn(p) {
   if (!sheet) return { error: 'Sheet not found: ' + LEDGER_TXNS };
   return _ledgerWithLock(function () {
     invalidateSheet(LEDGER_TXNS);
-    var values = readSheet(sheet);
+    // Next id needs column A only. The full 12-column read was ~0.9 s of every
+    // Quick Add (measured 2026-11-11), spent while holding the script lock.
+    var lastRow = sheet.getLastRow();
+    var values = lastRow >= 1 ? sheet.getRange(1, 1, lastRow, 1).getValues() : [[]];
     var newId = _ledgerNextId(values);
-    var row = Math.max(sheet.getLastRow() + 1, 2);
+    var row = Math.max(lastRow + 1, 2);
     // Optional tags (UX_SPEC 1B): written to col K in the SAME setValues, so a
     // Quick Add with tags is one POST. tagsWritten tells the client this backend
     // honoured them; an older backend omits it and the client falls back to ledgerSetTags.
@@ -625,14 +629,12 @@ function _ledgerMonthKey(name) { // 'June 2026' -> '2026-06'
   return parts[1] + '-' + ('0' + (idx + 1)).slice(-2);
 }
 
+// Reads the parsed, cached Config (cfg) instead of the Config sheet. The sheet
+// read cost 0.2-0.7 s on EVERY request (measured 2026-11-11: quick spent ~0.7 s
+// outside its timed sections). Flipping the flag takes effect within cfg's
+// 5-min TTL, or at once via onEdit on Config (invalidateConfigCache).
 function _ledgerCutoverOn() {
-  var rows = readSheet('Config');
-  if (!rows) return false;
-  for (var i = 0; i < rows.length; i++) {
-    if (String(rows[i][0] || '').trim() === 'ledger_cutover')
-      return String(rows[i][1]).toUpperCase() === 'TRUE';
-  }
-  return false;
+  return !!cfg().ledgerCutover;
 }
 
 function _ledgerVarhist() { // -> { '2026-06': { Budget: 13204.75, Dogs: ... } }
@@ -752,6 +754,10 @@ function ledgerComputeMonths() {
 function ledgerMonthNames() { // newest-first old-style names, getMonthlySheetNames parity
   // Union of Txns and Fixed Log months: a freshly seeded month has fixed
   // rows but no transactions yet, and must still appear in the selectors.
+  // Cached like the monthly aggregate: when monthly was a cache hit, this was
+  // the only reader of Txns in `all` and paid the whole 0.5-1.1 s read.
+  var cache = CacheService.getScriptCache(), CKEY = LEDGER_CACHE_VERSION + '_monthnames';
+  try { var hit = cache.get(CKEY); if (hit) return JSON.parse(hit); } catch (e) {}
   var seen = {}, i, mk;
   var rows = readSheet(LEDGER_TXNS) || [[]];
   for (i = 1; i < rows.length; i++) {
@@ -768,6 +774,7 @@ function ledgerMonthNames() { // newest-first old-style names, getMonthlySheetNa
   keys.sort(); keys.reverse();
   var out = [];
   for (i = 0; i < keys.length; i++) out.push(_ledgerMonthName(keys[i]));
+  try { cache.put(CKEY, JSON.stringify(out), 300); } catch (e2) {}
   return out;
 }
 
@@ -870,15 +877,12 @@ function ledgerGetVariableEntries(monthName) {
 // The chain is anchored by two Config keys set once at cutover (sheet-level):
 //   checking_seed        -- the balance at the start of checking_seed_month
 //   checking_seed_month  -- YYYY-MM; months before it live in the frozen sheets
+// Through cfg() (cached), not the Config sheet: this sheet read was ~0.7 s of
+// every cardBalances recompute (measured 2026-11-11), same bug class as the
+// old _ledgerCutoverOn.
 function _ledgerCheckingSeed() {
-  var seed = null, seedMonth = '';
-  var conf = readSheet('Config') || [[]];
-  for (var i = 0; i < conf.length; i++) {
-    var k = String(conf[i][0] || '').trim();
-    if (k === 'checking_seed') seed = _ln(conf[i][1]);
-    if (k === 'checking_seed_month') seedMonth = _lmonth(conf[i][1]);
-  }
-  return { seed: seed, seedMonth: seedMonth };
+  var c = cfg();
+  return { seed: (c.checkingSeed === undefined ? null : c.checkingSeed), seedMonth: c.checkingSeedMonth || '' };
 }
 
 // Every event that ever moves the checking balance, as balance-CHANGE amounts

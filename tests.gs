@@ -607,6 +607,21 @@ function testConfigParsing() {
   assertEqual(out5.sdgrVol, null, 'zero volatility rejected (stays unset)');
   assertEqual(out5.equityTaxRate, 0, 'zero tax rate allowed');
   assertEqual(out5.optionPteDays, 90, 'bad pte days falls back');
+
+  // RSU refresh projection keys (cfg_v6): blank -> off, 0 -> flat, percent or fraction
+  var out6 = _configDefaults();
+  assertEqual([out6.rsuRefreshGrowth, out6.rsuRefreshYears], [null, 5], 'rsu refresh defaults (projection off)');
+  _applyRawConfig(out6, { 'rsu_refresh_growth': 10, 'rsu_refresh_years': 7 });
+  assertApprox(out6.rsuRefreshGrowth, 0.10, 'rsu_refresh_growth 10 read as 10%', 1e-9);
+  assertEqual(out6.rsuRefreshYears, 7, 'rsu_refresh_years applies');
+  var out7 = _configDefaults();
+  _applyRawConfig(out7, { 'rsu_refresh_growth': 0, 'rsu_refresh_years': 'x' });
+  assertEqual(out7.rsuRefreshGrowth, 0, 'zero growth allowed (flat refresh)');
+  assertEqual(out7.rsuRefreshYears, 5, 'bad rsu_refresh_years falls back');
+  var out8 = _configDefaults();
+  _applyRawConfig(out8, { 'rsu_refresh_growth': '', 'rsu_refresh_years': 99 });
+  assertEqual(out8.rsuRefreshGrowth, null, 'blank growth leaves projection off');
+  assertEqual(out8.rsuRefreshYears, 5, 'rsu_refresh_years > 20 rejected');
 }
 
 function testIdempotency() {

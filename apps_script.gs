@@ -3,7 +3,8 @@
 // Finance Dashboard -- Google Apps Script v3
 // Paste into Tools > Apps Script, deploy as Web App:
 //   Execute as: Me  |  Who has access: Anyone
-// After any edit, create a NEW deployment for changes to apply.
+// After any edit: Deploy > Manage deployments > pencil-edit > New version.
+// NEVER 'New deployment' -- it mints a new URL that the dashboard won't use.
 // ============================================================
 
 // -- Per-request caches (reset at start of every doGet/doPost) --
@@ -61,6 +62,11 @@ function onEdit(e) {
     var name = e.range.getSheet().getName();
     // Equity sheets feed Portfolio Management 'SDGR Options' -> net worth
     if (name === EQ_GRANTS_SHEET || name === EQ_VESTS_SHEET) { invalidateNetWorthCache(); return; }
+    // Loans / Credit / Discover Savings feed the cached loans + accounts payloads
+    // (perf.gs) and net worth (Loans!D26, Discover Savings!H4).
+    if (name === 'Loans' || name === 'Credit' || name === 'Discover Savings') {
+      invalidateLoanAcctCache(); invalidateNetWorthCache(); return;
+    }
     if (ONEDIT_WATCH_SHEETS.indexOf(name) < 0) return;
     invalidateLedgerCache();
     invalidateCardBalanceCache();
@@ -177,6 +183,7 @@ function dispatch(payload) {
     else if (action === 'ledgerEnsureQuarterly') return _withIdem(payload, function(){ return ledgerEnsureQuarterly(payload); }); // no balance impact: rows land unpaid
     else if (action === 'ledgerAddIncome')      { var r = _withIdem(payload, function(){ return ledgerAddIncome(payload); });      invalidateCardBalanceCache(); return r; }
     else if (action === 'ledgerSetTags')        return _withIdem(payload, function(){ return ledgerSetTags(payload); }); // display data; no balance impact
+    else if (action === 'ledgerSetPending')     { var r = _withIdem(payload, function(){ return ledgerSetPending(payload); });     invalidateCardBalanceCache(); return r; } // tiles carry pending counts
     else if (action === 'addEquityGrant')       return _withIdem(payload, function(){ return addEquityGrant(payload); }); // invalidates net-worth cache internally
     else return { error: 'Unknown action: ' + action };
   } catch(err) {
@@ -187,6 +194,7 @@ function dispatch(payload) {
 
 function doGet(e) {
   _resetCaches();
+  var _t0 = Date.now(); // UX_SPEC 1B: server execution ms -> data._ms
   var action = (e.parameter && e.parameter.action) || 'all';
   var data;
   try {
@@ -215,6 +223,7 @@ function doGet(e) {
   } catch(err) {
     data = { error: err.message };
   }
+  _perfStampMs(data, _t0);
   return ContentService
     .createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
@@ -222,6 +231,7 @@ function doGet(e) {
 
 function doPost(e) {
   _resetCaches();
+  var _t0 = Date.now(); // UX_SPEC 1B: server execution ms -> data._ms
   var data;
   try {
     var p = JSON.parse(e.postData.contents);
@@ -261,6 +271,7 @@ function doPost(e) {
     else if (p.action === 'ledgerEnsureQuarterly') data = _withIdem(p, function(){ return ledgerEnsureQuarterly(p); });
     else if (p.action === 'ledgerAddIncome')      data = _withIdem(p, function(){ return ledgerAddIncome(p); }); // invalidates ledger cache internally
     else if (p.action === 'ledgerSetTags')        data = _withIdem(p, function(){ return ledgerSetTags(p); });
+    else if (p.action === 'ledgerSetPending')     data = _withIdem(p, function(){ return ledgerSetPending(p); }); // was missing: client calls it (pending toggle + migrateLocalPending)
     else if (p.action === 'addEquityGrant')       data = _withIdem(p, function(){ return addEquityGrant(p); }); // invalidates net-worth cache internally
     else data = { error: 'Unknown POST action: ' + p.action };
     // Invalidate caches for the affected month and card balances
@@ -271,11 +282,22 @@ function doPost(e) {
       'makeCardPayment','voidLastPayment','setSeedBalance','makeCheckingEntry',
       'setFixedPaid','updateFixedCost',
       'ledgerAddTxn','ledgerUpdateTxn','ledgerDeleteTxn','ledgerSplitTxn',
-      'ledgerAddFixed','ledgerUpdateFixed'];
-    if (BALANCE_ACTIONS.indexOf(p.action) >= 0) invalidateCardBalanceCache();
+      'ledgerAddFixed','ledgerUpdateFixed',
+      'ledgerSeedFixedMonth','ledgerAddIncome', // move the checking balance
+      'ledgerSetPending'];                      // cardBalances carries pending counts
+    if (BALANCE_ACTIONS.indexOf(p.action) >= 0) {
+      invalidateCardBalanceCache();
+      // UX_SPEC 1B: the write returns the new truth. Attached HERE -- after _withIdem
+      // has cached its small {ok,id,...} result and after every cache is
+      // invalidated -- never inside the wrapped function (CacheService rejects
+      // values over 100 KB; an oversized put would silently drop the idem key and
+      // make a retry write twice). A failure here never fails the write.
+      _perfAttachFresh(data, _perfBuildFresh);
+    }
   } catch(err) {
     data = { error: err.message };
   }
+  _perfStampMs(data, _t0);
   return ContentService
     .createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
@@ -283,16 +305,18 @@ function doPost(e) {
 
 // -- GET: all ------------------------------------------------
 function getAllData() {
-  var loanData = getLoanData();
+  var _t = {}; // UX_SPEC 1B: per-section server ms, returned as _t (perf log records it)
+  var loanData = _perfTimeIt(_t, 'loans', function(){ return getLoanData(); });
   var useLedger = _ledgerCutoverOn(); // Config key 'ledger_cutover' = TRUE
   return {
-    config:        getConfig(),
-    monthly:       useLedger ? ledgerComputeMonths() : getMonthlyData(),
-    accounts:      getAccountsData(),
-    cardTotals:    getCardTotals(),
-    cardBalances:  getCardBalances(),
+    config:        _perfTimeIt(_t, 'config',       function(){ return getConfig(); }),
+    monthly:       _perfTimeIt(_t, 'monthly',      function(){ return useLedger ? ledgerComputeMonths() : getMonthlyData(); }),
+    accounts:      _perfTimeIt(_t, 'accounts',     function(){ return getAccountsData(); }),
+    cardTotals:    _perfTimeIt(_t, 'cardTotals',   function(){ return getCardTotals(); }),
+    cardBalances:  _perfTimeIt(_t, 'cardBalances', function(){ return getCardBalances(); }),
     budget:        cfg().budget,
-    months:        useLedger ? ledgerMonthNames() : getMonthlySheetNames(),
+    months:        _perfTimeIt(_t, 'months',       function(){ return useLedger ? ledgerMonthNames() : getMonthlySheetNames(); }),
+    _t:            _t,
     loanInterest:  loanData.sheetTotalInterest || loanData.totalInterest || 0,
     loanPrincipal: loanData.sheetTotalPayment  ? (loanData.sheetTotalPayment - (loanData.sheetTotalInterest||0)) : 0,
     updated:       new Date().toISOString()
@@ -305,8 +329,11 @@ function getQuickData() {
   if (_ledgerCutoverOn()) {
     // Ledger path needs no per-month cache surgery: one aggregate pass,
     // already invalidated by every ledger write.
-    return { monthly: ledgerComputeMonths(), months: ledgerMonthNames(),
-             updated: new Date().toISOString() };
+    var _t = {};
+    var qMonthly = _perfTimeIt(_t, 'monthly', function(){ return ledgerComputeMonths(); });
+    var qMonths  = _perfTimeIt(_t, 'months',  function(){ return ledgerMonthNames(); });
+    return { monthly: qMonthly, months: qMonths, updated: new Date().toISOString(),
+             _t: _perfMergeT(_t, _perfMonthsT, 'm.') };
   }
   var p = _lastPostParams || {};
   var currentMonth = p.month || getMonthlySheetNames()[0] || '';
@@ -381,7 +408,7 @@ var DAYCARE_FSA_ANNUAL = 24 * 312.50; // $7,500/yr -> $625/mo net benefit
 // This avoids re-scanning every month sheet on every quick refresh.
 
 var CACHE_VERSION      = 'monthly_v3'; // bump when getMonthlyData fields change
-var CARD_CACHE_VERSION = 'cards_v1';   // bump when getCardBalances fields change
+var CARD_CACHE_VERSION = 'cards_v2';   // bump when getCardBalances fields change. v2: pendingCount/pendingTotal per card + checkingPending
 var CARD_CACHE_KEY     = CARD_CACHE_VERSION + '_balances';
 var CARD_CACHE_TTL     = 300;          // 5 minutes -- short since balances change often
 
@@ -1135,7 +1162,7 @@ function addTransaction(p) {
 // Parsed result is cached 5 minutes (edits take effect within that).
 // Run setupConfigSheet() in migrate.gs once to create the sheet.
 var CONFIG_SHEET  = 'Config';
-var CFG_CACHE_KEY = 'cfg_v5'; // v5: added sdgrVol/sdgrRiskFree/equityTaxRate/optionPteDays (equity section). v4: added hsaDeductible/hsaContribLimit/hsaDeductibleResetMonth (v3 hsaReceiptFolder, v2 hsaEstablished) -- bump on every shape change (lesson: stale-shape cache, see INDEX trap)
+var CFG_CACHE_KEY = 'cfg_v8'; // v8: rsuRefreshGrowth/rsuRefreshYears (RSU income projection). v7: checkingSeed/checkingSeedMonth (_ledgerCheckingSeed reads cfg). v6: added ledgerCutover (_ledgerCutoverOn reads cfg, not the sheet). v5: added sdgrVol/sdgrRiskFree/equityTaxRate/optionPteDays (equity section). v4: added hsaDeductible/hsaContribLimit/hsaDeductibleResetMonth (v3 hsaReceiptFolder, v2 hsaEstablished) -- bump on every shape change (lesson: stale-shape cache, see INDEX trap)
 var _cfgMemo = null;
 
 function cfg() {
@@ -1146,6 +1173,7 @@ function cfg() {
     if (hit) { _cfgMemo = JSON.parse(hit); return _cfgMemo; }
   } catch (e) {}
   var out = _configDefaults();
+  var readOk = false;
   try {
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG_SHEET);
     if (sheet) {
@@ -1157,10 +1185,14 @@ function cfg() {
         raw[k] = rows[i][1];
       }
       _applyRawConfig(out, raw);
+      readOk = true;
     }
   } catch (e) {}
   _cfgMemo = out;
-  try { cache.put(CFG_CACHE_KEY, JSON.stringify(out), 300); } catch (e) {}
+  // Cache ONLY a real read. A failed read returns the defaults for this request,
+  // but caching them would pin ledgerCutover=false (legacy month-sheet reads)
+  // and every other default for 5 minutes.
+  if (readOk) { try { cache.put(CFG_CACHE_KEY, JSON.stringify(out), 300); } catch (e) {} }
   return out;
 }
 
@@ -1183,6 +1215,11 @@ function _configDefaults() {
     sdgrRiskFree:         0.04,   // B-S risk-free rate (fraction)
     equityTaxRate:        null,   // marginal rate on option spread / RSU income; null -> after-tax hidden
     optionPteDays:        90,     // post-termination exercise window for vested options
+    rsuRefreshGrowth:     null,   // yearly growth of projected RSU refresh grants (fraction); null -> no projection, 0 -> flat
+    rsuRefreshYears:      5,      // how many future refresh grants to project
+    ledgerCutover:        false,  // Config 'ledger_cutover' = TRUE routes reads to the ledger tables
+    checkingSeed:         null,   // Config 'checking_seed' ($) -- ledger checking balance anchor
+    checkingSeedMonth:    '',     // Config 'checking_seed_month' (YYYY-MM)
   };
 }
 
@@ -1255,6 +1292,14 @@ function _applyRawConfig(out, raw) {
     var pd = parseInt(raw['option_pte_days'], 10);
     if (pd > 0) out.optionPteDays = pd;
   }
+  if ('rsu_refresh_growth' in raw)     out.rsuRefreshGrowth     = _cfgRate(raw['rsu_refresh_growth'], out.rsuRefreshGrowth, 1, true);
+  if ('rsu_refresh_years' in raw) {
+    var ry = parseInt(raw['rsu_refresh_years'], 10);
+    if (ry >= 0 && ry <= 20) out.rsuRefreshYears = ry;
+  }
+  if ('checking_seed' in raw)          out.checkingSeed         = _ln(raw['checking_seed']);
+  if ('checking_seed_month' in raw)    out.checkingSeedMonth    = _lmonth(raw['checking_seed_month']);
+  if ('ledger_cutover' in raw)         out.ledgerCutover        = String(raw['ledger_cutover']).trim().toUpperCase() === 'TRUE';
   if ('seed_month' in raw) {
     var sm = raw['seed_month'];
     if (sm instanceof Date && !isNaN(sm.getTime()))
@@ -1293,7 +1338,7 @@ function getConfig() {
         due:         d.due,
       };
     }),
-    pmOptions: ['', 'AMEX', 'Costco', 'Wells Fargo', 'Prime', 'United', "Lowe's", 'Discover', 'Checking', 'Gift Card'],
+    pmOptions: ['', 'AMEX', 'Costco', 'Wells Fargo', 'Prime', 'United', "Lowe's", 'Checking', 'Gift Card'],
     quarterlyExpenses: c.quarterlyExpenses,
   };
 }
@@ -1313,7 +1358,6 @@ var CARD_DISPLAY_MAP = {
   'Prime Visa':  'Amazon Prime Visa',
   "Lowe's":      "Lowe's Advantage",
   'United':      'United Explorer',
-  'Discover':    'Discover It',
 };
 
 // Daycare config -- update here when schedule changes, redeploy once
@@ -1383,7 +1427,6 @@ var CARD_DEFS = [
   { name: 'Citi',        limit: 14000,  due: '28th' },
   { name: 'Wells Fargo', limit: 18800,  due: '22nd' },
   { name: "Lowe's",      limit: 35000,  due: '5th'  },
-  { name: 'Discover',    limit: 6600,   due: '28th' },
 ];
 
 var CT_TOTAL_ROW = CT_FIRST_ROW + CARD_DEFS.length + 1; // blank row then totals
@@ -1418,6 +1461,7 @@ function getCardBalances() {
 
   // Write to cache
   try { cache.put(CARD_CACHE_KEY, JSON.stringify(result), CARD_CACHE_TTL); } catch(e) {}
+  if (_perfCardT) result._t = _perfCardT; // after the put: cached copies never carry stale timings
   return result;
 }
 
@@ -1427,6 +1471,7 @@ function invalidateCardBalanceCache() {
 
 function _computeCardBalances() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var _ct = _perfLaps(); // UX_SPEC 1B: where the post-save recompute spends its time
 
   // -- Step 1: Read Card Trackers for metadata and seed balances
   var ctSheet = ss.getSheetByName(CARD_TRACKERS_SHEET);
@@ -1455,6 +1500,8 @@ function _computeCardBalances() {
       };
     }
   }
+
+  _perfLap(_ct, 'trackers');
 
   // -- Step 2: Build PM -> sheetKey map
   var pmToKey = {};
@@ -1500,6 +1547,7 @@ function _computeCardBalances() {
       balances[lkey] += lamt;
     }
   }
+  _perfLap(_ct, 'charges');
   var monthNames = useLedger ? [] : getMonthlySheetNames();
   monthNames.forEach(function(monthName) {
     if (monthName === SEED_MONTH) return; // skip -- already in seed
@@ -1534,7 +1582,6 @@ function _computeCardBalances() {
       balances[key] += cost;
     }
   });
-  Logger.log('AMEX after txn scan: ' + balances['AMEX'] + ' seed was: ' + (ctMeta['AMEX'] ? ctMeta['AMEX'].seed : 'n/a'));
   monthNames.forEach(function(monthName) {
     if (monthName === SEED_MONTH) return; // skip -- already in seed
     var vals = readSheet(monthName);
@@ -1616,6 +1663,8 @@ function _computeCardBalances() {
     }
   });
 
+  _perfLap(_ct, 'legacyMonths');
+
   // -- Step 8: Subtract all payments from Card Payments sheet
   var cp = ss.getSheetByName(CARD_PAYMENTS_SHEET);
   if (cp) {
@@ -1634,34 +1683,69 @@ function _computeCardBalances() {
       pmTotals[cardName] = Math.round(((pmTotals[cardName] || 0) + amount) * 100) / 100;
       balances[cardName] += amount;
     }
-    Logger.log('AMEX payments: count=' + (pmCounts['AMEX']||0) + ' total=' + (pmTotals['AMEX']||0));
-    Logger.log('WF payments: count=' + (pmCounts['Wells Fargo']||0) + ' total=' + (pmTotals['Wells Fargo']||0));
   }
-  Logger.log('WF after payments: ' + balances['Wells Fargo']);
-  Logger.log('AMEX after payments: ' + balances['AMEX']);
+
+  _perfLap(_ct, 'payments');
 
   // -- Step 9: Write computed balances back to Card Trackers col C
+  // Reuses the Step 1 read (nothing in this request has written the sheet
+  // since), skips the write entirely when no balance changed, and writes a
+  // contiguous run of card rows in ONE setValues. Rows outside the run (a
+  // retired card's row, the TOTAL row and its formula) are never touched.
   if (ctSheet) {
-    var ctVals2 = ctSheet.getDataRange().getValues();
+    var ctVals2 = ctVals || ctSheet.getDataRange().getValues();
+    var wb = [], wbChanged = false;
     for (var i = 1; i < ctVals2.length; i++) {
       var name = String(ctVals2[i][CT_COL_CARD-1]||'').trim();
       if (!name || name === 'TOTAL' || balances[name] === undefined) continue;
-      ctSheet.getRange(i + 1, CT_COL_BALANCE).setValue(balances[name]);
+      var cur = ctVals2[i][CT_COL_BALANCE-1];
+      if (typeof cur !== 'number' || Math.abs(cur - balances[name]) > 0.0049) wbChanged = true;
+      wb.push({ row: i + 1, val: balances[name] });
+    }
+    if (wbChanged && wb.length) {
+      var contiguous = (wb[wb.length - 1].row - wb[0].row) === (wb.length - 1);
+      if (contiguous) {
+        ctSheet.getRange(wb[0].row, CT_COL_BALANCE, wb.length, 1)
+          .setValues(wb.map(function(w) { return [w.val]; }));
+      } else {
+        wb.forEach(function(w) { ctSheet.getRange(w.row, CT_COL_BALANCE).setValue(w.val); });
+      }
     }
     invalidateSheet(CARD_TRACKERS_SHEET);
   }
+  _perfLap(_ct, 'writeback');
 
   // -- Step 10: Build response
   // Statement balances: derived by rolling the CURRENT balance backwards over
   // everything dated after the last statement close, so the two figures are
   // consistent by construction and can never drift apart.
   var stmts = _cardStatementBalances(balances, ctMeta, pmToKey);
+  _perfLap(_ct, 'statements');
+
+  // Pending (review) flags from Txns col L, by payment method -> card key.
+  var pendByKey = {}, checkingPending = { count: 0, total: 0 };
+  if (useLedger) {
+    var pbm = _ledgerPendingByMethod();
+    for (var pmLabel in pbm) {
+      if (pmLabel === 'Checking') { checkingPending = pbm[pmLabel]; continue; }
+      var pk = pmToKey[pmLabel];
+      if (!pk) continue;
+      if (!pendByKey[pk]) pendByKey[pk] = { count: 0, total: 0 };
+      pendByKey[pk].count += pbm[pmLabel].count;
+      pendByKey[pk].total = Math.round((pendByKey[pk].total + pbm[pmLabel].total) * 100) / 100;
+    }
+  }
+
+  _perfLap(_ct, 'pending');
 
   var cards = {};
   CARD_DEFS.forEach(function(def) {
     var meta = ctMeta[def.name] || {};
     var st   = stmts[def.name] || {};
+    var pend = pendByKey[def.name] || { count: 0, total: 0 };
     cards[def.name] = {
+      pendingCount: pend.count,
+      pendingTotal: pend.total,
       balance:     Math.round((balances[def.name] || 0) * 100) / 100,
       limit:       meta.limit        || null,
       seed:        meta.seed         || 0,
@@ -1702,6 +1786,9 @@ function _computeCardBalances() {
     }
   }
 
+  _perfLap(_ct, 'checking');
+  _perfCardT = _perfLapsDone(_ct);
+
   return {
     month:             CARD_TRACKERS_SHEET,
     usingCardTrackers: true,
@@ -1711,6 +1798,7 @@ function _computeCardBalances() {
     checkingBalance:   checkingBalance,
     checkingBalanceAlt:checkingBalanceAlt,
     checkingSource:    checkingSrc,
+    checkingPending:   checkingPending,
   };
 }
 
@@ -2161,12 +2249,29 @@ function findRowByULabel(values, label) {
 
 // -- GET: card totals from transaction history -----------------
 // Sums all transaction costs by payment method across every month sheet.
+// -- Student-loan table: Loans!A1:J30 only --------------------
+// getDataRange() on Loans also pulled the whole mortgage schedule (M:W to row
+// ~400) on every `all` -- about 1 s of the cold open (UX_SPEC F11, measured
+// 2026-11-11). The student-loan table is A4:J25 with totals on row 26, and
+// these readers need nothing else. Per-request cached like readSheet.
+var LOAN_TABLE_KEY = 'Loans!A1:J30';
+function _loanTable() {
+  if (_sheetCache[LOAN_TABLE_KEY]) return _sheetCache[LOAN_TABLE_KEY];
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Loans');
+  if (!sheet) return null;
+  return _sheetCache[LOAN_TABLE_KEY] = sheet.getRange(1, 1, 30, 10).getValues();
+}
+
 // -- GET: loan data from Loans sheet --------------------------
+// Cached 5 min (perf.gs _perfCached): the first sheet read in a request costs
+// ~0.6-0.9 s whatever is read, and this was the first read in every `all`.
+// Cleared by updateLoanBalance and by onEdit on Loans.
 function getLoanData() {
-  var ss    = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName('Loans');
-  if (!sheet) return { error: 'Loans sheet not found' };
-  var values = readSheet(sheet);
+  return _perfCached(PERF_LOANS_KEY, function () { return _getLoanDataLive(); });
+}
+function _getLoanDataLive() {
+  var values = _loanTable();
+  if (!values) return { error: 'Loans sheet not found' };
 
   var loans = [];
   var totalBalance = 0, totalInterest = 0, totalPayment = 0, totalPrincipal = 0, activeCount = 0;
@@ -2254,6 +2359,8 @@ function updateLoanBalance(p) {
   bal = Math.round(bal * 100) / 100;
   sheet.getRange(row, 4).setValue(bal);  // col D = Balance (the only editable column)
   invalidateSheet('Loans');
+  invalidateSheet(LOAN_TABLE_KEY);
+  invalidateLoanAcctCache();             // cached loans + accounts payloads (perf.gs)
   invalidateNetWorthCache();             // Net Worth reads Loans!D26 -> studentLoans
   SpreadsheetApp.flush();                // force formula recompute before read-back
 
@@ -2485,6 +2592,7 @@ function getTransactionsByCard(pm, limitStr) {
 
 // Single pass per sheet: collects transactions + grocery + gas in one loop.
 function getCardTotals() {
+  if (_ledgerCutoverOn()) return ledgerCardTotals(); // UX_SPEC 2A (perf.gs); legacy month-sheet scan below
   var monthNames = getMonthlySheetNames().slice(0, 12); // TTM
   var totals = {}, counts = {};
 
@@ -2546,7 +2654,12 @@ function getCardTotals() {
 }
 
 // -- GET: accounts data (Credit history + Loans + Discover) ---
+// Cached 5 min like getLoanData; cleared by logCreditSnapshot, updateLoanBalance
+// and onEdit on Credit / Discover Savings / Loans.
 function getAccountsData() {
+  return _perfCached(PERF_ACCTS_KEY, function () { return _getAccountsDataLive(); });
+}
+function _getAccountsDataLive() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var result = {};
 
@@ -2575,10 +2688,9 @@ function getAccountsData() {
     if (dv.length > 0) result.discoverBal = parseFloat(dv[0][3]) || null;
   }
 
-  // Loans -- find Total row
-  var loanSheet = ss.getSheetByName('Loans');
-  if (loanSheet) {
-    var lv = readSheet(loanSheet);
+  // Loans -- find Total row (bounded table read, see _loanTable)
+  var lv = _loanTable();
+  if (lv) {
     for (var i = 0; i < lv.length; i++) {
       if (String(lv[i][2]).trim() === 'Total') {
         result.loanTotal = parseFloat(lv[i][3]) || null;
@@ -2607,6 +2719,7 @@ function logCreditSnapshot(p) {
   sheet.getRange(2, 1, 1, 5).insertCells(SpreadsheetApp.Dimension.ROWS);
   var dateObj = new Date(p.date + 'T12:00:00');
   sheet.getRange(2, 1, 1, 5).setValues([[dateObj, p.balance, prevLimit, util, Math.round(ttm*100)/100]]);
+  invalidateLoanAcctCache(); // accounts payload carries creditHistory
   return { ok: true };
 }
 
@@ -2897,7 +3010,8 @@ function getEquity() {
   var c = cfg();
   return {
     price: price, priceTime: priceTime, asOf: today,
-    model: { vol: c.sdgrVol, riskFree: c.sdgrRiskFree, taxRate: c.equityTaxRate, pteDays: c.optionPteDays },
+    model: { vol: c.sdgrVol, riskFree: c.sdgrRiskFree, taxRate: c.equityTaxRate, pteDays: c.optionPteDays,
+             rsuGrowth: c.rsuRefreshGrowth, rsuYears: c.rsuRefreshYears },
     grants: roll.grants, vestedIntrinsic: roll.vestedIntrinsic,
     netWorthSdgr: (pm.found && typeof pm.value === 'number') ? pm.value : null,
     warnings: warnings
@@ -3204,9 +3318,8 @@ function _computeNetWorth() {
     Logger.log('netWorth: mortgage ledger unavailable (' + (mort.error || 'no curBalance') + '); fell back to Physical Assets!B8 = ' + mortgage);
   }
   // Student loans: Loans!D26 (index 25, col D = index 3)
-  var loansSheet = ss.getSheetByName('Loans');
-  if (loansSheet) {
-    var loansVals = readSheet(loansSheet);
+  var loansVals = _loanTable();
+  if (loansVals) {
     if (loansVals.length > 25 && typeof loansVals[25][3] === 'number') studentLoans = loansVals[25][3];
   }
 
